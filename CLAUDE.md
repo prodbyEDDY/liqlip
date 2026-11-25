@@ -58,18 +58,28 @@ Identifier `com.liqlip.app`; data in `%APPDATA%\com.liqlip.app\`.
 - `pnpm tauri dev` — the native app. **Wave agents do not run it**; the coordinator runs it at
   integration (INT-*) for end-to-end checks (ROADMAP PQ-02, 2026-11-26).
 
-## Design system (from Liquid Tools, unchanged)
-- **Color:** monochrome, LOCKED. Only tokens from `src/app.css` exist (`paper page content
-  panel-2 ink ink-2 ink-3 ink-hover ink-active danger checker track hover wash-sel selected
-  toggle-track`; `hairline hairline-strong divider` are never used for borders). Accent **is** `ink`.
-  Color appears only in user content (the ColorCard swatch). Both themes strictly black/white.
-- **Shape:** squircle via CSS `corner-shape: squircle` (the `squircle` utility) + `border-radius`.
-  **Capsules/circles use plain `border-radius: 999px`, never `squircle`.** No borders or
-  dividers; the only outline is `:focus-visible`.
-- **Type:** Inter for UI; JetBrains Mono only for functional mono (kbd, code, hex, numbers).
+## Design system
+Source of truth: [`docs/design-system.md`](docs/design-system.md) (W2-E, 2026-11-26; evolved from
+Liquid Tools after the W1 design review) and the audit [`docs/design-audit.md`](docs/design-audit.md).
+- **Color:** monochrome, LOCKED. Only tokens from `src/app.css` exist — surfaces `ground tile
+  raised card card-hover card-lift scrim thumb` (+ `paper page content panel-2`), ink
+  `ink ink-2 ink-3 ink-hover ink-active danger checker`, ink washes `track hover wash-sel selected
+  toggle-track`. Control fills are ink washes over their surface. Accent **is** `ink`. Color
+  appears only in user content (the ColorCard swatch). Both themes strictly black/white.
+- **Shape:** surfaces are squircles (CSS `corner-shape: squircle`, the `squircle` utility);
+  controls (buttons, fields, dropdowns, kbd, chips, pills) are capsules — plain
+  `border-radius: 999px`, never `squircle`. **Nested radius = outer radius − gap**, computed from
+  the `--r-*` / `--pad-*` tokens with `calc()`, never eyeballed.
+- **No borders, dividers or rings** — separation by tone, elevation and space. Selection and the
+  current card are shown by tone + lift. The only outline is `:focus-visible` (`--focus-ring`,
+  following the element's shape). Nothing clips shadows, focus rings, lifts or text; scrolling
+  edges fade with a mask.
+- **Type:** Inter for UI; JetBrains Mono only for functional mono (kbd, code, hex, numbers);
+  labels ≥ 12 px, `--text-micro` 11 px only for service marks.
 - **Motion:** 150–250 ms ease-out; liquid easing `cubic-bezier(.34,1.24,.44,1)`; honour
   `prefers-reduced-motion`. Motion conveys state, not decoration.
-- Reference: Liquid Tools `docs/design-system.md`.
+- Shelf layers are built from `src/windows/picker/overlays/kit/` (`LayerSurface`, `LayerHeader`,
+  `LayerItem`, `LayerFooter`) — see `docs/picker.md` §5.1.
 
 ## Hard rules
 1. **`CLAUDE.md` and `AGENTS.md` are edited in pairs** — `AGENTS.md` is a byte-for-byte copy
