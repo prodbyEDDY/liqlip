@@ -267,9 +267,11 @@ fn execute(app: &AppHandle, p: &Picker, fx: Effect) -> Option<Event> {
             // BEFORE the shelf shows: the foreground window is where focus returns, and the
             // paste target (W1-C rejects own windows / desktop / tray and keeps the previous
             // target then — `current_target` reports that one).
+            // The settings window counts (Esc returns there); the shelf / HUD / taskbar do not.
             let ours = hwnds();
-            let fg = win::foreground()
-                .filter(|&f| !ours.is_some_and(|o| o.is_ours(f)) && !win::is_shell_tray(f));
+            let fg = win::foreground().filter(|&f| {
+                !ours.is_some_and(|o| f == o.picker || f == o.hud) && !win::is_shell_tray(f)
+            });
             let target = paste::focus::capture_target(app).or_else(|| paste::focus::current_target(app));
             let mut s = p.state.lock();
             s.restore_to = fg;
