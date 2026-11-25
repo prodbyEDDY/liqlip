@@ -75,7 +75,7 @@
     <ol class="list">
       {#each items as item, i (item.key)}
         <li class="row">
-          <LayerItem label={item.preview} plain>
+          <LayerItem label={item.preview || t(`common.kind.${item.kind}` as TranslationKey)} plain>
             {#snippet lead()}<span class="row__n">{i + 1}</span>{/snippet}
             {#snippet trail()}<span class="row__kind"><Ico name={KIND_ICON[item.kind]} size={14} /></span>{/snippet}
           </LayerItem>
