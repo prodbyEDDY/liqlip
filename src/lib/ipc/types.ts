@@ -282,7 +282,8 @@ export interface TextPasteRequest {
 }
 
 export type PasteResult = "pasted" | "copied" | "failed";
-export type PasteReason = "no_target" | "elevated" | "focus_lost" | "clipboard_busy" | "not_found" | "stack_empty";
+/** `partial` (W1-C): some records were left out (images in a joined text paste, non-files in a file paste). */
+export type PasteReason = "no_target" | "elevated" | "focus_lost" | "clipboard_busy" | "not_found" | "stack_empty" | "partial";
 
 export interface PasteOutcome {
   result: PasteResult;

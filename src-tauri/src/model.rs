@@ -604,6 +604,9 @@ pub enum PasteReason {
     ClipboardBusy,
     NotFound,
     StackEmpty,
+    /// W1-C (additive): pasted/copied, but some records were left out (images in a joined
+    /// text paste, non-files in a file paste).
+    Partial,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

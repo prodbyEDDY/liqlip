@@ -53,14 +53,36 @@ windows = { version = "0.62", features = [
     "Win32_Globalization",
     # RegGetValueW (tray icon variant for a light / dark taskbar).
     "Win32_System_Registry",
-    # W1-D: RegisterHotKey / GetAsyncKeyState (hotkey engine, shelf poll).
-    "Win32_UI_Input_KeyboardAndMouse",
-    # W1-D: GetCurrentThreadId (registrar / hook threads), GetCurrentProcessId (own windows).
+    # W1-C paste: OpenClipboard/EmptyClipboard/SetClipboardData/RegisterClipboardFormatW/
+    # GetClipboardSequenceNumber (writer.rs).
+    "Win32_System_DataExchange",
+    # W1-C paste: GlobalAlloc/GlobalLock/GlobalUnlock for clipboard + drag HGLOBALs.
+    "Win32_System_Memory",
+    # W1-C paste: CF_* constants, DROPEFFECT, IDropSource, OleInitialize (writer.rs, dragout.rs).
+    "Win32_System_Ole",
+    # W1-C paste: IDataObject/FORMATETC/STGMEDIUM/CoCreateInstance/CoInitializeEx (dragout.rs,
+    # open.rs); STGMEDIUM / IDataObject_Impl are gated on StructuredStorage in windows 0.62.
+    "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+    # W1-C paste: MK_LBUTTON / MODIFIERKEYS_FLAGS (IDropSource::QueryContinueDrag).
+    "Win32_System_SystemServices",
+    # W1-C paste: OpenProcess/QueryFullProcessImageNameW/OpenProcessToken (focus.rs, uipi.rs).
     "Win32_System_Threading",
-    # W1-D: GetModuleHandleW for SetWindowsHookExW(WH_KEYBOARD_LL).
+    # W1-C paste: GetModuleHandleW for the hidden clipboard-owner window class.
     "Win32_System_LibraryLoader",
-    # W1-D: MonitorFromPoint / GetMonitorInfoW (display-change signature of the docked monitor).
+    # W1-C paste: GetTokenInformation(TokenIntegrityLevel) + SID sub-authorities (uipi.rs).
+    "Win32_Security",
+    # W1-C paste: GetFileVersionInfoW/VerQueryValueW (target app FileDescription, focus.rs).
+    "Win32_Storage_FileSystem",
+    # W1-C paste: SendInput/GetAsyncKeyState/MapVirtualKeyExW/GetKeyboardLayout (input.rs).
+    "Win32_UI_Input_KeyboardAndMouse",
+    # W1-C paste: DROPFILES, SHOpenWithDialog, SHDoDragDrop, shell data objects, drag helper.
+    "Win32_UI_Shell",
+    "Win32_UI_Shell_Common",
+    # W1-C paste: RegisterClassExW (WNDCLASSEXW has an HBRUSH), CreateBitmap for the drag image.
     "Win32_Graphics_Gdi",
+    # W1-D also relies on KeyboardAndMouse (RegisterHotKey), Threading (GetCurrentThreadId /
+    # GetCurrentProcessId), LibraryLoader (SetWindowsHookExW) and Gdi (MonitorFromPoint) above.
     # W1-D: GetDpiForMonitor (a monitor's scale changed while the shelf is docked on it).
     "Win32_UI_HiDpi",
     # W1-D: QueryDisplayConfig / DisplayConfigGetDeviceInfo (monitor friendly names).
