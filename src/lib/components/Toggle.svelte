@@ -1,11 +1,15 @@
 <script lang="ts">
+  // On/off switch: a capsule track with a circular knob inset 2 px (concentric by
+  // construction). `id` and `describedby` let a settings row label and describe it.
   interface Props {
     checked: boolean;
     onChange?: (checked: boolean) => void;
     disabled?: boolean;
     ariaLabel?: string;
+    id?: string;
+    describedby?: string;
   }
-  let { checked, onChange, disabled = false, ariaLabel }: Props = $props();
+  let { checked, onChange, disabled = false, ariaLabel, id, describedby }: Props = $props();
 
   // Only animate the knob's liquid squash AFTER a real interaction — never on
   // the initial render (no page-load choreography).
@@ -15,8 +19,10 @@
 <button
   type="button"
   role="switch"
+  {id}
   aria-checked={checked}
   aria-label={ariaLabel}
+  aria-describedby={describedby}
   class="toggle"
   class:toggle--on={checked}
   class:toggle--anim={touched}
@@ -33,18 +39,24 @@
 <style>
   .toggle {
     position: relative;
-    width: 40px;
-    height: 22px;
     flex: 0 0 auto;
+    width: 40px;
+    height: 24px;
     padding: 0;
     border: 0;
     border-radius: 999px;
     background: var(--color-toggle-track);
-    cursor: default;
     transition: background-color var(--dur-base) var(--ease-out-soft);
   }
-  .toggle--on {
+  .toggle:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--color-ink) 28%, transparent);
+  }
+  .toggle--on,
+  .toggle--on:hover:not(:disabled) {
     background: var(--color-ink);
+  }
+  .toggle--on:hover:not(:disabled) {
+    background: var(--color-ink-hover);
   }
   .toggle:disabled {
     opacity: 0.45;
@@ -53,26 +65,29 @@
     position: absolute;
     top: 2px;
     left: 2px;
-    width: 18px;
-    height: 18px;
+    width: 20px;
+    height: 20px;
     border-radius: 999px;
-    background: var(--color-paper);
-    box-shadow: 0 1px 2px rgb(0 0 0 / 0.2);
+    background: #ffffff; /* light: a white knob on both tracks */
+    box-shadow: var(--shadow-on-lift);
     transform-origin: center;
-    /* Resting / non-interactive moves use a liquid settle. */
     transition: transform var(--dur-base) var(--ease-liquid);
   }
   .toggle--on .toggle__knob {
-    transform: translateX(18px);
+    transform: translateX(16px);
   }
-  /* Dark: the white knob would vanish on the near-white (ink) ON track, so the
-     knob flips to read against each track — a light dot on the dark OFF track, a
-     dark dot on the near-white ON track. */
+  /* Dark: a light knob on the dark OFF track, a dark knob on the near-white ON track. */
   :global([data-theme="dark"]) .toggle__knob {
     background: var(--color-ink-2);
   }
   :global([data-theme="dark"]) .toggle--on .toggle__knob {
-    background: var(--color-page);
+    background: var(--color-paper);
+  }
+  .toggle:active:not(:disabled) .toggle__knob {
+    width: 23px;
+  }
+  .toggle--on:active:not(:disabled) .toggle__knob {
+    transform: translateX(13px);
   }
   /* On a real toggle, the knob stretches toward travel then settles (liquid). */
   .toggle--anim[data-on="true"] .toggle__knob {
@@ -86,27 +101,21 @@
       transform: translateX(0) scaleX(1);
     }
     55% {
-      transform: translateX(11px) scaleX(1.18);
+      transform: translateX(10px) scaleX(1.16);
     }
     100% {
-      transform: translateX(18px) scaleX(1);
+      transform: translateX(16px) scaleX(1);
     }
   }
   @keyframes knob-off {
     0% {
-      transform: translateX(18px) scaleX(1);
+      transform: translateX(16px) scaleX(1);
     }
     55% {
-      transform: translateX(6px) scaleX(1.18);
+      transform: translateX(6px) scaleX(1.16);
     }
     100% {
       transform: translateX(0) scaleX(1);
-    }
-  }
-  @media (prefers-reduced-motion: reduce) {
-    .toggle--anim[data-on="true"] .toggle__knob,
-    .toggle--anim[data-on="false"] .toggle__knob {
-      animation: none;
     }
   }
 </style>

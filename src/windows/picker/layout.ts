@@ -1,14 +1,17 @@
 // Grid geometry of the shelf — port of Liquid Tools `shotlibrary/layout.ts` (the 2026-09-22
-// regular grid): square previews + a 36 px meta row, 10 px gutters, as many ≥172 px columns as
-// fit; the top/bottom strip (and the centre "one row" sheet) is a single horizontal row whose
-// preview height follows the strip height. Geometry is a pure function of the item count and
+// regular grid), made denser in W2-E: 4:3 previews (screenshots and text crop less than in a
+// square, and a centre sheet shows three rows instead of two) + a 32 px meta row, 8 px
+// gutters, as many ≥172 px columns as fit; the top/bottom strip (and the centre "one row"
+// sheet) is a single horizontal row of square previews whose height follows the strip. Geometry is a pure function of the item count and
 // the viewport, so appending a page never moves a placed card. Liquid Tools' "compact density"
 // parameter was dead code there and is dropped. Pure — node-tested (tests/pickerLayout).
 
-/** Meta row under the preview (app icon · title · format badge). */
-export const CARD_FOOTER = 36;
-/** Gutter between cards. */
-export const GAP = 10;
+/** Meta row under the preview (app icon · title · format badge) — `.card__meta` in CSS. */
+export const CARD_FOOTER = 32;
+/** Gutter between cards (the 8 px step of the spacing scale). */
+export const GAP = 8;
+/** Preview height / width in the vertical grid (4:3). The strip keeps square previews. */
+export const PREVIEW_RATIO = 0.75;
 /** Minimum column width (and the strip's maximum preview height). */
 export const MIN_TILE = 172;
 /** Rows/columns rendered beyond the viewport on each side (virtualization margin). */
@@ -43,7 +46,7 @@ export function geometry(count: number, width: number, height: number, horizonta
   const n = Math.max(0, Math.floor(count));
   const fit = Math.max(1, Math.floor((width + GAP) / (MIN_TILE + GAP)));
   const tileWidth = Math.max(80, (width - (fit - 1) * GAP) / fit);
-  const previewH = horizontal ? Math.max(48, Math.min(MIN_TILE, height - CARD_FOOTER - 8)) : tileWidth;
+  const previewH = horizontal ? Math.max(48, Math.min(MIN_TILE, height - CARD_FOOTER - 8)) : Math.round(tileWidth * PREVIEW_RATIO);
   const tileW = horizontal ? previewH : tileWidth;
   const tileH = previewH + CARD_FOOTER;
   const columns = horizontal ? Math.max(1, n) : fit;

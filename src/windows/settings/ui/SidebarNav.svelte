@@ -58,7 +58,7 @@
           onblur={() => (focusKey = null)}
           onclick={() => onSelect(item.key)}
         >
-          <span class="nav__icon"><Ico name={item.icon} size={18} /></span>
+          <span class="nav__icon"><Ico name={item.icon} size={17} /></span>
           {#if !compact}<span class="nav__label">{item.label}</span>{/if}
         </button>
       </li>
@@ -75,34 +75,38 @@
     padding: 0;
     list-style: none;
   }
+  /* 36 px capsules. Chosen = the raised surface of the window (a lifted pill), ink label and
+     icon — a clear state without a ring or a stroke. */
   .nav__item {
     display: flex;
     align-items: center;
-    gap: 11px;
+    gap: 10px;
     width: 100%;
-    height: 40px;
-    padding: 0 11px;
+    height: var(--h-lg);
+    padding: 0 12px;
     border: 0;
-    border-radius: 12px;
+    border-radius: 999px;
     background: transparent;
     color: var(--color-ink-2);
     font: inherit;
     text-align: left;
-    cursor: default;
     transition:
       background-color var(--dur-fast) var(--ease-out-soft),
+      box-shadow var(--dur-fast) var(--ease-out-soft),
       color var(--dur-fast) var(--ease-out-soft);
   }
   .nav__item:hover {
-    background: var(--color-hover);
+    background: var(--color-track);
     color: var(--color-ink);
   }
   .nav__item:active {
-    background: var(--color-track);
+    background: var(--color-hover);
   }
   .nav__item--sel,
-  .nav__item--sel:hover {
-    background: var(--color-selected);
+  .nav__item--sel:hover,
+  .nav__item--sel:active {
+    background: var(--color-raised);
+    box-shadow: var(--shadow-card);
     color: var(--color-ink);
   }
   .nav__icon {
@@ -113,17 +117,18 @@
     flex: 1 1 auto;
     min-width: 0;
     overflow: hidden;
+    color: inherit;
+    font-size: var(--text-row);
+    font-weight: 500;
     text-overflow: ellipsis;
     white-space: nowrap;
-    font-size: var(--text-row);
-    font-weight: 600;
-    color: var(--color-ink);
   }
   .nav__item--sel .nav__label {
-    font-weight: 700;
+    font-weight: 600;
   }
   .nav--compact .nav__item {
     justify-content: center;
+    width: var(--h-lg);
     padding: 0;
   }
 </style>

@@ -77,7 +77,9 @@
     background: transparent;
     color: var(--color-ink);
     font: inherit;
-    cursor: default;
+  }
+  .ref__head:focus-visible {
+    border-radius: var(--radius-sm);
   }
   .ref__title {
     font-size: var(--text-row);
@@ -106,26 +108,25 @@
     align-items: baseline;
     gap: 2px 12px;
     width: 100%;
-    padding: 8px 10px;
+    padding: 8px 12px;
     border: 0;
-    border-radius: 10px;
+    border-radius: var(--radius-md);
     background: transparent;
     color: var(--color-ink);
     font: inherit;
     text-align: left;
-    cursor: default;
     transition: background-color var(--dur-fast) var(--ease-out-soft);
   }
   .ph:hover {
-    background: var(--color-hover);
+    background: var(--color-track);
   }
   .ph:active {
-    background: var(--color-track);
+    background: var(--color-hover);
   }
   .ph__code {
     grid-area: code;
     font-family: var(--font-mono);
-    font-size: 12px;
+    font-size: var(--text-secondary);
     font-weight: 600;
   }
   .ph__ex {

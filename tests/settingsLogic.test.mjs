@@ -168,3 +168,17 @@ test("options keep a custom current value; navigation helpers", () => {
   assert.deepEqual(L.moveBefore([1, 2, 3, 4], 1, null), [2, 3, 4, 1]);
   assert.deepEqual(L.moveBefore([1, 2, 3], 2, 9), [1, 2, 3], "unknown anchor → unchanged");
 });
+
+test("import / backup errors map to their own messages; a cancelled dialog says nothing", () => {
+  assert.equal(L.importErrorKey("invalid: cancelled"), "cancelled");
+  assert.equal(L.importErrorKey("invalid: not a Liquid Tools database"), "settings.import.error.lt");
+  assert.equal(L.importErrorKey("invalid: unknown Liquid Tools database format"), "settings.import.error.lt");
+  assert.equal(L.importErrorKey("invalid: the Liquid Tools database is damaged"), "settings.import.error.lt");
+  assert.equal(L.importErrorKey("invalid: not a Liqlip backup"), "settings.import.error.notBackup");
+  assert.equal(L.importErrorKey("invalid: the backup was made by a newer Liqlip"), "settings.import.error.newer");
+  assert.equal(L.importErrorKey("invalid: damaged backup (crc)"), "settings.import.error.backupDamaged");
+  assert.equal(L.importErrorKey("invalid: the backup database is damaged"), "settings.import.error.backupDamaged");
+  assert.equal(L.importErrorKey("busy: an import or a backup is already running"), "settings.import.error.busy");
+  assert.equal(L.importErrorKey("failed: disk full"), null);
+  assert.equal(L.importErrorKey("invalid: empty text"), null);
+});

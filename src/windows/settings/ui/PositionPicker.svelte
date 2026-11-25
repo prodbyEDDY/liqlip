@@ -1,8 +1,7 @@
 <script lang="ts">
-  // Shelf position: the big-type list of Liquid Tools (`BigTypeList`, ported with its
-  // check/label choreography) with a mini screen diagram per option. A radio group:
-  // ←/→/↑/↓ move and select, like native radios.
-  import Ico from "$lib/components/Ico.svelte";
+  // Shelf position: five tiles, each a mini screen with the shelf drawn where it opens. A
+  // radio group: ←/→/↑/↓ move and select, like native radios. Chosen = a raised tile with
+  // the shelf in ink; the others are quiet until hovered.
   import type { Position } from "$lib/ipc/types";
   import { stepIndex } from "../logic";
 
@@ -26,13 +25,13 @@
     (e.currentTarget as HTMLElement).querySelectorAll<HTMLButtonElement>("[role=radio]")[n]?.focus();
   }
 
-  // Shelf rectangle inside a 32×22 screen, per position.
+  // Shelf rectangle inside a 64×40 screen, per position (screen inset 4, radius-concentric).
   const SHELF: Record<Position, { x: number; y: number; w: number; h: number }> = {
-    center: { x: 9, y: 5, w: 14, h: 12 },
-    left: { x: 3, y: 3, w: 8, h: 16 },
-    right: { x: 21, y: 3, w: 8, h: 16 },
-    top: { x: 5, y: 3, w: 22, h: 6 },
-    bottom: { x: 5, y: 13, w: 22, h: 6 },
+    center: { x: 19, y: 9, w: 26, h: 22 },
+    left: { x: 4, y: 4, w: 16, h: 32 },
+    right: { x: 44, y: 4, w: 16, h: 32 },
+    top: { x: 10, y: 4, w: 44, h: 12 },
+    bottom: { x: 10, y: 24, w: 44, h: 12 },
   };
 </script>
 
@@ -46,14 +45,14 @@
       role="radio"
       aria-checked={sel}
       tabindex={sel ? 0 : -1}
-      class="pos__item"
+      class="pos__item squircle"
+      title={opt.label}
       class:pos__item--sel={sel}
       onclick={() => onChange(opt.value)}
     >
-      <span class="pos__ck" aria-hidden="true"><Ico name="check" size={16} /></span>
-      <svg class="pos__map" width="32" height="22" viewBox="0 0 32 22" aria-hidden="true">
-        <rect class="pos__screen" width="32" height="22" rx="5" />
-        <rect class="pos__shelf" x={r.x} y={r.y} width={r.w} height={r.h} rx="2.5" />
+      <svg class="pos__map" width="64" height="40" viewBox="0 0 64 40" aria-hidden="true">
+        <rect class="pos__screen" width="64" height="40" rx="8" />
+        <rect class="pos__shelf" x={r.x} y={r.y} width={r.w} height={r.h} rx="4" />
       </svg>
       <span class="pos__label">{opt.label}</span>
     </button>
@@ -62,70 +61,68 @@
 
 <style>
   .pos {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 6px;
   }
   .pos__item {
     display: flex;
+    flex-direction: column;
     align-items: center;
-    gap: 12px;
-    width: 100%;
-    padding: 4px 0;
+    gap: 8px;
+    min-width: 0;
+    padding: 10px 6px 8px;
     border: 0;
+    border-radius: var(--radius-md);
     background: transparent;
+    color: var(--color-ink-2);
     font: inherit;
-    font-size: 17px;
-    font-weight: 700;
-    text-align: left;
-    color: var(--color-ink-3);
-    cursor: default;
-    transition: color var(--dur-base) var(--ease-out-soft);
+    transition:
+      background-color var(--dur-fast) var(--ease-out-soft),
+      box-shadow var(--dur-fast) var(--ease-out-soft),
+      color var(--dur-fast) var(--ease-out-soft);
   }
   .pos__item:hover:not(.pos__item--sel) {
-    color: var(--color-ink-2);
-  }
-  .pos__item--sel {
+    background: var(--color-track);
     color: var(--color-ink);
   }
-  /* Same choreography as BigTypeList: the check grows in while the rest slides right. */
-  .pos__ck {
-    display: inline-flex;
-    flex: 0 0 auto;
-    width: 0;
-    margin-right: -12px;
-    opacity: 0;
-    transform: scale(0.6);
-    transform-origin: left center;
-    overflow: hidden;
-    transition:
-      width var(--dur-slow) var(--ease-out-soft),
-      margin var(--dur-slow) var(--ease-out-soft),
-      opacity var(--dur-base) var(--ease-out-soft),
-      transform var(--dur-slow) var(--ease-pill);
-  }
-  .pos__item--sel .pos__ck {
-    width: 16px;
-    margin-right: 0;
-    opacity: 1;
-    transform: scale(1);
+  .pos__item--sel {
+    background: var(--color-raised);
+    box-shadow: var(--shadow-card);
+    color: var(--color-ink);
   }
   .pos__map {
     flex: 0 0 auto;
+    max-width: 100%;
+    height: auto;
   }
   .pos__screen {
-    fill: color-mix(in srgb, currentColor 16%, transparent);
+    fill: var(--color-track);
   }
   .pos__shelf {
-    fill: currentColor;
-    transition:
-      x var(--dur-slow) var(--ease-liquid),
-      y var(--dur-slow) var(--ease-liquid);
+    fill: color-mix(in srgb, var(--color-ink) 28%, transparent);
+    transition: fill var(--dur-fast) var(--ease-out-soft);
+  }
+  .pos__item:hover .pos__shelf {
+    fill: color-mix(in srgb, var(--color-ink) 45%, transparent);
+  }
+  .pos__item--sel .pos__shelf,
+  .pos__item--sel:hover .pos__shelf {
+    fill: var(--color-ink);
   }
   .pos__label {
-    min-width: 0;
+    max-width: 100%;
     overflow: hidden;
+    font-size: var(--text-secondary);
+    font-weight: 600;
+    line-height: 1.3;
+    text-align: center;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+  @media (max-width: 760px) {
+    .pos {
+      grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+    }
   }
 </style>

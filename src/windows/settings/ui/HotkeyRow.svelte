@@ -109,7 +109,7 @@
   {#snippet control()}
     <button
       type="button"
-      class="cap squircle"
+      class="cap"
       class:cap--rec={recording}
       bind:this={button}
       aria-label={t("settings.hotkey.change", { action: label })}
@@ -139,7 +139,7 @@
           title={t("settings.hotkey.reset", { combo: def })}
           onclick={() => apply(def)}
         >
-          <Ico name="undo" size={15} />
+          <Ico name="undo" size={14} />
         </button>
       {/if}
       {#if value}
@@ -150,7 +150,7 @@
           title={t("settings.hotkey.clear")}
           onclick={() => apply("")}
         >
-          <Ico name="x" size={15} />
+          <Ico name="x" size={14} />
         </button>
       {/if}
     </div>
@@ -158,23 +158,22 @@
 </Row>
 
 <style>
+  /* The chord: a 36 px capsule of keycaps (24 px capsules inset 6 px — concentric). While
+     recording it inverts to ink so the state is unmistakable without a ring. */
   .cap {
     display: inline-flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
     min-width: 168px;
-    min-height: 40px;
-    padding: 6px 12px;
+    height: var(--h-lg);
+    padding: 0 6px;
     border: 0;
-    border-radius: 12px;
+    border-radius: 999px;
     background: var(--color-track);
     color: var(--color-ink);
     font: inherit;
-    cursor: default;
-    transition:
-      background-color var(--dur-fast) var(--ease-out-soft),
-      box-shadow var(--dur-fast) var(--ease-out-soft);
+    transition: background-color var(--dur-fast) var(--ease-out-soft);
   }
   .cap:hover {
     background: var(--color-hover);
@@ -184,67 +183,71 @@
   }
   .cap--rec,
   .cap--rec:hover {
-    background: var(--color-paper);
-    box-shadow: inset 0 0 0 1.5px var(--color-ink);
+    padding: 0 16px;
+    background: var(--color-ink);
+    color: var(--color-paper);
   }
   .cap__keys {
     display: inline-flex;
     align-items: center;
-    gap: 5px;
+    gap: 4px;
   }
   .cap__keys :global(.kbd) {
-    background: var(--s-tile);
+    background: var(--color-raised);
     color: var(--color-ink);
     font-weight: 600;
+    box-shadow: var(--shadow-on-lift);
   }
   .cap__plus {
+    color: var(--color-ink-3);
     font-size: var(--text-secondary);
     font-weight: 600;
-    color: var(--color-ink-3);
   }
   .cap__none {
-    font-size: var(--text-row);
+    padding: 0 10px;
     color: var(--color-ink-3);
+    font-size: var(--text-row);
   }
   .cap__rec {
     font-size: var(--text-secondary);
     font-weight: 600;
-    animation: rec-pulse 1.4s var(--ease-out-soft) infinite;
+    line-height: 1.2;
+    animation: rec-pulse 1.4s var(--ease-in-out) infinite;
   }
   .cap__hint {
+    color: color-mix(in srgb, var(--color-paper) 70%, transparent);
     font-size: var(--text-meta);
-    color: var(--color-ink-3);
+    line-height: 1.2;
   }
   @keyframes rec-pulse {
     50% {
-      opacity: 0.55;
+      opacity: 0.6;
     }
   }
   .tools {
     display: inline-flex;
     gap: 2px;
-    width: 64px;
+    width: 66px;
   }
   .tool {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 30px;
-    height: 30px;
+    width: var(--h-md);
+    height: var(--h-md);
     border: 0;
     border-radius: 999px;
     background: transparent;
     color: var(--color-ink-3);
-    cursor: default;
     transition:
       background-color var(--dur-fast) var(--ease-out-soft),
       color var(--dur-fast) var(--ease-out-soft);
   }
   .tool:hover {
-    background: var(--color-hover);
+    background: var(--color-track);
     color: var(--color-ink);
   }
   .tool:active {
-    background: var(--color-track);
+    background: var(--color-hover);
   }
 </style>

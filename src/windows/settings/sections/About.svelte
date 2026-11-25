@@ -1,7 +1,7 @@
 <script lang="ts">
-  // About Liqlip: version, data and log folders (`app_info`, `open_path`), licenses.
-  // The licenses link opens the bundled notice file (stub until W2-D packages the full
-  // third-party list).
+  // About Liqlip: the mark, version, data and log folders (`app_info`, `open_path`) and the
+  // licenses — Liqlip's own and the third-party list (W2-D `public/licenses/`), shown inside
+  // the window on demand (Tauri doesn't open target="_blank" links).
   import Button from "$lib/components/Button.svelte";
   import Ico from "$lib/components/Ico.svelte";
   import Skeleton from "$lib/components/Skeleton.svelte";
@@ -12,6 +12,15 @@
   import { toasts } from "../ui.svelte";
   import Group from "../ui/Group.svelte";
   import Row from "../ui/Row.svelte";
+  import BrandMark from "../ui/BrandMark.svelte";
+  import LicenseText from "../ui/LicenseText.svelte";
+
+  const LICENSES = [
+    { key: "own", src: "licenses/LICENSE.txt", icon: "lock" },
+    { key: "third", src: "licenses/THIRD-PARTY.txt", icon: "document" },
+  ] as const;
+  let openLicense = $state<"own" | "third" | null>(null);
+  const licId = $props.id();
 
   let info = $state<AppMeta | null>(null);
   let status = $state<"loading" | "ready" | "error">("loading");
@@ -39,7 +48,7 @@
 </script>
 
 <div class="hero squircle">
-  <div class="mark squircle" aria-hidden="true">L</div>
+  <div class="mark squircle"><BrandMark size={36} /></div>
   <div class="hero__text">
     <div class="hero__name">Liqlip</div>
     <div class="hero__tag">{t("settings.about.tagline")}</div>
@@ -72,38 +81,49 @@
   {/each}
 </Group>
 
-<Group title={t("settings.about.licenses")}>
-  <Row label={t("settings.about.licenses")} desc={t("settings.about.licenses.desc")} icon="info">
-    {#snippet control()}
-      <a class="link" href="licenses/heroicons.txt" target="_blank" rel="noreferrer">
-        {t("settings.about.licenses.open")}<Ico name="external" size={14} />
-      </a>
-    {/snippet}
-  </Row>
+<Group title={t("settings.about.licenses")} desc={t("settings.about.licenses.desc")}>
+  {#each LICENSES as lic (lic.key)}
+    {@const open = openLicense === lic.key}
+    <Row label={t(`settings.about.license.${lic.key}`)} desc={t(`settings.about.license.${lic.key}.desc`)} icon={lic.icon}>
+      {#snippet control()}
+        <Button
+          variant="secondary"
+          size="sm"
+          icon={open ? "chevronUp" : "chevronDown"}
+          aria-expanded={open}
+          aria-controls="{licId}-{lic.key}"
+          onclick={() => (openLicense = open ? null : lic.key)}
+        >
+          {open ? t("settings.about.license.hide") : t("settings.about.license.show")}
+        </Button>
+      {/snippet}
+      {#if open}
+        <LicenseText src={lic.src} id="{licId}-{lic.key}" label={t(`settings.about.license.${lic.key}`)} {open} />
+      {/if}
+    </Row>
+  {/each}
 </Group>
 
 <style>
+  /* Hero tile: r16 · padding 16 → the 56 px mark sits 16 px in (≥ radius → scale radius). */
   .hero {
     display: flex;
     align-items: center;
     gap: 16px;
-    padding: 18px;
-    border-radius: 16px;
-    background: var(--s-tile);
+    padding: 16px;
+    border-radius: var(--r-tile);
+    background: var(--color-tile);
   }
   .mark {
     display: flex;
+    flex: 0 0 auto;
     align-items: center;
     justify-content: center;
-    flex: 0 0 auto;
     width: 56px;
     height: 56px;
-    border-radius: 16px;
-    background: var(--color-ink);
-    color: var(--color-paper);
-    font-size: 28px;
-    font-weight: 800;
-    letter-spacing: -0.02em;
+    border-radius: var(--radius-lg);
+    background: var(--color-raised);
+    box-shadow: var(--shadow-card);
   }
   .hero__text {
     display: flex;
@@ -116,17 +136,17 @@
     font-weight: 700;
   }
   .hero__tag {
-    font-size: var(--text-row);
     color: var(--color-ink-2);
+    font-size: var(--text-row);
   }
   .hero__ver {
     display: flex;
     align-items: center;
     gap: 8px;
-    min-height: 26px;
+    min-height: 28px;
+    color: var(--color-ink-3);
     font-family: var(--font-mono);
     font-size: var(--text-secondary);
-    color: var(--color-ink-3);
   }
   .hero__err {
     display: inline-flex;
@@ -138,35 +158,18 @@
     display: flex;
     align-items: center;
     gap: 8px;
-    margin: 12px 4px 26px;
-    font-size: var(--text-secondary);
+    margin: 12px 4px 24px;
     color: var(--color-ink-3);
+    font-size: var(--text-secondary);
   }
   .path {
     display: block;
-    padding: 6px 10px;
-    border-radius: 8px;
-    background: var(--s-inset);
+    padding: 6px 12px;
+    border-radius: var(--radius-sm);
+    background: var(--color-track);
+    color: var(--color-ink-2);
     font-family: var(--font-mono);
     font-size: var(--text-meta);
-    color: var(--color-ink-2);
     overflow-wrap: anywhere;
-  }
-  .link {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    height: 30px;
-    padding: 0 12px;
-    border-radius: 12px;
-    background: var(--color-track);
-    color: var(--color-ink);
-    font-size: var(--text-secondary);
-    font-weight: 600;
-    text-decoration: none;
-    transition: background-color var(--dur-fast) var(--ease-out-soft);
-  }
-  .link:hover {
-    background: var(--color-hover);
   }
 </style>

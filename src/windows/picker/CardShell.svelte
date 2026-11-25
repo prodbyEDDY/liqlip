@@ -1,11 +1,16 @@
 <script lang="ts">
-  // The card surface — port of Liquid Tools `CardShell.svelte` (square preview on the content
-  // tone, 12 px radius, 36 px meta row: app icon · title · format badge). It is a listbox
-  // `option`: focus stays in the search field (combobox) and the current card is announced
-  // through `aria-activedescendant`. Interactive extras (hover actions, the rename field) are
-  // rendered by `Card.svelte` as siblings, not inside the option.
+  // The card surface (W2-E): ONE squircle tile (r16 = panel radius − panel padding) holding
+  // the preview on top and the 32 px meta row (app icon · title · ♥ · format badge) at the
+  // bottom — no box-in-a-box, no ring. States are tone + lift: hover → card-hover; current
+  // (keyboard cursor, what Enter acts on) → lifted card with ink title and an inverted badge;
+  // multi-selected → wash + ✓. Corner marks (digit, ✓) are 24 px circles inset 4 px and the
+  // badge sits 7 px from the bottom-right corner — all concentric with the card.
+  // It is a listbox `option`: focus stays in the search field (combobox) and the current card
+  // is announced through `aria-activedescendant`. Interactive extras (hover tools, the rename
+  // field) are rendered by `Card.svelte` as siblings, not inside the option.
   import type { Snippet } from "svelte";
   import Ico from "$lib/components/Ico.svelte";
+  import type { IconName } from "$lib/icons";
   import { t } from "$lib/i18n/index.svelte";
   import Hl from "./Hl.svelte";
 
@@ -17,6 +22,8 @@
     label: string;
     tooltip: string;
     appIcon: string | null;
+    /** Glyph when there is no app icon (snippets: a document). */
+    fallbackIcon?: IconName;
     badge: string;
     favorite?: boolean;
     /** Keyboard cursor (what Enter acts on). */
@@ -45,6 +52,7 @@
     label,
     tooltip,
     appIcon,
+    fallbackIcon = "appWindow",
     badge,
     favorite = false,
     current = false,
@@ -73,7 +81,7 @@
      option itself is never focused (aria-activedescendant). -->
 <!-- svelte-ignore a11y_click_events_have_key_events -->
 <div
-  class="card"
+  class="card squircle"
   class:is-current={current}
   class:is-checked={checked}
   class:is-hovered={hovered}
@@ -91,29 +99,28 @@
   {onpointerleave}
   onmousedown={(e) => e.preventDefault()}
 >
-  <div class="card__hit squircle">
+  <div class="card__preview">
     {@render children()}
-    {#if checked}
-      <span class="card__check" aria-hidden="true"><Ico name="check" size={12} /></span>
-    {/if}
-    {#if digit}
-      <span class="card__digit" aria-hidden="true">{digit}</span>
-    {/if}
   </div>
   <div class="meta" title={tooltip}>
     <span class="meta__app">
       {#if appIcon && !iconFailed}
         <img class="meta__appimg" src={appIcon} alt="" loading="lazy" decoding="async" draggable="false" onerror={() => (iconFailed = true)} />
       {:else}
-        <Ico name="appWindow" size={13} />
+        <Ico name={fallbackIcon} size={14} />
       {/if}
     </span>
     <span class="meta__title" class:meta__title--hidden={renaming}><Hl text={title} {terms} /></span>
     {#if favorite}
-      <span class="meta__fav" title={t("picker.card.favorite")}><Ico name="heart" size={11} /></span>
+      <span class="meta__fav" title={t("picker.card.favorite")}><Ico name="heart" size={12} /></span>
     {/if}
-    <span class="meta__size">{badge}</span>
+    <span class="meta__badge">{badge}</span>
   </div>
+  {#if digit}
+    <span class="card__mark card__mark--digit" aria-hidden="true">{digit}</span>
+  {:else if checked}
+    <span class="card__mark" aria-hidden="true"><Ico name="check" size={13} /></span>
+  {/if}
   {#if dropSide}
     <span class="card__drop card__drop--{dropSide}" aria-hidden="true"></span>
   {/if}
@@ -122,9 +129,13 @@
 <style>
   .card {
     position: relative;
+    display: flex;
+    flex-direction: column;
     min-width: 0;
     height: 100%;
-    border-radius: 12px;
+    overflow: clip;
+    border-radius: var(--r-card);
+    background: var(--color-card);
     outline: none;
     cursor: grab;
     transition:
@@ -133,86 +144,76 @@
       opacity var(--dur-fast) var(--ease-out-soft);
   }
   .card.is-hovered {
-    background: var(--color-panel-2);
+    background: var(--color-card-hover);
   }
-  /* Keyboard cursor: the product's focus ring (2 px ink) + the selected wash — the
-     Liquid Tools `.kbd-wrap--selected` treatment with the focus-visible colour. */
+  .card.is-checked {
+    background: color-mix(in srgb, var(--color-ink) 9%, var(--color-card));
+  }
+  /* Keyboard cursor = the selection state of the grid: lifted (shadow; the tile moves up
+     2 px in Grid.svelte), brighter face, ink title, inverted badge. No ring. */
   .card.is-current {
-    background: var(--color-selected);
-    box-shadow: 0 0 0 2px var(--color-ink);
+    background: var(--color-card-lift);
+    box-shadow: var(--shadow-lift);
   }
-  .card.is-checked:not(.is-current) {
-    background: var(--color-wash-sel);
+  .card.is-current.is-checked {
+    background: color-mix(in srgb, var(--color-ink) 6%, var(--color-card-lift));
   }
   .card.is-dragging {
     opacity: 0.45;
+    box-shadow: none;
   }
-  .card__hit {
+  .card:active {
+    cursor: grabbing;
+  }
+
+  .card__preview {
     position: relative;
-    display: block;
-    width: 100%;
-    aspect-ratio: 1;
-    border-radius: 12px;
-    background: var(--color-content);
+    flex: 1 1 auto;
+    min-height: 0;
     overflow: hidden;
-    transition: transform var(--dur-fast) var(--ease-out-soft);
   }
-  .card:active .card__hit {
-    transform: scale(0.985);
-  }
-  .card__check {
+
+  /* Corner mark (Ctrl digit or ✓): a 24 px ink circle inset 4 px → concentric (12 + 4 = 16). */
+  .card__mark {
     position: absolute;
-    top: 7px;
-    right: 7px;
+    top: var(--pad-card);
+    left: var(--pad-card);
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 20px;
-    height: 20px;
+    width: calc(2 * var(--r-card-in));
+    height: calc(2 * var(--r-card-in));
     border-radius: 999px;
     background: var(--color-ink);
     color: var(--color-paper);
     box-shadow: var(--shadow-on-lift);
     animation: pop-select 170ms var(--ease-out-soft);
   }
-  .card__digit {
-    position: absolute;
-    top: 7px;
-    left: 7px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    min-width: 20px;
-    height: 20px;
-    padding: 0 5px;
-    border-radius: 7px;
-    background: var(--color-ink);
-    color: var(--color-paper);
+  .card__mark--digit {
     font-family: var(--font-mono);
-    font-size: var(--text-meta);
+    font-size: var(--text-secondary);
     font-weight: 600;
     line-height: 1;
-    box-shadow: var(--shadow-on-lift);
   }
+
   .meta {
     display: flex;
+    flex: 0 0 32px; /* = layout.ts CARD_FOOTER */
     align-items: center;
-    gap: 5px;
-    height: 36px;
+    gap: 6px;
     min-width: 0;
-    padding: 0 3px;
-    font-size: 10px;
-    color: var(--color-ink-3);
+    padding: 0 7px 0 9px;
+    color: var(--color-ink-2);
+    font-size: var(--text-secondary);
   }
   .meta__app {
     display: flex;
+    flex: 0 0 16px;
     align-items: center;
     justify-content: center;
-    flex: 0 0 15px;
-    width: 15px;
-    height: 15px;
-    overflow: hidden;
-    border-radius: 3px;
+    width: 16px;
+    height: 16px;
+    color: var(--color-ink-3);
   }
   .meta__appimg {
     width: 100%;
@@ -225,7 +226,10 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    color: var(--color-ink-2);
+  }
+  .is-current .meta__title {
+    color: var(--color-ink);
+    font-weight: 500;
   }
   .meta__title--hidden {
     visibility: hidden;
@@ -238,28 +242,38 @@
   .meta__fav :global(path) {
     fill: currentColor;
   }
-  .meta__size {
+  /* Format badge: 18 px capsule, 7 px from the card's bottom-right corner (9 + 7 = 16). */
+  .meta__badge {
+    display: inline-flex;
     flex: 0 0 auto;
+    align-items: center;
+    height: 18px;
     margin-left: auto;
-    padding: 3px 6px;
+    padding: 0 6px;
     border-radius: 999px;
     background: var(--color-track);
     color: var(--color-ink-2);
-    font-size: 9px;
+    font-size: var(--text-meta);
     font-weight: 650;
+    letter-spacing: 0.02em;
+    line-height: 1;
+  }
+  .is-current .meta__badge {
+    background: var(--color-ink);
+    color: var(--color-paper);
   }
   .card__drop {
     position: absolute;
-    top: 6px;
-    bottom: 42px;
+    top: 8px;
+    bottom: 8px;
     width: 3px;
     border-radius: 999px;
     background: var(--color-ink);
   }
   .card__drop--start {
-    left: -7px;
+    left: 2px;
   }
   .card__drop--end {
-    right: -7px;
+    right: 2px;
   }
 </style>

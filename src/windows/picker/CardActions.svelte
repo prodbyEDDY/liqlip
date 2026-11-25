@@ -1,7 +1,8 @@
 <script lang="ts">
-  // Hover / selection actions over the bottom of the preview (SPEC §3.2): Copy · Favorite · ⋯.
-  // Geometry is Liquid Tools' CardActions bar (5 px insets, 29 px, paper, card shadow, 8 px
-  // radius) without its border; it exists in the DOM only for the hovered / current card.
+  // Hover / selection tools (SPEC §3.2): Copy · Favorite · ⋯ — an ink capsule (Liquid Tools'
+  // "black capsule with round actions") of 24 px circles in the card's top-right corner,
+  // inset 4 px: concentric with the card (12 + 4 = 16). It exists in the DOM only for the
+  // hovered / current card.
   import Ico from "$lib/components/Ico.svelte";
   import { t } from "$lib/i18n/index.svelte";
 
@@ -20,7 +21,7 @@
 
 <div class="actions" role="toolbar" aria-label={t("picker.card.actions")}>
   <button type="button" title={t("picker.card.copy")} aria-label={t("picker.card.copy")} onmousedown={(e) => e.preventDefault()} onclick={oncopy}>
-    <Ico name="copy" size={15} />
+    <Ico name="copy" size={14} />
   </button>
   {#if canFavorite && onfavorite}
     <button
@@ -32,75 +33,64 @@
       onmousedown={(e) => e.preventDefault()}
       onclick={onfavorite}
     >
-      <Ico name="heart" size={15} />
+      <Ico name="heart" size={14} />
     </button>
   {/if}
   <button type="button" title={t("picker.card.more")} aria-label={t("picker.card.more")} aria-haspopup="menu" onmousedown={(e) => e.preventDefault()} onclick={onmore}>
-    <Ico name="more" size={15} />
+    <Ico name="more" size={14} />
   </button>
 </div>
 
 <style>
   .actions {
     position: absolute;
-    left: 5px;
-    right: 5px;
-    bottom: 41px;
+    top: var(--pad-card);
+    right: var(--pad-card);
     z-index: 2;
     display: flex;
     align-items: center;
-    justify-content: space-around;
-    gap: 0;
-    height: 29px;
-    padding: 1px 2px;
-    border-radius: 8px;
-    background: var(--color-paper);
-    box-shadow: var(--shadow-card);
+    height: calc(2 * var(--r-card-in));
+    border-radius: 999px;
+    background: var(--color-ink);
+    box-shadow: var(--shadow-on-lift);
     animation: actions-in var(--dur-fast) var(--ease-out-soft);
   }
   @keyframes actions-in {
     from {
       opacity: 0;
-      transform: translateY(3px);
+      transform: scale(0.92);
     }
   }
   .actions button {
     display: flex;
-    flex: 1 0 22px;
+    flex: 0 0 auto;
     align-items: center;
     justify-content: center;
-    min-width: 22px;
-    height: 26px;
+    width: calc(2 * var(--r-card-in));
+    height: calc(2 * var(--r-card-in));
     padding: 0;
     border: 0;
-    border-radius: 6px;
+    border-radius: 999px;
     background: transparent;
-    color: var(--color-ink-2);
-    cursor: pointer;
+    color: color-mix(in srgb, var(--color-paper) 78%, transparent);
     transition:
       background-color var(--dur-fast) var(--ease-out-soft),
       color var(--dur-fast) var(--ease-out-soft),
-      box-shadow var(--dur-fast) var(--ease-out-soft),
       transform var(--dur-fast) var(--ease-out-soft);
   }
   .actions button:hover {
-    background: var(--color-paper);
-    color: var(--color-ink);
-    box-shadow: var(--shadow-on-lift);
+    background: color-mix(in srgb, var(--color-paper) 18%, transparent);
+    color: var(--color-paper);
   }
   .actions button:active {
-    transform: scale(0.92);
+    transform: scale(0.9);
   }
   .actions button:focus-visible {
-    outline: 2px solid var(--color-ink);
+    outline-color: var(--color-paper);
     outline-offset: -2px;
   }
-  .actions button:disabled {
-    opacity: 0.45;
-  }
   .actions .active {
-    background: var(--color-selected);
-    color: var(--color-ink);
+    color: var(--color-paper);
   }
   .actions .active :global(path) {
     fill: currentColor;

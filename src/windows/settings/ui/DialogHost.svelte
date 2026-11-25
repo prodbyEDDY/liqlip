@@ -20,7 +20,7 @@
 
 <dialog
   bind:this={el}
-  class="dlg squircle"
+  class="dlg"
   aria-labelledby={titleId}
   oncancel={(e) => {
     e.preventDefault();
@@ -29,18 +29,20 @@
 >
   {#if spec}
     {#key spec.id}
-      <h2 class="dlg__title" id={titleId}>{spec.title}</h2>
-      {#if spec.body}<p class="dlg__body">{spec.body}</p>{/if}
+      <div class="dlg__text">
+        <h2 class="dlg__title" id={titleId}>{spec.title}</h2>
+        {#if spec.body}<p class="dlg__body">{spec.body}</p>{/if}
+      </div>
       <div class="dlg__actions">
         <!-- Destructive dialogs focus the safe choice first. -->
-        <Button variant="ghost" onclick={() => dialogs.settle(null)} autofocus={destructive}>
+        <Button variant="ghost" size="sm" onclick={() => dialogs.settle(null)} autofocus={destructive}>
           {spec.cancel ?? t("common.cancel")}
         </Button>
         {#each spec.actions as a, i (a.value)}
           <Button
-            variant={a.variant === "primary" ? "primary" : "secondary"}
+            size="sm"
+            variant={a.variant === "primary" ? "primary" : a.variant === "danger" ? "danger" : "secondary"}
             onclick={() => dialogs.settle(a.value)}
-            style={a.variant === "danger" ? "color: var(--color-danger)" : undefined}
             autofocus={!destructive && i === spec.actions.length - 1}
           >
             {a.label}
@@ -52,18 +54,21 @@
 </dialog>
 
 <style>
+  /* Dialog geometry: r28 · pad 12 → the 32 px capsule buttons in the bottom corners are
+     concentric (28 − 12 = 16); the text gets 8 px more so it breathes. */
   .dlg {
     width: min(460px, calc(100vw - 32px));
     margin: auto; /* Tailwind preflight zeroes the UA centering margin */
-    padding: 22px 22px 18px;
+    padding: var(--pad-dialog);
     border: 0;
-    border-radius: 22px;
-    background: var(--s-dialog);
+    border-radius: var(--r-dialog);
+    corner-shape: squircle;
+    background: var(--color-raised);
     color: var(--color-ink);
-    box-shadow: var(--shadow-pop);
+    box-shadow: var(--shadow-card-lg);
   }
   .dlg[open] {
-    animation: dlg-in var(--dur-base) var(--ease-out-soft);
+    animation: dlg-in var(--dur-slow) var(--ease-liquid);
   }
   .dlg::backdrop {
     background: rgb(0 0 0 / 0.32);
@@ -74,7 +79,7 @@
   @keyframes dlg-in {
     from {
       opacity: 0;
-      transform: translateY(6px) scale(0.98);
+      transform: scale(0.96);
     }
   }
   @keyframes dlg-fade {
@@ -82,17 +87,20 @@
       opacity: 0;
     }
   }
+  .dlg__text {
+    padding: 10px 8px 4px;
+  }
   .dlg__title {
     margin: 0;
-    font-size: 15px;
+    font-size: var(--text-panel);
     font-weight: 700;
-    line-height: 1.35;
+    line-height: var(--text-panel--line-height);
   }
   .dlg__body {
-    margin: 8px 0 0;
+    margin: 6px 0 0;
+    color: var(--color-ink-2);
     font-size: var(--text-row);
     line-height: 1.5;
-    color: var(--color-ink-2);
   }
   .dlg__actions {
     display: flex;

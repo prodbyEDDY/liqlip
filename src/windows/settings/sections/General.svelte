@@ -32,8 +32,8 @@
     icon="power"
     error={settings.message("general.autostart")}
   >
-    {#snippet control()}
-      <Toggle
+    {#snippet control(ids)}
+      <Toggle describedby={ids.describedby}
         checked={s.general.autostart}
         onChange={(v) => settings.set("general.autostart", v)}
         ariaLabel={t("settings.general.autostart")}
@@ -49,9 +49,9 @@
     icon="languages"
     error={settings.message("general.language")}
   >
-    {#snippet control()}
+    {#snippet control(ids)}
       <div class="w-dd">
-        <Dropdown
+        <Dropdown describedby={ids.describedby}
           options={languages}
           value={s.general.language}
           onChange={(v) => settings.set("general.language", v)}
@@ -61,8 +61,8 @@
     {/snippet}
   </Row>
   <Row label={t("settings.general.theme")} desc={t("settings.general.theme.desc")} icon="eye" error={settings.message("general.theme")}>
-    {#snippet control()}
-      <SegmentedControl
+    {#snippet control(ids)}
+      <SegmentedControl describedby={ids.describedby}
         options={themes}
         value={s.general.theme}
         onChange={(v) => settings.set("general.theme", v)}

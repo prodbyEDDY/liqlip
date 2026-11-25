@@ -1,6 +1,7 @@
 <script lang="ts">
-  // Files (Liquid Tools FileCard): the format family symbol + the format + the first file's
-  // name; "+N" when several files were copied together.
+  // Files: the format family icon (a folder when there's no extension) in a squircle well, the
+  // first file's name (two lines, broken anywhere — file names rarely have spaces), and
+  // "+N more" when several files were copied together.
   import Ico from "$lib/components/Ico.svelte";
   import { t } from "$lib/i18n/index.svelte";
   import Hl from "../Hl.svelte";
@@ -16,60 +17,61 @@
 </script>
 
 <div class="body">
-  <div class="file-symbol"><Ico name={fileIcon(format)} size={36} /><b>{format}</b></div>
-  <span class="name-row">
-    <span class="name"><Hl text={name} {terms} /></span>
+  <div class="top">
+    <span class="well squircle" aria-hidden="true"><Ico name={fileIcon(format)} size={20} /></span>
     {#if more > 0}<span class="more">{t("picker.card.moreFiles", { n: more })}</span>{/if}
-  </span>
+  </div>
+  <span class="name"><Hl text={name} {terms} /></span>
 </div>
 
 <style>
   .body {
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
     width: 100%;
     height: 100%;
+    padding: 12px;
+  }
+  .top {
     display: flex;
-    flex-direction: column;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  .well {
+    display: inline-flex;
     align-items: center;
     justify-content: center;
-    gap: 8px;
-    padding: 12px;
-    background: var(--color-content);
-    color: var(--color-ink-3);
-  }
-  .file-symbol {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 8px;
-    color: var(--color-ink-2);
-  }
-  .file-symbol b {
-    font-size: 10px;
-    letter-spacing: 0.08em;
-  }
-  .name-row {
-    display: flex;
-    align-items: center;
-    gap: 5px;
-    max-width: 100%;
-    min-width: 0;
-  }
-  .name {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-size: var(--text-secondary);
-    color: var(--color-ink-2);
+    width: 36px;
+    height: 36px;
+    border-radius: var(--radius-sm);
+    background: var(--color-track);
+    color: var(--color-ink);
   }
   .more {
-    flex: 0 0 auto;
-    padding: 2px 6px;
+    display: inline-flex;
+    align-items: center;
+    height: 20px;
+    padding: 0 8px;
     border-radius: 999px;
     background: var(--color-track);
     color: var(--color-ink-2);
-    font-size: 10px;
-    font-weight: 650;
+    font-size: var(--text-meta);
+    font-weight: 600;
     font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  .name {
+    display: -webkit-box;
+    overflow: hidden;
+    color: var(--color-ink);
+    font-size: var(--text-row);
+    font-weight: 600;
+    line-height: 1.35;
+    overflow-wrap: anywhere;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
   }
 </style>

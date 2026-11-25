@@ -47,7 +47,7 @@
     width: 100%;
     padding: 10px 11px;
     border: 0;
-    border-radius: 13px;
+    border-radius: var(--radius-md);
     background: transparent;
     /* currentColor drives the leading icon. */
     color: var(--color-ink-2);

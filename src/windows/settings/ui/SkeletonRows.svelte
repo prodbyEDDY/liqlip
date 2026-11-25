@@ -12,7 +12,7 @@
 </script>
 
 <div class="sk" aria-hidden="true">
-  {#if title}<div class="sk__title"><Skeleton width="140px" height="13px" /></div>{/if}
+  {#if title}<div class="sk__title"><Skeleton width="120px" height="12px" /></div>{/if}
   <div class="sk__body squircle">
     {#each Array.from({ length: rows }, (_, i) => i) as i (i)}
       <div class="sk__row">
@@ -20,7 +20,7 @@
           <Skeleton width={widths[i % widths.length]} height="12px" />
           <Skeleton width="70%" height="10px" />
         </div>
-        <Skeleton width="40px" height="22px" radius={999} />
+        <Skeleton width="40px" height="24px" circle />
       </div>
     {/each}
   </div>
@@ -30,32 +30,32 @@
   .sk {
     display: flex;
     flex-direction: column;
-    gap: 12px;
+    gap: 8px;
   }
   .sk + :global(.sk) {
-    margin-top: 26px;
+    margin-top: 24px;
   }
   .sk__title {
-    padding: 0 4px;
+    padding: 2px 4px;
   }
   .sk__body {
     display: flex;
     flex-direction: column;
-    gap: 2px;
-    border-radius: 16px;
-    overflow: hidden;
+    padding: var(--pad-tile);
+    border-radius: var(--r-tile);
+    background: var(--color-tile);
   }
   .sk__row {
     display: flex;
     align-items: center;
     gap: 16px;
-    padding: 16px;
-    background: var(--s-tile);
+    min-height: 60px;
+    padding: 12px;
   }
   .sk__text {
     display: flex;
+    flex: 1 1 auto;
     flex-direction: column;
     gap: 8px;
-    flex: 1 1 auto;
   }
 </style>

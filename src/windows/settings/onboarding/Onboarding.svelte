@@ -3,19 +3,23 @@
   // sidebar: Welcome → Shortcut (conflict check through settings_set, change by recording,
   // free alternatives) → Privacy (what is never saved + ignored apps) → Import from Liquid
   // Tools (only when `import_lt_probe.found`) → Ready ("press Alt + V") →
-  // `general.onboardingDone = true`. "Skip setup" finishes at once.
+  // `general.onboardingDone = true`. "Skip setup" finishes at once. "Done" also hides the
+  // window (W2-E, the one behaviour change of the design wave), so the very next thing the
+  // user does is press the shortcut; the next time the window opens it shows the settings.
   import Button from "$lib/components/Button.svelte";
   import Ico from "$lib/components/Ico.svelte";
   import Kbd from "$lib/components/Kbd.svelte";
   import { getLocale, t, type TranslationKey } from "$lib/i18n/index.svelte";
+  import { isTauri } from "$lib/ipc/runtime";
   import type { IconName } from "$lib/icons";
   import { importer } from "../importer.svelte";
-  import { comboKeys, formatCount, HOTKEY_ACTIONS, sameExe } from "../logic";
+  import { comboKeys, formatCount, HOTKEY_ACTIONS, importErrorKey, sameExe } from "../logic";
   import { settings } from "../settings.svelte";
   import { toasts } from "../ui.svelte";
   import ExeList from "../ui/ExeList.svelte";
   import HotkeyRow from "../ui/HotkeyRow.svelte";
   import ImportProgressBar from "../ui/ImportProgressBar.svelte";
+  import BrandMark from "../ui/BrandMark.svelte";
 
   let { onFinish }: { onFinish: () => void } = $props();
 
@@ -65,7 +69,7 @@
   const suggestions = $derived(SUGGESTIONS.filter((c) => !HOTKEY_ACTIONS.some((a) => s.hotkeys[a] === c)).slice(0, 2));
 
   let finishing = $state(false);
-  async function finish() {
+  async function finish(hide = false) {
     finishing = true;
     settings.set("general.onboardingDone", true);
     await settings.idle();
@@ -78,6 +82,15 @@
         : { message: t("onboarding.done.toast", { hotkey: summon || "Alt + V" }), icon: "check" },
     );
     onFinish();
+    // Saved → step out of the way: hide the window so the shortcut is the next thing to try.
+    if (hide && !failed && isTauri()) {
+      try {
+        const { getCurrentWindow } = await import("@tauri-apps/api/window");
+        await getCurrentWindow().hide();
+      } catch {
+        /* the window simply stays open */
+      }
+    }
   }
 
   const titleId = "onboarding-title";
@@ -90,7 +103,7 @@
     <ol class="ob__steps">
       {#each steps as st, i (st)}
         <li class="ob__step" class:ob__step--cur={st === current} class:ob__step--done={i < index} aria-current={st === current ? "step" : undefined}>
-          <span class="ob__dot squircle">
+          <span class="ob__dot">
             {#if i < index}<Ico name="check" size={13} />{:else}{i + 1}{/if}
           </span>
           <span class="ob__name">{t(`onboarding.step.${st}` as TranslationKey)}</span>
@@ -100,11 +113,17 @@
   </aside>
 
   <main class="ob__main" aria-labelledby={titleId}>
-    <div class="ob__progress" aria-hidden="true"><span style:width="{((index + 1) / steps.length) * 100}%"></span></div>
     {#key current}
       <section class="ob__body">
-        <p class="ob__count">{t("onboarding.progress", { n: index + 1, total: steps.length })}</p>
-        <div class="ob__icon squircle"><Ico name={ICONS[current]} size={22} /></div>
+        <div class="ob__meta">
+          <p class="ob__count">{t("onboarding.progress", { n: index + 1, total: steps.length })}</p>
+          <span class="ob__bar" aria-hidden="true"><span style:width="{((index + 1) / steps.length) * 100}%"></span></span>
+        </div>
+        {#if current === "welcome"}
+          <div class="ob__icon ob__icon--brand squircle"><BrandMark size={32} /></div>
+        {:else}
+          <div class="ob__icon squircle"><Ico name={ICONS[current]} size={22} /></div>
+        {/if}
 
         {#if current === "welcome"}
           <h1 class="ob__title" id={titleId}>{t("onboarding.welcome.title")}</h1>
@@ -133,7 +152,7 @@
               {#each suggestions as combo (combo)}
                 <button type="button" class="chip" onclick={() => settings.set("hotkeys.summon", combo)}>
                   {#each comboKeys(combo) as k, i (k + i)}
-                    {#if i > 0}<span class="chip__plus">+</span>{/if}<Kbd>{k}</Kbd>
+                    {#if i > 0}<span class="chip__plus">+</span>{/if}<Kbd size="sm">{k}</Kbd>
                   {/each}
                 </button>
               {/each}
@@ -175,7 +194,10 @@
             {:else if importer.report}
               <p class="ob__found" role="status"><Ico name="check" size={16} />{t("onboarding.import.done", { imported: n(importer.report.imported) })}</p>
             {:else}
-              {#if importer.runError}<p class="ob__err" role="alert"><Ico name="warning" size={14} />{t("settings.import.lt.error")}</p>{/if}
+              {#if importer.runError}
+                {@const key = importErrorKey(importer.runError)}
+                <p class="ob__err" role="alert"><Ico name="warning" size={14} />{t(key && key !== "cancelled" ? key : "settings.import.lt.error")}</p>
+              {/if}
               <Button variant="primary" icon="download" disabled={importer.probeState !== "found"} onclick={() => importer.run()}>
                 {t("onboarding.import.run")}
               </Button>
@@ -187,7 +209,7 @@
             <span>{t("onboarding.done.before")}</span>
             <span class="ob__keys">
               {#each summonKeys as k, i (k + i)}
-                {#if i > 0}<span class="chip__plus">+</span>{/if}<Kbd>{k}</Kbd>
+                {#if i > 0}<span class="chip__plus">+</span>{/if}<Kbd size="lg" strong>{k}</Kbd>
               {/each}
             </span>
             <span>{t("onboarding.done.after")}</span>
@@ -204,9 +226,9 @@
       </div>
       <div class="ob__foot-end">
         {#if current === "done"}
-          <Button variant="primary" icon="check" loading={finishing} onclick={finish}>{t("onboarding.finish")}</Button>
+          <Button variant="primary" icon="check" loading={finishing} onclick={() => finish(true)}>{t("onboarding.finish")}</Button>
         {:else}
-          <Button variant="ghost" disabled={finishing} onclick={finish}>{t("onboarding.skip")}</Button>
+          <Button variant="ghost" disabled={finishing} onclick={() => finish()}>{t("onboarding.skip")}</Button>
           <Button variant="primary" disabled={importer.running} onclick={() => go(1)}>
             {t("common.next")}
           </Button>
@@ -219,24 +241,24 @@
 <style>
   .ob {
     display: grid;
-    grid-template-columns: 232px minmax(0, 1fr);
+    grid-template-columns: 220px minmax(0, 1fr);
     height: 100%;
-    background: var(--s-ground);
+    background: var(--color-ground);
+    color: var(--color-ink);
   }
   .ob__side {
     display: flex;
     flex-direction: column;
-    gap: 14px;
-    padding: 22px 14px 18px;
-    background: var(--s-side);
+    gap: 12px;
+    padding: 20px 12px 16px;
   }
   .ob__label {
-    padding: 0 8px;
-    font-size: var(--text-micro);
-    font-weight: 700;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
+    padding: 0 12px;
     color: var(--color-ink-3);
+    font-size: var(--text-micro);
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
   }
   .ob__steps {
     display: flex;
@@ -246,36 +268,41 @@
     padding: 0;
     list-style: none;
   }
+  /* Steps read like the settings sidebar: 40 px capsules, the current one raised. The 24 px
+     number circle is inset 8 px → concentric with the capsule (12 + 8 = 20). */
   .ob__step {
     display: flex;
     align-items: center;
-    gap: 11px;
+    gap: 10px;
     height: 40px;
-    padding: 0 10px;
-    border-radius: 12px;
-    color: var(--color-ink-3);
+    padding: 0 12px 0 8px;
+    border-radius: 999px;
+    color: var(--color-ink-2);
     transition:
       background-color var(--dur-base) var(--ease-out-soft),
       color var(--dur-base) var(--ease-out-soft);
   }
   .ob__step--cur {
-    background: var(--color-selected);
+    background: var(--color-raised);
+    box-shadow: var(--shadow-card);
     color: var(--color-ink);
   }
   .ob__step--done {
-    color: var(--color-ink-2);
+    color: var(--color-ink);
   }
   .ob__dot {
     display: inline-flex;
+    flex: 0 0 auto;
     align-items: center;
     justify-content: center;
-    flex: 0 0 auto;
-    width: 22px;
-    height: 22px;
+    width: 24px;
+    height: 24px;
     border-radius: 999px;
     background: var(--color-track);
+    color: var(--color-ink-2);
     font-size: var(--text-meta);
     font-weight: 700;
+    font-variant-numeric: tabular-nums;
   }
   .ob__step--cur .ob__dot,
   .ob__step--done .ob__dot {
@@ -292,23 +319,14 @@
     flex-direction: column;
     min-height: 0;
   }
-  .ob__progress {
-    height: 3px;
-    background: var(--color-track);
-  }
-  .ob__progress span {
-    display: block;
-    height: 100%;
-    background: var(--color-ink);
-    transition: width var(--dur-slow) var(--ease-out-soft);
-  }
+  /* Full-width scroller (its bar sits at the window edge, not mid-window) with the step
+     centred inside at ≤ 536 px; the bottom fades where content continues under the footer. */
   .ob__body {
     flex: 1 1 auto;
-    overflow-y: auto;
     width: 100%;
-    max-width: 600px;
-    margin: 0 auto;
-    padding: 36px 32px 24px;
+    padding: 32px max(32px, calc((100% - 536px) / 2)) 24px;
+    overflow-y: auto;
+    mask-image: linear-gradient(to bottom, #000 calc(100% - 24px), transparent);
     animation: step-in var(--dur-base) var(--ease-out-soft);
   }
   @keyframes step-in {
@@ -317,11 +335,33 @@
       transform: translateX(8px);
     }
   }
+  /* "Step 2 of 5" with a contained capsule meter (never an edge-to-edge strip). */
+  .ob__meta {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 20px;
+  }
   .ob__count {
-    margin: 0 0 18px;
+    margin: 0;
+    color: var(--color-ink-2);
     font-size: var(--text-secondary);
     font-weight: 600;
-    color: var(--color-ink-3);
+  }
+  .ob__bar {
+    display: block;
+    width: 96px;
+    height: 6px;
+    overflow: hidden;
+    border-radius: 999px;
+    background: var(--color-track);
+  }
+  .ob__bar span {
+    display: block;
+    height: 100%;
+    border-radius: 999px;
+    background: var(--color-ink);
+    transition: width var(--dur-slow) var(--ease-out-soft);
   }
   .ob__icon {
     display: flex;
@@ -330,22 +370,29 @@
     width: 48px;
     height: 48px;
     margin-bottom: 16px;
-    border-radius: 16px;
+    border-radius: var(--radius-lg);
     background: var(--color-ink);
     color: var(--color-paper);
   }
+  .ob__icon--brand {
+    background: var(--color-raised);
+    box-shadow: var(--shadow-card);
+  }
   .ob__title {
     margin: 0;
-    font-size: 22px;
+    color: var(--color-ink);
+    font-size: var(--text-title);
     font-weight: 700;
-    line-height: 1.25;
+    line-height: var(--text-title--line-height);
     letter-spacing: -0.01em;
+    text-wrap: balance;
   }
   .ob__desc {
     margin: 8px 0 0;
-    font-size: var(--text-panel);
-    line-height: 1.5;
     color: var(--color-ink-2);
+    font-size: var(--text-panel);
+    line-height: 1.55;
+    text-wrap: pretty;
   }
   .ob__list {
     display: flex;
@@ -359,24 +406,31 @@
     display: flex;
     align-items: center;
     gap: 12px;
+    color: var(--color-ink);
     font-size: var(--text-row);
     font-weight: 600;
+    line-height: var(--text-row--line-height);
   }
   .ob__list :global(.ico) {
     display: inline-flex;
-    padding: 7px;
-    border-radius: 10px;
-    background: var(--s-tile);
-    color: var(--color-ink-2);
+    flex: 0 0 auto;
+    box-sizing: content-box;
+    padding: 8px;
+    border-radius: var(--radius-sm);
+    corner-shape: squircle;
+    background: var(--color-track);
+    color: var(--color-ink);
   }
+  /* Content tiles: the window's tile surface (r16). The hotkey row inside is inset 4 px
+     (r12, concentric); padded tiles keep 16 px (free radius inside). */
   .ob__card {
     margin-top: 20px;
-    border-radius: 16px;
-    overflow: hidden;
+    padding: var(--pad-tile);
+    border-radius: var(--r-tile);
+    background: var(--color-tile);
   }
   .ob__card--pad {
-    padding: 14px;
-    background: var(--s-tile);
+    padding: 16px;
   }
   .ob__status,
   .ob__found,
@@ -386,9 +440,9 @@
     gap: 8px;
     min-height: 22px;
     margin: 12px 0 0;
+    color: var(--color-ink-2);
     font-size: var(--text-secondary);
     font-weight: 600;
-    color: var(--color-ink-2);
   }
   .ob__found {
     color: var(--color-ink);
@@ -406,33 +460,35 @@
     align-items: center;
     gap: 8px;
     margin-top: 10px;
-    font-size: var(--text-secondary);
     color: var(--color-ink-2);
+    font-size: var(--text-secondary);
   }
+  /* A suggested chord: 32 px capsule of 20 px keycaps (inset 6 → concentric). */
   .chip {
     display: inline-flex;
     align-items: center;
     gap: 4px;
-    height: 34px;
-    padding: 0 10px;
+    height: var(--h-md);
+    padding: 0 6px;
     border: 0;
     border-radius: 999px;
-    background: var(--s-tile);
-    cursor: default;
+    background: var(--color-tile);
+    box-shadow: var(--shadow-on-lift);
     transition: background-color var(--dur-fast) var(--ease-out-soft);
   }
   .chip:hover {
-    background: var(--color-hover);
+    background: var(--color-raised);
   }
   .chip__plus {
     margin: 0 2px;
-    font-size: var(--text-meta);
     color: var(--color-ink-3);
+    font-size: var(--text-secondary);
   }
   .ob__note {
     margin: 12px 0 0;
-    font-size: var(--text-secondary);
     color: var(--color-ink-3);
+    font-size: var(--text-secondary);
+    line-height: var(--text-secondary--line-height);
   }
   .ob__done {
     display: flex;
@@ -440,24 +496,14 @@
     align-items: center;
     gap: 10px;
     margin: 14px 0 0;
+    color: var(--color-ink-2);
     font-size: var(--text-panel);
     line-height: 1.6;
-    color: var(--color-ink-2);
   }
   .ob__keys {
     display: inline-flex;
     align-items: center;
     gap: 2px;
-  }
-  .ob__keys :global(.kbd) {
-    height: 30px;
-    min-width: 30px;
-    padding: 0 9px;
-    border-radius: 10px;
-    background: var(--color-ink);
-    color: var(--color-paper);
-    font-size: var(--text-row);
-    font-weight: 600;
   }
   .ob__foot-end {
     display: flex;
@@ -470,7 +516,7 @@
     width: 100%;
     max-width: 600px;
     margin: 0 auto;
-    padding: 14px 32px 22px;
+    padding: 12px 32px 24px;
   }
   @media (max-width: 859px) {
     .ob {
@@ -481,13 +527,19 @@
       display: none;
     }
     .ob__side {
-      padding: 22px 10px;
       align-items: center;
+      padding: 20px 12px;
     }
     .ob__step {
       justify-content: center;
-      padding: 0;
       width: 40px;
+      padding: 0;
+    }
+    .ob__body {
+      padding: 24px 24px 16px;
+    }
+    .ob__foot {
+      padding: 12px 24px 20px;
     }
   }
 </style>

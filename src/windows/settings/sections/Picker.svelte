@@ -107,14 +107,14 @@
   </Row>
   {#if edge}
     <Row label={t("settings.picker.hoverOpen")} desc={t("settings.picker.hoverOpen.desc")} error={settings.message("picker.hoverOpen")}>
-      {#snippet control()}
-        <Toggle checked={p.hoverOpen} onChange={(v) => settings.set("picker.hoverOpen", v)} ariaLabel={t("settings.picker.hoverOpen")} />
+      {#snippet control(ids)}
+        <Toggle describedby={ids.describedby} checked={p.hoverOpen} onChange={(v) => settings.set("picker.hoverOpen", v)} ariaLabel={t("settings.picker.hoverOpen")} />
       {/snippet}
     </Row>
   {:else}
     <Row label={t("settings.picker.centerRow")} desc={t("settings.picker.centerRow.desc")} error={settings.message("picker.centerRow")}>
-      {#snippet control()}
-        <Toggle checked={p.centerRow} onChange={(v) => settings.set("picker.centerRow", v)} ariaLabel={t("settings.picker.centerRow")} />
+      {#snippet control(ids)}
+        <Toggle describedby={ids.describedby} checked={p.centerRow} onChange={(v) => settings.set("picker.centerRow", v)} ariaLabel={t("settings.picker.centerRow")} />
       {/snippet}
     </Row>
   {/if}
@@ -124,9 +124,9 @@
     note={monStatus === "error" ? t("settings.picker.monitor.error") : null}
     error={settings.message("picker.monitor")}
   >
-    {#snippet control()}
+    {#snippet control(ids)}
       <div class="w-dd">
-        <Dropdown
+        <Dropdown describedby={ids.describedby}
           options={monitorOptions}
           value={p.monitor}
           onChange={(v) => settings.set("picker.monitor", v)}
@@ -140,14 +140,14 @@
 <Group title={t("settings.picker.behavior")}>
   {#each toggles as [key, label] (key)}
     <Row label={t(label)} desc={t(`${label}.desc`)} error={settings.message(`picker.${key}`)}>
-      {#snippet control()}
-        <Toggle checked={p[key]} onChange={(v) => settings.set(`picker.${key}`, v)} ariaLabel={t(label)} />
+      {#snippet control(ids)}
+        <Toggle describedby={ids.describedby} checked={p[key]} onChange={(v) => settings.set(`picker.${key}`, v)} ariaLabel={t(label)} />
       {/snippet}
     </Row>
   {/each}
   <Row label={t("settings.picker.clickAction")} desc={t("settings.picker.clickAction.desc")} error={settings.message("picker.clickAction")}>
-    {#snippet control()}
-      <SegmentedControl
+    {#snippet control(ids)}
+      <SegmentedControl describedby={ids.describedby}
         options={clickActions}
         value={p.clickAction}
         onChange={(v) => settings.set("picker.clickAction", v)}
@@ -158,14 +158,14 @@
   </Row>
   {#each toggles2 as [key, label] (key)}
     <Row label={t(label)} desc={t(`${label}.desc`)} error={settings.message(`picker.${key}`)}>
-      {#snippet control()}
-        <Toggle checked={p[key]} onChange={(v) => settings.set(`picker.${key}`, v)} ariaLabel={t(label)} />
+      {#snippet control(ids)}
+        <Toggle describedby={ids.describedby} checked={p[key]} onChange={(v) => settings.set(`picker.${key}`, v)} ariaLabel={t(label)} />
       {/snippet}
     </Row>
   {/each}
   <Row label={t("settings.picker.rememberSearch")} desc={t("settings.picker.rememberSearch.desc")} error={settings.message("picker.rememberSearch")}>
-    {#snippet control()}
-      <SegmentedControl
+    {#snippet control(ids)}
+      <SegmentedControl describedby={ids.describedby}
         options={remember}
         value={p.rememberSearch}
         onChange={(v) => settings.set("picker.rememberSearch", v)}
@@ -178,9 +178,9 @@
 
 <Group title={t("settings.picker.stack")}>
   <Row label={t("settings.picker.mergeSeparator")} desc={t("settings.picker.mergeSeparator.desc")} error={settings.message("picker.mergeSeparator")}>
-    {#snippet control()}
+    {#snippet control(ids)}
       <div class="w-dd">
-        <Dropdown
+        <Dropdown describedby={ids.describedby}
           options={separators}
           value={p.mergeSeparator}
           onChange={(v) => settings.set("picker.mergeSeparator", v)}
@@ -190,8 +190,8 @@
     {/snippet}
   </Row>
   <Row label={t("settings.picker.newlineAfterPaste")} desc={t("settings.picker.newlineAfterPaste.desc")} error={settings.message("stack.newlineAfterPaste")}>
-    {#snippet control()}
-      <Toggle
+    {#snippet control(ids)}
+      <Toggle describedby={ids.describedby}
         checked={s.stack.newlineAfterPaste}
         onChange={(v) => settings.set("stack.newlineAfterPaste", v)}
         ariaLabel={t("settings.picker.newlineAfterPaste")}
@@ -204,7 +204,7 @@
 
 <Group title={t("settings.picker.advanced")}>
   <Row label={t("settings.picker.pasteKeys")} desc={t("settings.picker.pasteKeys.desc")} error={settings.message("picker.pasteKeys")} stack>
-    {#snippet control()}
+    {#snippet control(ids)}
       <ExeList
         items={pasteKeys.map((k) => k.exe)}
         label={t("settings.picker.pasteKeys")}
@@ -213,7 +213,7 @@
         onRemove={(exe) => setPasteKeys(pasteKeys.filter((k) => !sameExe(k.exe, exe)))}
       >
         {#snippet trailing(exe)}
-          <Dropdown
+          <Dropdown describedby={ids.describedby}
             options={chords}
             value={chordOf(exe)}
             onChange={(v) => setPasteKeys(pasteKeys.map((k) => (sameExe(k.exe, exe) ? { ...k, chord: v as PasteChord } : k)))}

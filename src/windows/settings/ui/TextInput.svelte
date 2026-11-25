@@ -1,6 +1,7 @@
 <script lang="ts">
-  // Single-line text field of the settings window (folder names, snippet names): filled
-  // track surface, ink focus ring, `aria-invalid` + `aria-describedby` for errors.
+  // Single-line text field of the settings window (folder names, snippet names): a filled
+  // 36 px capsule with the concentric focus ring while it has focus; `aria-invalid` +
+  // `aria-describedby` for errors (invalid = a raised face, so it reads without colour).
   interface Props {
     value: string;
     id?: string;
@@ -39,7 +40,7 @@
 </script>
 
 <input
-  class="input squircle selectable"
+  class="input selectable"
   class:input--invalid={invalid}
   type="text"
   {id}
@@ -60,10 +61,10 @@
 <style>
   .input {
     width: 100%;
-    height: 36px;
-    padding: 0 12px;
+    height: var(--h-lg);
+    padding: 0 16px;
     border: 0;
-    border-radius: 12px;
+    border-radius: 999px;
     background: var(--color-track);
     color: var(--color-ink);
     font: inherit;
@@ -74,17 +75,17 @@
   .input::placeholder {
     color: var(--color-ink-3);
   }
-  .input:hover:not(:disabled) {
+  .input:hover:not(:disabled):not(:focus) {
     background: var(--color-hover);
   }
-  /* Same focus treatment as SearchField: a real ring, also on mouse focus (text entry). */
+  /* Text entry: the ring shows whenever the field has focus (typing is keyboard work). */
   .input:focus {
-    background: var(--color-selected);
-    outline: 2px solid var(--color-ink);
-    outline-offset: 2px;
+    outline: var(--focus-ring);
+    outline-offset: var(--focus-offset);
   }
   .input--invalid {
-    background: var(--color-paper);
+    background: var(--color-raised);
+    box-shadow: var(--shadow-on-lift);
   }
   .input:disabled {
     opacity: 0.5;

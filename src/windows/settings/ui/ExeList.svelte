@@ -88,7 +88,7 @@
             {disabled}
             onclick={() => onRemove(exe)}
           >
-            <Ico name="x" size={15} />
+            <Ico name="x" size={14} />
           </button>
         </li>
       {/each}
@@ -115,33 +115,36 @@
   .exe__empty {
     margin: 0;
     padding: 12px 14px;
-    border-radius: 12px;
+    border-radius: var(--radius-md);
+    corner-shape: squircle;
     background: var(--color-track);
-    font-size: var(--text-secondary);
-    line-height: 1.5;
     color: var(--color-ink-2);
+    font-size: var(--text-secondary);
+    line-height: var(--text-secondary--line-height);
   }
   .exe__list {
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 4px;
     margin: 0;
     padding: 0;
     list-style: none;
   }
+  /* List entry: r12 squircle on the control wash; its remove circle (32 px) is inset 8 px
+     from the right edge, mid-height. */
   .exe__item {
     display: flex;
     align-items: center;
     gap: 12px;
     min-height: 48px;
-    padding: 6px 8px 6px 10px;
-    border-radius: 12px;
-    background: var(--s-inset);
+    padding: 8px 8px 8px 10px;
+    border-radius: var(--radius-md);
+    background: var(--color-track);
   }
   .exe__text {
     display: flex;
-    flex-direction: column;
     flex: 1 1 auto;
+    flex-direction: column;
     min-width: 0;
   }
   .exe__name,
@@ -151,30 +154,29 @@
     white-space: nowrap;
   }
   .exe__name {
+    color: var(--color-ink);
     font-size: var(--text-row);
     font-weight: 600;
-    color: var(--color-ink);
   }
   .exe__file {
-    font-size: var(--text-meta);
     color: var(--color-ink-3);
+    font-size: var(--text-secondary);
   }
   .exe__trailing {
     flex: 0 0 auto;
-    width: 170px;
+    width: 180px;
   }
   .exe__remove {
     display: inline-flex;
+    flex: 0 0 auto;
     align-items: center;
     justify-content: center;
-    flex: 0 0 auto;
-    width: 30px;
-    height: 30px;
+    width: var(--h-md);
+    height: var(--h-md);
     border: 0;
     border-radius: 999px;
     background: transparent;
     color: var(--color-ink-3);
-    cursor: default;
     transition:
       background-color var(--dur-fast) var(--ease-out-soft),
       color var(--dur-fast) var(--ease-out-soft);
@@ -184,7 +186,7 @@
     color: var(--color-ink);
   }
   .exe__remove:active:not(:disabled) {
-    background: var(--color-track);
+    background: var(--color-selected);
   }
   .exe__remove:disabled {
     opacity: 0.45;
@@ -193,5 +195,10 @@
     display: flex;
     flex-wrap: wrap;
     gap: 8px;
+  }
+  @media (max-width: 859px) {
+    .exe__trailing {
+      width: 150px;
+    }
   }
 </style>

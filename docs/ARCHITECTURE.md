@@ -1345,26 +1345,35 @@ export interface ImportReport { imported: number; skipped: number; folders: numb
 
 ## 11. Дизайн-система
 
-Перенос из Liquid Tools **без изменений**: `src/app.css` (`@theme`, светлая/тёмная палитры,
-радиусы, тени, моушен, утилита `squircle`), правила монохром-лока (цвет — только в
-пользовательском контенте: ColorCard), «никаких границ/разделителей» (hairline/divider
-прозрачны), капсулы — `border-radius: 999px` без `squircle`, шрифты Inter + JetBrains Mono
-(моно — только функционально), моушен 150–250 мс ease-out, жидкая кривая
-`cubic-bezier(.34,1.24,.44,1)`, `prefers-reduced-motion`. Справочник — Liquid Tools
-`docs/design-system.md`. Окно настроек — те же токены на системном заголовке.
+**Канон — [`design-system.md`](design-system.md) (W2-E, 2026-11-26)**: токены `src/app.css`,
+шкалы радиусов/отступов/высот, правило концентричности (пары `--r-*`/`--pad-*`, вложенный радиус
+через `calc()`), примитивы и матрица состояний; аудит «до/после» — [`design-audit.md`](design-audit.md).
+Идентичность Liquid Tools сохранена: монохром-лок (цвет — только пользовательский контент),
+сквирклы (`squircle` = `corner-shape: squircle`) у поверхностей, капсулы `999px` у контролов,
+Inter + JetBrains Mono (моно — функционально), моушен 150–250 мс, жидкая кривая,
+`prefers-reduced-motion`. Окно настроек — те же токены на системном заголовке.
 
-**Перенос W0 (2026-11-26).** `app.css` — токены 1:1 (палитры обеих тем, радиусы, тени, шкала,
-моушен, `squircle`, `.ico`, `pop-select`, reduced-motion); выкинуты только `.studio-shot-corners`,
-`--gradient-avatar` (аккаунт), `--dur-cap-morph` (колпачок диктовки), `body.liquid-main` (лаунчер).
-Факт исходника: в **светлой** теме Liquid Tools `hairline`/`hairline-strong`/`divider` не прозрачны
-(`#dededc`/`#b7b7b4`/`#e4e4e2`; прозрачны только в тёмной) — перенесено как есть, компоненты эти
-токены под границы не используют (правило «без границ» в силе); единственное употребление — цвет
-тонкого скроллбара. Компоненты `src/lib/components/` — копии Liquid Tools (`Ico`, `Button`, `Toggle`,
-`SegmentedControl`, `Dropdown` (bits-ui), `MenuItem`, `Skeleton`, `EmptyState`, `Toast`, `FlashPill`,
-`Kbd`, `Badge`, `SearchField`, `BigTypeList`); `Menu` очищен от вкладок/аккаунта/перетаскивания окна
-(просто список `MenuItem` для сайдбара); захардкоженные `aria-label` (`Dismiss`, `Clear`) заменены
-ключами `common.*`. Иконки — 75 Heroicons outline (`@iconify-json/heroicons` 1.2.3, формат Liquid
-Tools: stroke 1.5, `1em`), реестр `src/lib/icons.ts` (76 имён), лицензия `public/licenses/heroicons.txt`.
+**Что изменилось относительно Liquid Tools (W2-E):**
+- заливки контролов (`track · hover · wash-sel · selected · toggle-track`) — **смывки ink**
+  (`color-mix`), а не непрозрачные серые: контрол отличим от любой подложки в обеих темах;
+  алиасы поверхностей в корне окна настроек удалены;
+- новые семантические поверхности: `ground · tile · raised · card · card-hover · card-lift`, плюс
+  `scrim`, `thumb`; синеватые серые нейтрализованы;
+- панель шелфа r28 / padding 12 для всех расположений; карточка — одна плитка r16 (превью 4:3 +
+  мета 32 внутри), текущая — тон и подъём вместо кольца; кнопки, поля, дропдауны — капсулы;
+- `:focus-visible` больше не сбрасывает радиус в 4 px — кольцо концентрично элементу;
+- скроллбары без стрелок (`::-webkit-scrollbar`), края с продолжением затухают маской;
+- `--text-micro` 9.5 → 11 px; мета и подписи ≥ 12 px.
+
+**Перенос W0 (2026-11-26, история).** `app.css` — токены 1:1 из Liquid Tools; выкинуты
+`.studio-shot-corners`, `--gradient-avatar`, `--dur-cap-morph`, `body.liquid-main`. Компоненты
+`src/lib/components/` — копии Liquid Tools (`Ico`, `Button`, `Toggle`, `SegmentedControl`,
+`Dropdown` (bits-ui), `MenuItem`, `Skeleton`, `EmptyState`, `Toast`, `FlashPill`, `Kbd`, `Badge`,
+`SearchField`, `BigTypeList`); `Menu` очищен от вкладок/аккаунта; захардкоженные `aria-label`
+заменены ключами `common.*`. Иконки — 75 Heroicons outline (`@iconify-json/heroicons` 1.2.3,
+stroke 1.5, `1em`), реестр `src/lib/icons.ts`, лицензия `public/licenses/heroicons.txt`. В W2-E
+компоненты переведены на шкалы и капсулы; `Toast` получил `action`, `Toggle`/`SegmentedControl`/
+`Dropdown` — `id` и `describedby`.
 
 ## 12. Проверка (гейты)
 
