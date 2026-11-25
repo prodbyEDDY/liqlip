@@ -1,0 +1,56 @@
+[package]
+name = "liqlip"
+version = "0.1.0"
+description = "Liqlip — a keyboard-first clipboard manager for Windows."
+authors = ["Liqlip"]
+edition = "2021"
+rust-version = "1.90"
+
+[lib]
+# The `_lib` suffix keeps the lib name distinct from the bin name (cargo#8519 on Windows).
+name = "liqlip_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "~2.6", features = [] }
+
+[dependencies]
+# Pinned to the 2.11 line, same as Liquid Tools (the JS side pins @tauri-apps/api ~2.11).
+# `tray-icon`: the tray; `image-png`: tray icon variants decoded from PNG bytes at runtime.
+tauri = { version = "~2.11", features = ["tray-icon", "image-png"] }
+# MUST be the first plugin registered: a second launch summons the running shelf and exits.
+tauri-plugin-single-instance = "~2.4"
+tauri-plugin-autostart = "~2.5"
+# pick_exe (ignored apps / paste chords); later export/import dialogs (W2-B).
+tauri-plugin-dialog = "~2.7"
+# open_path (data/log folders); clip_open is W1-C's choice.
+tauri-plugin-opener = "~2.5"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Non-poisoning locks for every shared state core.
+parking_lot = "0.12"
+base64 = "0.22"
+tokio = { version = "1", features = ["sync"] }
+# Store (W1-A): SQLite compiled in (FTS5 + trigram verified by W0, see ARCHITECTURE §0).
+rusqlite = { version = "0.43", features = ["bundled"] }
+# Image encode/decode for the clipboard (W1-B capture, W1-A thumbnails, W1-C writer).
+image = { version = "0.25", default-features = false, features = ["png"] }
+# content_hash (src/content.rs): XXH3-128, stable since xxHash 0.8.0.
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
+
+[target.'cfg(windows)'.dependencies]
+# The #[implement] macro (drag-out COM objects, W1-C) emits paths to `windows_core`,
+# so it must be a direct dependency of the same minor as `windows`.
+windows-core = "0.62"
+# Only the Win32 surface actually used is gated in; each W1 agent adds its own features
+# with a `# W1-X` comment.
+windows = { version = "0.62", features = [
+    # HWND / BOOL / HANDLE basics.
+    "Win32_Foundation",
+    # GetWindowLongPtrW / SetWindowLongPtrW (WS_EX_TOOLWINDOW on the shelf + HUD windows).
+    "Win32_UI_WindowsAndMessaging",
+    # GetUserDefaultUILanguage (i18n_native: `language: system`).
+    "Win32_Globalization",
+    # RegGetValueW (tray icon variant for a light / dark taskbar).
+    "Win32_System_Registry",
+] }

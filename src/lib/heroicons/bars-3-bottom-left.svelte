@@ -1,0 +1,2 @@
+<!-- Heroicons (MIT), Tailwind Labs. @iconify-json/heroicons 1.2.3. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25H12"/></svg>

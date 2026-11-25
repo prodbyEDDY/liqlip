@@ -3,7 +3,8 @@
 > Технический дизайн v1. Что строим — [SPEC.md](SPEC.md); статус — [ROADMAP.md](ROADMAP.md).
 > Это **контракт** для параллельных агентов: типы, команды, события, владение файлами.
 > Менять контракт может только координатор (агенты — аддитивно и с пометкой в отчёте, см. §13).
-> Замер: 2026-11-25 (проект, кода ещё нет).
+> Замер: 2026-11-26 (W0: фундамент собран — каркас, контракт, заглушки всех команд, мок, settings;
+> гейты зелёные; нативно не запускалось).
 
 ## 0. Стек
 
@@ -13,10 +14,24 @@
 | UI | **Svelte 5 (runes)** + **Vite MPA** + **Tailwind v4** + TypeScript | одна HTML-точка на окно, как в Liquid Tools |
 | Шрифты | `@fontsource-variable/inter`, `@fontsource-variable/jetbrains-mono` | self-hosted |
 | Иконки | Heroicons outline через локальный `src/lib/heroicons/` + `Ico` (как Liquid Tools после 2026-09-22) | |
-| Rust | `rusqlite` (bundled; версию определяет W0/W1-A — в Liquid Tools закреплена `=0.38` из-за rustc 1.94, сейчас стоит rustc **1.99** — проверить, собирается ли новее), `windows` 0.62 (Win32/WinRT), `arboard` 3.6 (только если нужен — запись/чтение делаем своими Win32-вызовами), `image` 0.25 (`png`), `serde`, `serde_json`, `parking_lot`, `base64`, `tokio` (`sync`) | `enigo` **не** используем — `SendInput` напрямую |
-| Тесты | `node:test` + `esbuild` (как Liquid Tools) для чистой TS-логики; `cargo test` для Rust — **если заработает** в новом крейте (в Liquid Tools тест-бинарники падают с `STATUS_ENTRYPOINT_NOT_FOUND`, DOC-08; W0 проверяет) | |
+| Rust | `rusqlite` **0.43.0** `bundled` (libsqlite3-sys 0.40.0 → SQLite **3.54.1**, собрано с `SQLITE_ENABLE_FTS5`; на rustc 1.99 собирается — пин `=0.38` из Liquid Tools не нужен), `windows` 0.62.2 (Win32/WinRT; фичи — по назначению, с комментарием `# W1-X`), `image` 0.25.10 (`png`), `xxhash-rust` 0.8.21 (`xxh3`, общий хэш — §15), `serde` 1.0.228, `serde_json` 1.0.150, `parking_lot` 0.12.5, `base64` 0.22, `tokio` 1.52 (`sync`). `arboard` W0 **не** добавлял — чтение/запись своими Win32-вызовами (решают W1-B/W1-C) | `enigo` **не** используем — `SendInput` напрямую |
+| Тесты | `node:test` + `esbuild` (как Liquid Tools) для чистой TS-логики; **`cargo test` в крейте `src-tauri` работает** (W0, 2026-11-26: 24 теста, тест-бинарник стартует со всеми плагинами) — Rust TDD доступен, отдельный `liqlip-core` не нужен (§12) | |
 
 Toolchain на машине (2026-11-25): rustc/cargo 1.99, node 24.21, pnpm 12.6.
+
+**Фактические версии (W0, 2026-11-26).** Rust: `tauri` **2.11.2** (`~2.11`), `tauri-build` 2.6.2,
+`tauri-plugin-single-instance` 2.4.2, `-autostart` 2.5.1, `-dialog` 2.7.1, `-opener` 2.5.4 — ровно набор
+Liquid Tools. `Cargo.lock` засеян из лока Liquid Tools (cargo сам вычистил лишнее): свежий резолв
+`~2.11` берёт `tauri` 2.11.6 вместе с `tauri-runtime` 2.12.4, и `tauri` не компилируется (27 ошибок
+несовместимости API). Не делать `cargo update` для tauri-крейтов без проверки; переход на 2.12 —
+отдельной задачей вместе с `@tauri-apps/api`/`cli`. JS: `svelte` 5.59.1, `vite` 8.3.8, `tailwindcss` /
+`@tailwindcss/vite` 4.3.5, `@sveltejs/vite-plugin-svelte` 7.3.2, `typescript` 6.0.3, `svelte-check` 4.7.8,
+`esbuild` 0.28.2, `@tauri-apps/api` 2.11.1, `@tauri-apps/cli` 2.11.5, `bits-ui` 2.22.0 (Dropdown),
+`@fontsource-variable/inter` / `jetbrains-mono` 5.3.0. pnpm 12 по умолчанию блокирует build-скрипты —
+`pnpm-workspace.yaml` разрешает только `esbuild`.
+
+**FTS5 + trigram** проверены тестом `store::sqlite_probe` (external-content таблица как в §4.2,
+регистронезависимый поиск по подстроке для кириллицы и латиницы).
 
 Идентификатор `com.liqlip.app`, productName `Liqlip`. Данные: `%APPDATA%\com.liqlip.app\`.
 
@@ -36,8 +51,10 @@ liqlip/
         types.ts                ← КОНТРАКТ (§9), зеркало src-tauri/src/model.rs
         commands.ts             типизированные обёртки invoke (одна функция на команду)
         events.ts               типизированные подписки
-        mock/                   браузерный адаптер: без Tauri команды обслуживает in-memory сид
-      motion/ · theme.svelte.ts · flash.svelte.ts · hotkeyCapture.ts
+        runtime.ts · errors.ts  isTauri() · код ошибки → локализованный текст (common.error.*)
+        mock/                   браузерный адаптер: index (роутер) · bus (события, флаги URL, задержка) ·
+                                seed · clips (store+paste+stack+симулятор захвата) · settings · system
+      motion/ · theme.svelte.ts · appearance.ts · flash.svelte.ts · hotkey.ts · hotkeyCapture.ts · hotkeyError.ts
     windows/
       picker/                   шелф (Picker.svelte + компоненты, cards/, layout.ts, query.ts, transforms.ts …)
       settings/                 окно настроек + онбординг
@@ -54,9 +71,12 @@ liqlip/
       hotkeys/                  движок глобальных хоткеев + запись сочетания
       ocr/                      (W2) Windows.Media.Ocr, фоновая очередь
       import/                   (W2) импорт из Liquid Tools, резервные копии
+      content.rs                общий хэш + правила содержимого (превью, усечение, метрики) — §15
+      events.rs                 типизированные эмиттеры всех событий §9.7 (имена + адресация)
       tray.rs · theme.rs · logx.rs · fsx.rs · autostart.rs · i18n_native.rs
-    tauri.conf.json · capabilities/default.json
-  tests/                        *.test.mjs (node:test)
+    tauri.conf.json · capabilities/default.json · icons/ (временные, PQ-01)
+  tests/                        *.test.mjs (node:test) · helpers/bundle.mjs (esbuild → ESM) ·
+                                fixtures/settings.default.json (дефолты: Rust ≡ мок)
   docs/                         эта библиотека
 ```
 
@@ -74,6 +94,19 @@ Tools: ленивый `.build()` из команды/хоткея дедлочи
 У всех окон — `CloseRequested` перехвачен (Alt+F4 не уничтожает заранее созданные окна;
 в Liquid Tools это баг шелфа).
 
+**Как создано в W0** (`lib.rs::build_windows`): `picker` — `transparent`, `decorations(false)`,
+`shadow(false)`, `always_on_top`, `skip_taskbar`, `resizable(false)`, `focusable(true)`,
+`disable_drag_drop_handler`, 904×784 (760×640 + `BLEED` 72 с каждой стороны); `hud` — то же без
+drag-handler, `focusable(false)` (в tao это `WS_EX_NOACTIVATE`), 320×56, `set_ignore_cursor_events(true)`
+(click-through); `settings` — системный заголовок, 960×680, мин. 720×520, `center`, заголовок из
+`i18n_native` (меняется с языком), `disable_drag_drop_handler` (HTML5 DnD для сниппетов/папок). Геометрия
+`settings` сохраняется при скрытии и на выходе (`settings.window.settingsBounds`, **физические px**:
+внешняя позиция + внутренний размер) и восстанавливается, только если полоса заголовка видна на
+каком-то мониторе. **Для W1-D:** `skip_taskbar` (tao: `ITaskbarList::DeleteTab`) не убирает окно из
+Alt+Tab, а tao пересчитывает `GWL_EXSTYLE` из своих флагов при каждом show/hide/`set_focusable`/
+`set_ignore_cursor_events` (`tao/src/platform_impl/windows/window_state.rs::apply_diff`) — вручную
+добавленный `WS_EX_TOOLWINDOW` надо переустанавливать после этих вызовов.
+
 ## 3. Порядок `setup()`
 
 1. `logx::init` (файл с ротацией в `%APPDATA%\com.liqlip.app\logs\`).
@@ -86,6 +119,12 @@ Tools: ленивый `.build()` из команды/хоткея дедлочи
 8. `tray::build` (подписи из `i18n_native` по языку).
 9. `theme::apply`.
 10. Если `!settings.general.onboardingDone` → показать `settings` в режиме онбординга.
+
+Реализовано в W0 ровно в этом порядке (`lib.rs::run`); там, где модуль ещё заглушка, вызывается
+заглушка §15 (`capture::start`, `paste::init`, `ocr::start`, `picker::init`, `hotkeys::start`,
+`picker::show_settings(Some("onboarding"))`). `Store::open` → `Err` прерывает запуск (W1-A делает
+открытие устойчивым: битая база отодвигается и создаётся заново). На `RunEvent::Exit` сохраняется
+геометрия окна настроек.
 
 ## 4. Данные
 
@@ -180,9 +219,13 @@ CREATE VIRTUAL TABLE clips_fts USING fts5(
 CREATE VIRTUAL TABLE snippets_fts USING fts5(name, body, content='snippets', content_rowid='id', tokenize='trigram');
 ```
 
-**Хэш:** стабильный 128-битный (например, `xxh3_128` или `blake3` — выбирает W1-A, crate
-проверить), от `kind` + канонического содержимого (текст — как есть; картинка — байты PNG
-после нормализации; файлы — отсортированные пути в нижнем регистре).
+**Хэш** (W0, `src-tauri/src/content.rs`, §15): XXH3-128 (`xxhash-rust`), 32 hex-символа, от
+`"liqlip:1\0" ‖ семейство ‖ "\0" ‖ каноническое содержимое`. Семейство, а не точный `kind`
+(`text` для text/link/code/color/contact, `image`, `file`) — чтобы улучшенный классификатор в будущей
+версии поднимал старую запись, а не плодил двойник. Канон: текст — как есть (после усечения до 2 МБ);
+картинка — `width u32 LE ‖ height u32 LE ‖ RGBA8` (пиксели, а не байты PNG — не зависит от версии
+энкодера); файлы — пути в нижнем регистре, отсортированы, через `\n`. Значение закреплено тестом
+`content::tests::hash_is_stable` — менять формат после релиза нельзя.
 
 **Правила:**
 - Вставка новой записи с существующим `hash` → `copied_at = now, copy_count += 1`, если запись
@@ -428,7 +471,7 @@ export interface TargetInfo { exe: string; name: string; title: string; iconUrl:
 export interface PasteRequest { ids: number[]; mode: PasteMode; separator?: string; keepOpen?: boolean }
 export interface TextPasteRequest { text: string; plain: boolean; caretBack?: number; keepOpen?: boolean }
 export interface PasteOutcome { result: 'pasted' | 'copied' | 'failed';
-  reason?: 'no_target' | 'elevated' | 'focus_lost' | 'clipboard_busy' | 'not_found' }
+  reason?: 'no_target' | 'elevated' | 'focus_lost' | 'clipboard_busy' | 'not_found' | 'stack_empty' }
 export interface CaptureStatus { pausedUntil: number | null; /* -1 = до возобновления */ ignoreNext: boolean; collectToStack: boolean }
 export interface StackItem { key: string; clipId: number; kind: Kind; preview: string }
 export interface Stack { items: StackItem[] }
@@ -485,7 +528,9 @@ export interface ImportReport { imported: number; skipped: number; folders: numb
 | `backup_export` / `backup_import` | → `string\|null` / `mode: 'replace'\|'merge'` → `ImportReport` | import (W2) |
 
 Ошибки команд — `Result<T, String>` с машинным кодом в начале строки (`"not_found: …"`,
-`"busy: …"`, `"invalid: …"`); фронт показывает локализованный текст по коду.
+`"busy: …"`, `"invalid: …"`, `"failed: …"` — сбой ОС/плагина, добавлен в W0; заглушки —
+`"unimplemented: <команда>"`); фронт показывает локализованный текст по коду
+(`src/lib/ipc/errors.ts` → `common.error.<код>`, неизвестный код → `common.error.unknown`).
 
 ### 9.7. События (`emit_to` адресно; ⚑ = во все окна)
 
@@ -514,6 +559,51 @@ export interface ImportReport { imported: number; skipped: number; folders: numb
 `lib.rs:198–226`); в WebView2 адрес `http://liq.localhost/<path>`:
 `/thumb/<id>?v=<n>` · `/media/<id>` · `/icon/<appId>` — чтение файла в `spawn_blocking`,
 `Cache-Control: immutable` (версия в query), 404 для отсутствующих.
+
+### 9.9. Уточнения контракта (W0, 2026-11-26)
+
+Аддитивно, без переименований; `model.rs` ≡ `types.ts` проверяет `tests/contract.test.mjs`.
+
+- **Wire-формат.** Структуры — camelCase. Опциональное поле TS (`x?:`) ↔ `Option<T>` с
+  `skip_serializing_if` (при `None` ключа нет, а не `null`); `T | null` ↔ `Option<T>` (всегда есть
+  ключ). `PasteMode` — внешне-тегированный enum serde: `"auto"`, `"plain"`, `{"format":"html"}`.
+  `Record<Kind, T>` ↔ `PerKind<T>` (все 7 ключей). `Counts.folders` — объект с ключами-строками id.
+  `ClipDetail` в Rust — `#[serde(flatten)] clip: Clip` + поля деталей.
+- **Имена аргументов (ключи JS)** — как в таблице §9.6; для команд с одним объектом:
+  `clips_list {q}`, `clip_paste {req}`, `clip_copy {req}` (тип `CopyRequest`), `text_paste {req}`,
+  `snippet_save {input}`, `settings_set {settings}`. Остальные: `ids, value, id, beforeId, folderId,
+  title, text, token, minutes, scope, name, withClips, key, beforeKey, separator, restoreFocus,
+  section, which, mode`. Опциональные (`clip_create_text.folderId`, `settings_open.section`) можно
+  не передавать — Tauri даёт `None`.
+- **Формы, которые §9.6 не задавал:** `stack_add(ids: number[])`, `stack_remove(key)`,
+  `stack_move(key, beforeKey: string|null)`, `stack_get/stack_reverse/stack_clear()` — все → `Stack`;
+  `folder_rename(id, name) → Folder`, `folder_move(id, beforeId) → ()`; `snippet_delete`,
+  `snippet_mark_used`, `clip_open*`, `clip_reveal`, `picker_hide`, `picker_make_interactive`,
+  `settings_open`, `hotkey_record_*`, `open_path`, `ocr_reindex`, `text_copy` → `()` (в JSON `null`);
+  все `capture_*` → `CaptureStatus`. `beforeId/beforeKey: null` = в конец.
+- **Именованные типы для inline-форм:** `CopyRequest`, `UndoResult {undoToken}`, `ClearResult
+  {undoToken|null}`, `ClearScope`, `DragOutcome`, `PathKind`, `BackupMode`, `RunningApp`,
+  `MonitorInfo`, `AppMeta` (`app_info`), `OcrStatus`, `ClipFile`, `ClipColor`, `OcrState`,
+  `ContactKind`, секции настроек (`GeneralSettings`, `PickerSettings`, `HotkeySettings`,
+  `StorageSettings`, `PrivacySettings`, `StackSettings`, `OcrSettings`, `WindowSettings`, `Bounds`,
+  `PasteKey`, `PasteChord`, `Retention`, `RememberSearch`, `MergeSeparator`, `Language`, `ThemePref`),
+  `SettingsError`, `PasteResult`, `PasteReason`; payload событий: `ClipsChanged`/`ClipsChange`,
+  `PickerOpen`/`PickerMode`, `PickerClose` (`{}`), `PickerLayout` (ширина/высота панели **без** bleed и
+  bleed — логические px), `SettingsNavigate`, `HotkeysCaptured` (**`combo: ""` = запись отменена**, Esc),
+  `HudShow`/`HudKind`, `OcrProgress`, `ImportProgress`, `ResolvedTheme`.
+- **`PasteReason` + `stack_empty`** (координатор, приёмка W0): `stack_paste_next`/`stack_paste_all` при пустой очереди → `{ result: 'failed', reason: 'stack_empty' }` (хоткей дополнительно показывает `hud::show(StackEmpty)`).
+- **Безопасные заглушки** (до W1 возвращают `Ok`): `capture_status` (запись идёт), `stack_get`
+  (пусто), `picker_target` (`null`). **Реализованы в W0:** `settings_get`, `settings_set`, `app_info`,
+  `open_path`, `pick_exe`. Остальные 57 → `Err("unimplemented: <имя>")`.
+- **`settings_set`**: семантически неверные поля сохраняют прежнее значение и попадают в `errors`
+  (`invalid`); типовой мусор (не тот JSON-тип, неизвестное значение enum) отклоняется Tauri до вызова
+  (ошибка команды). Хоткеи — синхронный хук `hotkeys::apply_settings` (§15): отвергнутое поле
+  возвращается к прежнему. `autostart` применяется при изменении (в любой сборке) и сверяется на
+  старте (только release — debug-сборка не прописывает dev-бинарник в автозапуск). Успешное
+  изменение: атомарная запись `settings.json` → подписчики → `settings:changed` ⚑ → при смене темы
+  `theme://changed` ⚑ (разрешённая тема). Загрузка `settings.json` — по полям: неверное поле → дефолт.
+- **Тема.** `theme://changed` несёт разрешённую тему (`'light'|'dark'`); шлётся при смене
+  `general.theme` и при смене темы Windows, если выбрано `system`.
 
 ## 10. Фронтенд
 
@@ -544,22 +634,56 @@ export interface ImportReport { imported: number; skipped: number; folders: numb
 `cubic-bezier(.34,1.24,.44,1)`, `prefers-reduced-motion`. Справочник — Liquid Tools
 `docs/design-system.md`. Окно настроек — те же токены на системном заголовке.
 
+**Перенос W0 (2026-11-26).** `app.css` — токены 1:1 (палитры обеих тем, радиусы, тени, шкала,
+моушен, `squircle`, `.ico`, `pop-select`, reduced-motion); выкинуты только `.studio-shot-corners`,
+`--gradient-avatar` (аккаунт), `--dur-cap-morph` (колпачок диктовки), `body.liquid-main` (лаунчер).
+Факт исходника: в **светлой** теме Liquid Tools `hairline`/`hairline-strong`/`divider` не прозрачны
+(`#dededc`/`#b7b7b4`/`#e4e4e2`; прозрачны только в тёмной) — перенесено как есть, компоненты эти
+токены под границы не используют (правило «без границ» в силе); единственное употребление — цвет
+тонкого скроллбара. Компоненты `src/lib/components/` — копии Liquid Tools (`Ico`, `Button`, `Toggle`,
+`SegmentedControl`, `Dropdown` (bits-ui), `MenuItem`, `Skeleton`, `EmptyState`, `Toast`, `FlashPill`,
+`Kbd`, `Badge`, `SearchField`, `BigTypeList`); `Menu` очищен от вкладок/аккаунта/перетаскивания окна
+(просто список `MenuItem` для сайдбара); захардкоженные `aria-label` (`Dismiss`, `Clear`) заменены
+ключами `common.*`. Иконки — 75 Heroicons outline (`@iconify-json/heroicons` 1.2.3, формат Liquid
+Tools: stroke 1.5, `1em`), реестр `src/lib/icons.ts` (76 имён), лицензия `public/licenses/heroicons.txt`.
+
 ## 12. Проверка (гейты)
 
 | Гейт | Команда |
 |---|---|
 | Типы Svelte/TS | `pnpm check` → 0 ошибок, 0 предупреждений |
-| Node-тесты | `pnpm test` (`node --test tests/`) |
+| Node-тесты | `pnpm test` (`node --test "tests/*.test.mjs"`) |
 | Сборка фронта | `pnpm build` (единственное, что резолвит импорты иконок) |
-| Rust | `cargo check --manifest-path src-tauri/Cargo.toml`; `cargo test …` если работает (W0) |
+| Rust | `cargo check --manifest-path src-tauri/Cargo.toml` (0 предупреждений); `cargo test --manifest-path src-tauri/Cargo.toml` — **работает** (W0) |
 | UI в браузере | `pnpm dev` (порт **1430**, strict — не конфликтует с Liquid Tools 1420) + мок-адаптер |
-| Нативно | `pnpm tauri dev` — **только Eddy** (правило воркспейса: агенты нативное приложение не запускают, пока Eddy не разрешит) |
+| Нативно | `pnpm tauri dev` — агенты волн **не запускают**; координатор запускает один раз на интеграции (INT-*) для сквозных сценариев (решение Eddy 2026-11-26, PQ-02); живая проверка — Eddy по установщику (было: правило воркспейса — агенты нативное приложение не запускают, пока Eddy не разрешит) |
+
+**Итог W0 по тестам (2026-11-26).** `cargo test` в крейте `src-tauri` запускается и проходит
+(24 теста: контракт serde, хэш, settings, i18n_native, трей, logx/fsx, FTS5-зонд) — тест-бинарник
+линкуется со всеми плагинами (`dialog`, `autostart`, `opener`, `single-instance`) без
+`STATUS_ENTRYPOINT_NOT_FOUND`. Значит, **Rust TDD доступен прямо в модулях** (`#[cfg(test)]` рядом с
+кодом); отдельный крейт `crates/liqlip-core` не создавался. Если новая зависимость W1 вернёт падение
+тест-бинарника (импорт из Common Controls v6 без манифеста — tauri-build встраивает манифест только в
+`bins`), первое средство — встроить тот же манифест и в тесты из `build.rs`
+(`cargo:rustc-link-arg-tests=/MANIFEST:EMBED` + `/MANIFESTINPUT:<файл>`), и только потом выносить
+логику в отдельный крейт; сообщить координатору.
+
+`pnpm test` = `node --test "tests/*.test.mjs"`: на Node 24 аргумент-каталог (`node --test tests/`)
+трактуется как путь к модулю и падает, поэтому — glob. Тесты W0: `contract` (§9.6 ≡ `lib.rs` ≡
+`commands.ts` ≡ мок; `model.rs` ≡ `types.ts` поле в поле, включая опциональность, и enum ≡ union),
+`settingsDefaults` (мок ≡ `tests/fixtures/settings.default.json` ≡ Rust), `ipcMock` (поведение мока),
+`hotkeyCapture` (перенос). Хелпер `tests/helpers/bundle.mjs` собирает TS-модули esbuild'ом в один ESM.
 
 ## 13. Владение файлами и правила для агентов
 
 - **Файлы-узлы координатора:** `src-tauri/src/lib.rs`, `src-tauri/tauri.conf.json`,
   `src-tauri/capabilities/*.json`, `src-tauri/src/model.rs` + `src/lib/ipc/types.ts` (контракт),
   `src/lib/i18n/{en,ru}.ts` (агенты дописывают только свой префикс), `src/app.css`.
+  С W0 к ним относятся и общие модули: `src-tauri/src/{settings,content,events,tray,theme,
+  i18n_native,logx,fsx,autostart}.rs`, `src/lib/ipc/{commands,events,runtime,errors}.ts`,
+  `src/lib/ipc/mock/bus.ts`, `src/lib/{appearance,theme.svelte,flash.svelte,hotkey,hotkeyCapture,
+  hotkeyError}.ts`, `src/lib/components/**`, `tests/{contract,settingsDefaults,ipcMock}.test.mjs`,
+  `tests/helpers/`, `tests/fixtures/`. Нужна правка — сниппет в отчёте.
 - Контракт: агент может **аддитивно** добавить поле/команду, если без этого задача не решается,
   — в обоих файлах (`model.rs` + `types.ts`) и с явным пунктом в отчёте. Переименовывать и
   удалять — нельзя. Регистрацию новой команды в `lib.rs` агент сдаёт сниппетом.
@@ -590,3 +714,166 @@ export interface ImportReport { imported: number; skipped: number; folders: numb
 | URI-схема | `lib.rs:198–226` (`ltthumb`) | по образцу |
 | OCR (W2) | `git -C liquid-tools-app show 0295998:src-tauri/src/ocr.rs` (удалён в `0c2a612`) | перенос |
 | Импорт (W2) | схема Liquid Tools — `docs/library.md` §4 + `clipboard/store.rs`; база `%APPDATA%\com.liquidtools.app\clipboard\clipboard.db` | читать read-only |
+
+## 15. Межмодульные API (W0, 2026-11-26)
+
+Контракт **между Rust-модулями** — то, против чего агенты W1 пишут параллельно. Все функции
+объявлены W0 с этими сигнатурами и безопасными заглушками (без `todo!()`/паник): «чтение» отдаёт
+пустое/дефолт, «действие» — `Err("unimplemented: <модуль>::<функция>")`. Владелец модуля наполняет
+тело; **сигнатуры меняет только координатор** (аддитивно). Нужно другое — в отчёт, временно
+обойти у себя.
+
+**Правила.**
+1. **`AppHandle` — единственный путь к общему состоянию и событиям.** Managed state достаётся через
+   `app.state::<T>()` (`Store`, `settings::SettingsStore`); модули с потоками получают `AppHandle` в
+   своём `init/start` (setup §3) и хранят клон. Глобальные статики — только внутреннее дело модуля
+   (исключение по контракту — `capture::mark_own_write`, вызываемый без `AppHandle`).
+2. **События — только через `events.rs`** (`events::clips_changed(app, &ClipsChanged{…})` и т. д.):
+   имена и адресация §9.7 в одном месте. Строковые литералы событий в модулях запрещены.
+3. **`Store` не эмитит** — эмитит вызывающий, он знает `origin` (`capture` / `user` / `import`).
+   Фоновые задачи store (ретенция, чистка) эмитят сами (`origin: 'retention'`).
+4. Всё **блокирующее**: из команд — `tauri::async_runtime::spawn_blocking`/свой worker; из UI-потока
+   и из коллбека LL-хука — никогда.
+5. Ошибки — `Result<_, String>` с кодом `not_found | busy | invalid | failed`.
+6. После изменения того, что показывает трей (пауза, длина очереди), вызвать `tray::refresh(app)`.
+
+**Координатор (реализовано в W0)**
+
+```rust
+// content.rs — ЕДИНСТВЕННЫЙ алгоритм хэша (§4.2) и правила содержимого (SPEC §2.3)
+pub fn content_hash(kind: Kind, canonical: &[u8]) -> String;        // 32 hex, XXH3-128
+pub fn image_hash(width: u32, height: u32, rgba: &[u8]) -> String;  // = content_hash(Image, w‖h‖rgba)
+pub fn canonical_text(text: &str) -> &[u8];
+pub fn canonical_files(paths: &[String]) -> Vec<u8>;                 // lower, sort, join "\n"
+pub fn truncate_text(text: &str) -> (&str, bool);                    // ≤ TEXT_MAX_BYTES (2 МБ)
+pub fn make_preview(text: &str) -> String;                           // ≤ 512 символов
+pub fn text_metrics(text: &str) -> TextMetrics;                      // { chars, words, lines }
+pub const PREVIEW_MAX_CHARS, TEXT_MAX_BYTES, FILES_MAX /*2000*/, IMAGE_MAX_PIXELS /*64 МП*/;
+
+// settings.rs
+pub fn get(app: &AppHandle) -> Settings;                             // клон, только read-lock
+pub fn subscribe(app: &AppHandle, f: impl Fn(&Settings /*old*/, &Settings /*new*/) + Send + Sync + 'static);
+//   вызывается после сохранения, до settings:changed; НЕ вызывать settings_set из подписчика
+pub fn patch_window_bounds(app: &AppHandle, bounds: Bounds);         // без рассылки
+
+// events.rs — по функции на событие §9.7
+pub fn clips_changed(app, &ClipsChanged);  pub fn picker_open(app, &PickerOpen);
+pub fn picker_close(app);                  pub fn picker_layout(app, &PickerLayout);
+pub fn capture_status(app, &CaptureStatus); pub fn stack_changed(app, &Stack);
+pub fn settings_changed(app, &Settings);   pub fn settings_navigate(app, section: &str);
+pub fn hotkeys_captured(app, combo: &str); pub fn hud_show(app, &HudShow);
+pub fn ocr_progress(app, &OcrProgress);    pub fn import_progress(app, &ImportProgress);
+pub fn theme_changed(app, ResolvedTheme);
+pub const PICKER: &str = "picker"; SETTINGS = "settings"; HUD = "hud";   // метки окон
+
+// tray.rs
+pub fn refresh(app: &AppHandle);           // перестроить меню/иконку/подсказку (любой поток)
+// theme.rs: apply(app, ThemePref) · resolved(app, ThemePref) -> ResolvedTheme · emit_changed(app, ThemePref)
+// i18n_native.rs: resolve(Language) -> Lang · tr(Lang, Key) -> &'static str  (строки трея/диалогов)
+```
+
+**store (W1-A)** — `src-tauri/src/store/mod.rs`
+
+```rust
+pub struct Store { /* W1-A */ }                         // managed state
+impl Store {
+    pub fn open(data_dir: &Path) -> Result<Store, String>;                  // setup §3 шаг 4
+    pub fn insert_clip(&self, clip: NewClip) -> Result<InsertOutcome, String>; // ← capture
+    pub fn set_app_icon(&self, app_id: i64, png: &[u8]) -> Result<(), String>; // ← capture
+    pub fn get_for_paste(&self, id: i64) -> Result<PastePayload, String>;      // ← paste
+    pub fn mark_used(&self, ids: &[i64], bump: bool) -> Result<(), String>;    // ← paste (bump = picker.bumpOnPaste)
+    pub fn delete_recent(&self, minutes: i64) -> Result<i64, String>;          // ← трей, clips_delete_recent
+}
+pub fn init(app: &AppHandle);                                // фон: ретенция, чистка, subscribe(storage.*)
+pub fn serve_uri(app: &AppHandle, path: &str) -> Option<(String /*mime*/, Vec<u8>)>; // схема liq, §9.8
+
+pub struct NewClip {            // всё уже посчитано захватом
+    kind: Kind, hash: String /*content::*hash*/, preview: String /*content::make_preview*/,
+    text: Option<String> /*текстовые виды; для file — пути через \n; None для image*/,
+    meta: ClipMeta /*в т.ч. truncated*/, size: i64 /*только свои байты*/,
+    char_count, word_count, line_count: Option<i64> /*content::text_metrics*/,
+    width, height, file_count: Option<i64>,
+    png: Option<Vec<u8>> /*image — сама запись; текст — PNG-альтернатива (Excel)*/,
+    thumb_png: Option<Vec<u8>> /*≤360 px, только image*/,
+    html: Option<String> /*CF_HTML без заголовка: StartHTML..EndHTML, UTF-8*/,
+    rtf: Option<Vec<u8>>, files: Option<ClipFiles>, source: Option<SourceApp>, copied_at: i64,
+}
+pub struct ClipFiles { paths: Vec<String> /*≤ FILES_MAX*/, drop_effect: u32 /*DROPEFFECT_*, по умолчанию 1*/ }
+pub struct SourceApp { exe: String /*полный путь, lower*/, name: String /*FileDescription|имя файла*/ }
+pub struct InsertOutcome { id: i64, created: bool /*false = поднята существующая*/, app_id: Option<i64>,
+                           app_icon_missing: bool /*→ захват извлекает иконку один раз*/ }
+pub struct PastePayload { id: i64, kind: Kind, text: Option<String>, html: Option<String>,
+                          rtf: Option<Vec<u8>>, png_path: Option<PathBuf>, files: Option<ClipFiles>,
+                          formats: Vec<Format> }
+```
+
+Метрики и хэш считает **захват** (и store — для `clip_update_text`/`clip_create_text`) одними и теми
+же функциями `content.rs`; классификацию для `clip_create_text` store берёт у `capture::classify`.
+
+**capture (W1-B)** — `src-tauri/src/capture/{mod,classify}.rs`
+
+```rust
+pub fn start(app: &AppHandle);                                    // setup шаг 5: listener + worker
+pub fn mark_own_write(seq: u32);                                  // ← paste: GetClipboardSequenceNumber после записи
+pub fn status(app: &AppHandle) -> CaptureStatus;                  // ← трей, capture_status
+pub fn pause(app: &AppHandle, minutes: Option<i64>) -> Result<CaptureStatus, String>; // ← трей
+pub fn resume(app: &AppHandle) -> Result<CaptureStatus, String>;  // ← трей
+pub fn toggle_pause(app: &AppHandle) -> Result<CaptureStatus, String>; // ← хоткей PauseToggle
+pub fn ignore_next(app: &AppHandle) -> Result<CaptureStatus, String>;  // ← трей, хоткей IgnoreNext
+pub fn app_icon_data_url(exe: &str) -> Option<String>;           // ← paste (TargetInfo.iconUrl), apps_running
+pub mod classify { pub fn classify_text(text: &str) -> (Kind, ClipMeta); }   // ← store
+```
+Захват после `insert_clip` эмитит `clips:changed { origin: 'capture', change: created ? 'added' :
+'updated', ids }`, в режиме сбора зовёт `paste::stack::push`, при смене состояния —
+`events::capture_status` + `tray::refresh`.
+
+**paste (W1-C)** — `src-tauri/src/paste/{mod,focus,stack}.rs`
+
+```rust
+pub fn init(app: &AppHandle);                                         // setup шаг 5
+pub mod focus {
+    pub fn capture_target(app: &AppHandle) -> Option<TargetInfo>;     // ← picker::summon ДО показа
+    pub fn current_target(app: &AppHandle) -> Option<TargetInfo>;     // ← picker_target, подсказки
+}
+pub mod stack {
+    pub fn push(app: &AppHandle, clip_id: i64) -> Result<(), String>; // ← capture (режим сбора)
+    pub fn snapshot(app: &AppHandle) -> Stack;                        // ← stack_get
+    pub fn len(app: &AppHandle) -> usize;                             // ← трей «Очередь: N»
+    pub fn paste_next(app: &AppHandle) -> Result<PasteOutcome, String>; // ← хоткей StackNext (на worker'е)
+}
+```
+Поток вставки: `picker::hide_now` → фокус цели → `store.get_for_paste` → запись в буфер →
+`capture::mark_own_write(seq)` → ввод → `store.mark_used` → `clips:changed {origin:'user'}`; нет
+фокуса/elevated → `picker::hud::show(…)`.
+
+**picker + hud (W1-D)** — `src-tauri/src/picker/{mod,hud}.rs`
+
+```rust
+pub fn init(app: &AppHandle);                          // после создания окон: subscribe(picker.*), hover-поллер
+pub fn summon(app: &AppHandle);                        // ← хоткей, трей, single-instance (повтор = закрыть)
+pub fn hide_now(app: &AppHandle);                      // ← paste: мгновенно, БЕЗ возврата фокуса
+pub fn show_settings(app: &AppHandle, section: Option<&str>); // ← settings_open, трей, онбординг (setup шаг 10)
+pub mod hud { pub fn show(app: &AppHandle, kind: HudKind, text: Option<String>); } // ← paste, хоткеи
+```
+
+**hotkeys (W1-D)** — `src-tauri/src/hotkeys/mod.rs`
+
+```rust
+pub enum HotkeyAction { Summon, StackNext, PauseToggle, IgnoreNext }
+pub fn start(app: &AppHandle, hotkeys: &HotkeySettings) -> Vec<SettingsError>;   // setup шаг 7
+pub fn apply_settings(app: &AppHandle, prev: &HotkeySettings, next: &HotkeySettings) -> Vec<SettingsError>;
+//   ← settings_set (синхронно); field "hotkeys.<имя>", code taken|invalid; движок держит прежнюю привязку
+```
+Действия: `Summon → picker::summon`, `StackNext → paste::stack::paste_next` (не в коллбеке хука),
+`PauseToggle → capture::toggle_pause`, `IgnoreNext → capture::ignore_next`.
+
+**ocr (W2-A)** — `pub fn start(app: &AppHandle)` (setup шаг 5) + команды. **import (W2-B)** — только
+команды.
+
+**Фронт.** Окна общаются с Rust только через `src/lib/ipc/commands.ts` (`call` → `invoke` или мок) и
+`events.ts` (`on*` → `listen` или мок-шина). Тема/язык окна — `initAppearance()` из `appearance.ts`
+(`settings_get` + `settings:changed`, плюс `theme://changed`). Общая развёртка плейсхолдеров —
+`src/lib/snippets/` (W1-F). Мок: `mock/index.ts` (роутер, `MOCK_COMMANDS`), `bus.ts` (шина событий,
+флаги `?mock-empty=1`, `?mock-error=1`, `?mock-live=0`, `?mock-size=N`,
+`?mock-target=chrome|none|elevated`, `?mock-unimpl=ocr,import`; задержка 30–80 мс), стабильный API
+`settings.ts::currentSettings()` для остальных мок-модулей.

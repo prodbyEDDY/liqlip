@@ -49,17 +49,19 @@ Identifier `com.liqlip.app`; data in `%APPDATA%\com.liqlip.app\`.
 - `pnpm dev` — Vite only, port **1430** strict; without Tauri the IPC layer falls back to the
   in-memory mock (`src/lib/ipc/mock/`), so the shelf and settings work in a normal browser.
 - `pnpm check` — svelte-check (must be 0 errors, 0 warnings).
-- `pnpm test` — node:test suite in `tests/`.
+- `pnpm test` — node:test suite (`node --test "tests/*.test.mjs"`), incl. the contract guard
+  (§9.6 ≡ `lib.rs` ≡ `commands.ts` ≡ mock; `model.rs` ≡ `types.ts` field by field).
 - `pnpm build` — svelte-check + vite build (the only thing that resolves icon imports).
 - `cargo check --manifest-path src-tauri/Cargo.toml` — Rust gate (the app must not be running).
-- `cargo test --manifest-path src-tauri/Cargo.toml` — only if W0 confirmed it runs on this
-  machine (see ROADMAP); in Liquid Tools test binaries crash with `STATUS_ENTRYPOINT_NOT_FOUND`.
-- `pnpm tauri dev` — the native app. **Agents do not run it** unless Eddy allows (ROADMAP PQ-02).
+- `cargo test --manifest-path src-tauri/Cargo.toml` — works in this crate (W0, 2026-11-26): put
+  `#[cfg(test)]` unit tests next to the code (ARCHITECTURE §12).
+- `pnpm tauri dev` — the native app. **Wave agents do not run it**; the coordinator runs it at
+  integration (INT-*) for end-to-end checks (ROADMAP PQ-02, 2026-11-26).
 
 ## Design system (from Liquid Tools, unchanged)
 - **Color:** monochrome, LOCKED. Only tokens from `src/app.css` exist (`paper page content
   panel-2 ink ink-2 ink-3 ink-hover ink-active danger checker track hover wash-sel selected
-  toggle-track`; `hairline hairline-strong divider` are `transparent`). Accent **is** `ink`.
+  toggle-track`; `hairline hairline-strong divider` are never used for borders). Accent **is** `ink`.
   Color appears only in user content (the ColorCard swatch). Both themes strictly black/white.
 - **Shape:** squircle via CSS `corner-shape: squircle` (the `squircle` utility) + `border-radius`.
   **Capsules/circles use plain `border-radius: 999px`, never `squircle`.** No borders or
@@ -96,7 +98,7 @@ Identifier `com.liqlip.app`; data in `%APPDATA%\com.liqlip.app\`.
    work in the Russian layout.
 10. **Liquid Tools is read-only.** Port by reading `..\liquid-tools-app\`; never edit, build or
     commit there (its working tree has uncommitted work).
-11. **Commits only on the coordinator's/Eddy's request.** Wave agents work in their own git
+11. **Commits only on the coordinator's request.** Wave agents work in their own git
     worktree/branch and do not merge into `main`.
 12. **Language:** `docs/` and coordination are Russian; code, comments, `CLAUDE.md` and
     `README.md` are English; product strings are EN + RU keys.

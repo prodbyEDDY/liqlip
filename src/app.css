@@ -1,0 +1,302 @@
+@import "tailwindcss";
+
+/*
+  Dark mode is opt-in via a data attribute on <html> set by lib/theme.svelte.ts
+  (light · dark · system). Tailwind's `dark:` utilities key off the SAME attribute,
+  so a one-off `dark:` utility and a raw `var()` token override stay consistent.
+*/
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+/*
+  Liqlip — design tokens, ported 1:1 from Liquid Tools `src/app.css` (2026-11-26).
+  Only studio/capture/launcher/account-specific bits were dropped. Hub file: change
+  only through the coordinator (CLAUDE.md hard rule 7).
+  Identity: light · white · liquid · squircle · 1px hairline · deep-soft shadow · MONOCHROME (ink + greys).
+  Accent IS ink. No color, no gradients-as-decoration, no glass, no neon. Monochrome is LOCKED.
+*/
+@theme {
+  /* Wipe Tailwind's default color palette so a stray `bg-blue-500` cannot exist. */
+  --color-*: initial;
+
+  /* Essentials kept from the default palette. */
+  --color-transparent: transparent;
+  --color-current: currentColor;
+  --color-white: #ffffff;
+  --color-black: #000000;
+
+  /* --- Surfaces & ground --- */
+  --color-paper: #ffffff; /* panels / cards */
+  --color-page: #e9e9e7; /* window ground (boards) */
+  --color-content: #f0f0ef; /* content background */
+  --color-panel-2: #f8f8f7; /* titlebar / second neutral chrome */
+
+  /* --- Ink (text + the only accent) --- */
+  --color-ink: #252525; /* primary text + ACCENT / selection */
+  --color-ink-2: #555555; /* secondary text, inactive icons */
+  --color-ink-3: #646464; /* meta, captions, placeholders */
+  --color-ink-hover: #353535; /* hover fill on ink-filled (inverted) controls */
+  --color-ink-active: #191919; /* pressed fill on ink-filled controls */
+
+  /* --- Functional one-offs (not decoration) --- */
+  --color-danger: #b3261e; /* destructive action text (menus) */
+  --color-checker: #e2e4e7; /* transparency checkerboard squares (image stages) */
+
+  /* --- Lines & low-contrast fills (exact values reconciled against design/liquid-tools.pen) --- */
+  --color-hairline: #dededc; /* borders REMOVED globally (redesign: no strokes anywhere) */
+  --color-hairline-strong: #b7b7b4; /* hover-emphasis border removed */
+  --color-divider: #e4e4e2; /* inner row dividers removed */
+  --color-track: #e8e8e7; /* segmented / tabs track, badges (.pen tabs track) */
+  --color-hover: #dededd; /* hover surface */
+  --color-wash-sel: #e8e8e7; /* near-white wash — tile selection (with ink border) */
+  --color-selected: #dededd; /* list / menu item selected wash (.pen) */
+  --color-toggle-track: #d8dbe1; /* toggle OFF track (ON track = ink; knob = paper) */
+
+  /* --- Radii (squircle utility approximates the true superellipse; these are the nominal radii) --- */
+  --radius-panel: 24px; /* panels / boards */
+  --radius-card: 22px; /* cards */
+  --radius-control: 14px; /* buttons, inputs, tiles */
+  --radius-control-sm: 12px;
+  --radius-chip: 10px; /* chips */
+  --radius-kbd: 8px; /* kbd keys */
+  --radius-pill: 999px; /* pills, toggles */
+
+  /* --- Elevation: hairline first, then one soft shadow (deeper for summoned windows) --- */
+  --shadow-card: 0 6px 24px rgb(20 22 28 / 0.07);
+  --shadow-card-lg: 0 10px 34px rgb(20 22 28 / 0.1);
+  --shadow-pop: 0 12px 38px rgb(20 22 28 / 0.12); /* dropdowns / popovers */
+  --shadow-summoned: 0 18px 50px rgb(0 0 0 / 0.2); /* summoned windows (clipboard, etc.) */
+  --shadow-on-lift: 0 1px 2px rgb(18 20 32 / 0.13); /* selected segment / tab lift onto paper */
+
+  /* --- Type families (self-hosted via @fontsource, imported in each window entry) --- */
+  --font-sans:
+    "Inter Variable", "Inter", ui-sans-serif, system-ui, -apple-system,
+    "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-mono:
+    "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, "Cascadia Code",
+    "Source Code Pro", Menlo, Consolas, monospace;
+
+  /* --- Type scale (fixed, tight; BUILD-PROMPT §3 typography) --- */
+  --text-section: 1.125rem; /* 18 — section title (700) */
+  --text-section--line-height: 1.3;
+  --text-panel: 0.875rem; /* 14 — panel header (600) */
+  --text-panel--line-height: 1.35;
+  --text-row: 0.8125rem; /* 13 — row title (600) */
+  --text-row--line-height: 1.4;
+  --text-secondary: 0.75rem; /* 12 — secondary */
+  --text-secondary--line-height: 1.45;
+  --text-meta: 0.6875rem; /* 11 — meta / description */
+  --text-meta--line-height: 1.45;
+  --text-micro: 0.59375rem; /* 9.5 — tracked uppercase micro-label */
+  --text-micro--line-height: 1.2;
+}
+
+/*
+  True squircle corners (CSS Borders Level 4). Pair with any `border-radius`:
+  border, background, box-shadow, outline AND overflow all follow the superellipse,
+  so a squircle with a soft shadow + 1px hairline needs no SVG. `squircle` keyword
+  == superellipse(2) == the iOS look. Supported in WebView2 / Chromium 139+ (our
+  target is 148); older engines degrade gracefully to the plain border-radius curve.
+*/
+@utility squircle {
+  corner-shape: squircle;
+}
+
+/*
+  App icons = Heroicons outline (local src/lib/heroicons/) via the <Ico> wrapper
+  ($lib/components/Ico.svelte). The wrapper renders an <svg> at 1em, so `font-size`
+  (from the `size` prop) drives the box and `currentColor` tints the stroke.
+  On hover of any interactive ancestor the icon does a subtle tilt-right — motion =
+  state, one shared knob (`--icon-hover-tilt`). Opt out per-icon with `tilt={false}`
+  (adds `.ico--static`) for marks that animate themselves (flipping chevrons,
+  spinning loaders) so the tilt never fights their own transform.
+*/
+.ico {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  line-height: 0;
+  color: inherit;
+  transition: transform var(--dur-fast) var(--ease-out-soft);
+  transform-origin: center;
+}
+.ico > svg {
+  width: 1em;
+  height: 1em;
+  display: block;
+}
+:where(button, a, summary, label, [role="button"], [role="tab"], [role="radio"], [role="option"]):hover
+  .ico:not(.ico--static) {
+  transform: rotate(var(--icon-hover-tilt));
+}
+@media (prefers-reduced-motion: reduce) {
+  .ico {
+    transition: none;
+  }
+  :where(button, a, summary, label, [role="button"], [role="tab"], [role="radio"], [role="option"]):hover
+    .ico:not(.ico--static) {
+    transform: none;
+  }
+}
+
+/* Dark-preview gradient — used ONLY for mini-screen / overlay previews (BUILD-PROMPT §3). */
+:root {
+  --gradient-dark-preview: linear-gradient(155deg, #2b313c 0%, #1b1f26 100%);
+  /* Motion primitives (mirrored in src/lib/motion). Motion conveys state, never decorates. */
+  --ease-liquid: cubic-bezier(0.34, 1.24, 0.44, 1); /* slide / morph — pronounced overshoot */
+  --ease-pill: cubic-bezier(0.34, 1.12, 0.42, 1); /* sliding pills — gentle overshoot */
+  --ease-out-soft: cubic-bezier(0.22, 1, 0.36, 1); /* fades / content swaps */
+  --ease-emphasized: cubic-bezier(0.2, 0, 0, 1); /* strong decelerate, no overshoot */
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1); /* symmetric — panel slide out from under the menu */
+  --dur-fast: 150ms;
+  --dur-base: 200ms;
+  --dur-slow: 250ms;
+  --dur-pill: 240ms; /* sliding-pill travel */
+  --icon-hover-tilt: 18deg; /* subtle right-tilt on interactive icon hover */
+}
+
+/*
+  DARK THEME — the ONE place the dark palette is defined (single source of truth).
+  Same monochrome system, hierarchy inverted: deep near-black ground, near-white
+  ink, surfaces lift by getting lighter (not by shadow), 1px hairlines do the
+  elevation work that soft shadows do in light. Every --color- and --shadow- token
+  is overridden here, so every Tailwind utility (var-referenced in v4) AND every
+  raw var() in component CSS re-themes automatically. Components must use tokens;
+  any unavoidable literal gets a scoped :root[data-theme="dark"] override in its
+  own file. NOT overridden: --gradient-dark-preview (dark in BOTH themes).
+  Values are a first pass — reviewed in-app against the monochrome identity.
+*/
+:root[data-theme="dark"] {
+  /* --- Surfaces & ground: STRICT BLACK. Pure #000 for bg + every container;
+     #1a1a1a is the only "lift" (interactive chips/tracks/hover). No blue tint. --- */
+  --color-paper: #171717; /* panels / cards */
+  --color-page: #000000; /* window ground */
+  --color-content: #242424; /* content background */
+  --color-panel-2: #1c1c1c; /* titlebar / second chrome */
+
+  /* --- Ink (text + the only accent → near-white) --- */
+  --color-ink: #f4f5f7; /* primary text + ACCENT / selection */
+  --color-ink-2: #bcbcbc; /* secondary text, inactive icons */
+  --color-ink-3: #a2a2a2; /* meta, captions, placeholders */
+  /* Ink-filled controls are near-white here: hover/active dim the fill. */
+  --color-ink-hover: #e3e5e9;
+  --color-ink-active: #cfd2d8;
+
+  /* --- Functional one-offs --- */
+  --color-danger: #f2b8b5; /* the light-theme red is unreadable on black */
+  --color-checker: #1a1a1a; /* faint checker over the black stage */
+
+  /* --- Lines REMOVED (no strokes/dividers anywhere); fills are neutral grey --- */
+  --color-hairline: transparent;
+  --color-hairline-strong: transparent;
+  --color-divider: transparent;
+  --color-track: #1a1a1a; /* inactive pill / segmented / tabs track / chip */
+  --color-hover: #1f1f1f; /* hover surface (above black) */
+  --color-wash-sel: #1a1a1a; /* tile selection wash */
+  --color-selected: #242424; /* list / menu item selected wash */
+  --color-toggle-track: #1a1a1a; /* toggle OFF track (ON = ink, knob = #000) */
+
+  /* --- Elevation: hairline-first; shadows deepen but mostly recede on dark --- */
+  --shadow-card: 0 6px 24px rgb(0 0 0 / 0.5);
+  --shadow-card-lg: 0 10px 34px rgb(0 0 0 / 0.6);
+  --shadow-pop: 0 12px 38px rgb(0 0 0 / 0.6);
+  --shadow-summoned: 0 18px 50px rgb(0 0 0 / 0.72);
+  --shadow-on-lift: 0 1px 2px rgb(18 20 32 / 0.13); /* segment lift (unchanged from prior hardcoded value) */
+}
+
+@layer base {
+  *,
+  *::before,
+  *::after {
+    box-sizing: border-box;
+  }
+
+  html,
+  body {
+    height: 100%;
+    margin: 0;
+  }
+
+  body {
+    font-family: var(--font-sans);
+    font-size: var(--text-row);
+    color: var(--color-ink);
+    background-color: var(--color-page);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+    font-feature-settings: "cv11", "ss01";
+    /* App chrome should not feel like a web page. */
+    cursor: default;
+    overflow: hidden;
+    overscroll-behavior: none;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+
+  /* Re-enable selection where text is genuinely content. */
+  input,
+  textarea,
+  [contenteditable="true"],
+  .selectable {
+    -webkit-user-select: text;
+    user-select: text;
+  }
+
+  ::selection {
+    background-color: color-mix(in srgb, var(--color-ink) 14%, transparent);
+    color: var(--color-ink);
+  }
+
+  /* One consistent focus ring across the whole product. */
+  :focus-visible {
+    outline: 2px solid var(--color-ink);
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+  :focus:not(:focus-visible) {
+    outline: none;
+  }
+
+  /* Thin, monochrome scrollbars (don't reinvent the affordance — just quiet it). */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-hairline) transparent;
+  }
+}
+
+/*
+  Selection micro-feedback. When a swatch / preset / segment
+  becomes the chosen one, the element plays ONE fast scale "pop" so the pick
+  reads as a deliberate, responsive landing — not a silent colour swap. State
+  motion, not decoration: ≤180 ms, ease-out, no overshoot loop. Apply by adding
+  the `pop-select` class to an element AT THE MOMENT it gains its selected
+  state (e.g. `class:pop-select={on}`). The global prefers-reduced-motion guard
+  below already collapses this animation to a no-op.
+*/
+@keyframes pop-select {
+  0% {
+    transform: scale(1);
+  }
+  45% {
+    transform: scale(var(--pop-scale, 1.05));
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+.pop-select {
+  animation: pop-select 170ms var(--ease-out-soft);
+}
+
+/* Respect the user's motion preference everywhere (BUILD-PROMPT §motion). */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

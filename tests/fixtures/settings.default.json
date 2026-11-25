@@ -1,0 +1,59 @@
+{
+  "version": 1,
+  "general": {
+    "language": "system",
+    "theme": "system",
+    "autostart": true,
+    "onboardingDone": false
+  },
+  "picker": {
+    "position": "center",
+    "centerRow": false,
+    "monitor": "cursor",
+    "hoverOpen": false,
+    "hints": true,
+    "favoritesFirst": false,
+    "clickAction": "paste",
+    "closeOnCopy": true,
+    "alwaysPlain": false,
+    "bumpOnPaste": false,
+    "rememberSearch": "60s",
+    "mergeSeparator": "newline",
+    "pasteKeys": []
+  },
+  "hotkeys": {
+    "summon": "Alt + V",
+    "stackNext": "Alt + Shift + V",
+    "pauseToggle": "",
+    "ignoreNext": ""
+  },
+  "storage": {
+    "retention": "3m",
+    "maxEntries": 5000,
+    "maxSizeMb": 1024,
+    "types": {
+      "text": true,
+      "link": true,
+      "code": true,
+      "color": true,
+      "contact": true,
+      "image": true,
+      "file": true
+    }
+  },
+  "privacy": {
+    "respectMarkers": true,
+    "ignoredApps": ["keepass.exe", "keepassxc.exe", "1password.exe", "bitwarden.exe"],
+    "secretPatterns": true
+  },
+  "stack": {
+    "newlineAfterPaste": false
+  },
+  "ocr": {
+    "enabled": true,
+    "language": "auto"
+  },
+  "window": {
+    "settingsBounds": null
+  }
+}
