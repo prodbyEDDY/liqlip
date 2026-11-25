@@ -22,7 +22,7 @@
   import { toasts } from "../toasts.svelte";
   import { confirmDiscard } from "./layerActions";
   import { clipboardText, previewExpansion, usesClipboard } from "./snippetText";
-  import { focusLayer, trapTab } from "./focus";
+  import { focusOnce, trapTab } from "./focus";
 
   let { layer, close }: LayerProps = $props();
   const uid = $props.id();
@@ -78,11 +78,14 @@
       .then((s) => (clipSample = s))
       .catch(() => {});
     const timer = setInterval(() => (now = Date.now()), 30_000);
-    void tick().then(() => {
-      if (mode === "fromClip") focusLayer(sheet);
-      else nameEl?.focus({ preventScroll: true });
-    });
     return () => clearInterval(timer);
+  });
+
+  // New / edit: straight into the name; "save as" waits for the text, then selects the name.
+  const focused = { v: false };
+  $effect(() => {
+    if (mode === "fromClip") focusOnce(sheet, focused);
+    else focusOnce(nameEl, focused, (el) => el.focus({ preventScroll: true }));
   });
 
   // After "Save as snippet" loads, the name is ready to be adjusted.
@@ -149,7 +152,7 @@
   }
 
   function cancel() {
-    if (dirty && !loading) confirmDiscard(close);
+    if (dirty && !loading) confirmDiscard(close, () => void tick().then(() => nameEl?.focus({ preventScroll: true })));
     else close();
   }
 

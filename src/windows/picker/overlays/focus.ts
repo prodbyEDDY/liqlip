@@ -24,6 +24,21 @@ export function trapTab(e: KeyboardEvent, root: HTMLElement | null | undefined):
   return true;
 }
 
+/**
+ * Focus a layer's element once it exists. `bind:this` / `bind:el` land after `onMount` of the
+ * component that owns the binding, so layers focus from an effect on the bound element:
+ * `$effect(() => focusOnce(el))` (the first non-null element wins; later runs do nothing).
+ */
+export function focusOnce(el: HTMLElement | null | undefined, done: { v: boolean }, how: (el: HTMLElement) => void = focusLayer): void {
+  if (!el || done.v) return;
+  done.v = true;
+  how(el);
+  // The element may not be focusable yet (still being placed): try once more after layout.
+  if (!el.contains(document.activeElement)) setTimeout(() => {
+    if (el.isConnected && !el.contains(document.activeElement)) how(el);
+  }, 0);
+}
+
 /** Focus inside a layer: the element marked `data-autofocus`, else the layer itself. */
 export function focusLayer(root: HTMLElement | null | undefined): void {
   if (!root) return;

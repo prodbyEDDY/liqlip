@@ -25,6 +25,7 @@
   import { applyTransform, MONO_TRANSFORMS, type TransformId, type TransformResult } from "../transforms";
   import { buildMenu, chordNode, searchMenu, type MenuNode } from "./menuModel";
   import { SEPARATOR_TEXT, separatorPref } from "./separator.svelte";
+  import { focusOnce } from "./focus";
   import {
     confirmDeleteRecent,
     confirmSnippetDelete,
@@ -46,7 +47,10 @@
   // ── context ──
   const ids = $derived(layer.ctx.ids ?? []);
   const snippet = $derived((layer.ctx.snippet as Snippet | null | undefined) ?? null);
-  const clips = $derived(ids.map((id) => feed.clip(id)).filter((c): c is Clip => c !== undefined));
+  /** The records as they were when the menu opened — a live reload of the feed (a capture, a
+   *  search typed behind the menu) must not empty the menu; live copies win when present. */
+  const opened = new Map(untrack(() => (layer.ctx.ids ?? []).flatMap((id) => (feed.clip(id) ? [[id, feed.clip(id)!] as const] : []))));
+  const clips = $derived(ids.map((id) => feed.clip(id) ?? opened.get(id)).filter((c): c is Clip => c !== undefined));
   const single = $derived(clips.length === 1 ? clips[0] : null);
   const root = $derived(
     buildMenu({
@@ -424,8 +428,10 @@
     fadeBottom = el.scrollTop + el.clientHeight < el.scrollHeight - 2;
   }
 
+  const focused = { v: false };
+  $effect(() => focusOnce(inputEl, focused, (el) => el.focus({ preventScroll: true })));
+
   onMount(() => {
-    inputEl?.focus({ preventScroll: true });
     void tick().then(() => {
       if (areaEl) fixedHeight = Math.round(areaEl.getBoundingClientRect().height);
       updateFades();
@@ -495,6 +501,7 @@
     {:else}
       <div
         class="list"
+        class:list--compact={previewBig}
         class:list--fade-top={fadeTop}
         class:list--fade-bottom={fadeBottom}
         bind:this={listEl}
@@ -666,6 +673,10 @@
     overflow-y: auto;
     outline: none;
     scroll-padding-block: 4px;
+  }
+  /* A transform's level: its three rows, then the result takes the rest. */
+  .list--compact {
+    flex: 0 1 auto;
   }
   .list--fade-top {
     mask-image: linear-gradient(to bottom, transparent 0, #000 16px);

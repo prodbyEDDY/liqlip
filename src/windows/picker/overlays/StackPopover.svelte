@@ -8,7 +8,7 @@
   //     the same records back in the same order)
   //   · Paste all with the remembered separator (Enter); the separator is chosen next to it
   // Lives on `stack:changed` (shelf.stack) and `capture:status` (shelf.capture).
-  import { onMount, tick } from "svelte";
+  import { tick } from "svelte";
   import Ico from "$lib/components/Ico.svelte";
   import Button from "$lib/components/Button.svelte";
   import { LayerFooter, LayerHeader, LayerItem, LayerSurface } from "./kit";
@@ -24,7 +24,7 @@
   import { SEPARATOR_TEXT, separatorPref } from "./separator.svelte";
   import { SEPARATORS } from "./menuModel";
   import type { MenuEntry } from "./MenuLayer.svelte";
-  import { focusLayer, trapTab } from "./focus";
+  import { focusOnce, trapTab } from "./focus";
 
   let { layer, close }: LayerProps = $props();
   const uid = $props.id();
@@ -51,7 +51,10 @@
     if (active > items.length - 1) active = Math.max(0, items.length - 1);
   });
 
-  onMount(() => focusLayer(surface));
+  const focused = { v: false };
+  $effect(() => focusOnce(surface, focused));
+  // The "added to the stack · Show" toast would sit over the popover's bottom edge.
+  toasts.dismiss();
 
   async function apply(f: () => Promise<Stack>): Promise<boolean> {
     try {

@@ -36,7 +36,7 @@
   import { baseName, entryFormat, fileIcon } from "../preview";
   import ViewText from "./ViewText.svelte";
   import ImageStage from "./ImageStage.svelte";
-  import { focusLayer, trapTab } from "./focus";
+  import { focusLayer, focusOnce, trapTab } from "./focus";
   import { confirmDiscard, copyColorValue, copyImageText } from "./layerActions";
   import { clipboardText, previewExpansion } from "./snippetText";
   import { TEXT_KINDS } from "./menuModel";
@@ -126,9 +126,13 @@
     editError = null;
     editing = true;
     void tick().then(() => {
-      area?.focus({ preventScroll: true });
-      area?.setSelectionRange(0, 0);
-      if (area) area.scrollTop = 0;
+      if (!area) return;
+      area.focus({ preventScroll: true });
+      // Short texts: the caret at the end (appending is the common edit); long ones stay at
+      // the top where reading starts.
+      const end = draft.length <= 2_000 ? draft.length : 0;
+      area.setSelectionRange(end, end);
+      if (end === 0) area.scrollTop = 0;
     });
   }
 
@@ -148,7 +152,7 @@
   }
 
   function cancelEdit() {
-    if (dirty) confirmDiscard(stopEdit);
+    if (dirty) confirmDiscard(stopEdit, () => void tick().then(() => area?.focus({ preventScroll: true })));
     else stopEdit();
   }
 
@@ -297,7 +301,8 @@
   // ── keyboard ──
   let sheet = $state<HTMLDivElement | null>(null);
 
-  onMount(() => focusLayer(sheet));
+  const focused = { v: false };
+  $effect(() => focusOnce(sheet, focused));
 
   $effect(() => {
     layer.onKey = (e: KeyboardEvent) => {
@@ -725,22 +730,6 @@
   .ql--single {
     grid-template-columns: minmax(0, 1fr);
   }
-  @container (max-width: 540px) {
-    .ql {
-      grid-template-columns: minmax(0, 1fr);
-      grid-template-rows: minmax(0, 1fr) fit-content(42%);
-    }
-    .ql--single {
-      grid-template-rows: minmax(0, 1fr);
-    }
-    .ql__info {
-      padding: 2px 4px 0;
-    }
-    .info {
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-      column-gap: 12px;
-    }
-  }
   .ql__view {
     display: flex;
     flex-direction: column;
@@ -1157,5 +1146,24 @@
   .info__sub {
     color: var(--color-ink-3);
     font-size: var(--text-secondary);
+  }
+
+  /* Narrow sheet (edge panels): preview above, details below in two columns. Last in the
+     sheet so it wins over the base rules. */
+  @container (max-width: 540px) {
+    .ql {
+      grid-template-columns: minmax(0, 1fr);
+      grid-template-rows: minmax(0, 1fr) fit-content(42%);
+    }
+    .ql--single {
+      grid-template-rows: minmax(0, 1fr);
+    }
+    .ql__info {
+      padding: 2px 4px 0;
+    }
+    .info {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      column-gap: 12px;
+    }
   }
 </style>

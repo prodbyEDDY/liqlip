@@ -252,13 +252,15 @@ export function confirmSnippetDelete(s: Snippet): void {
   overlays.open("confirm", ctx);
 }
 
-/** Leaving an edit with unsaved changes. "Keep editing" is focused (Enter keeps the work). */
-export function confirmDiscard(discard: () => void): void {
+/** Leaving an edit with unsaved changes. "Keep editing" is focused (Enter keeps the work);
+ *  `keep` runs when the user stays (to put the caret back into the editor). */
+export function confirmDiscard(discard: () => void, keep?: () => void): void {
   const ctx: ConfirmCtx = {
     title: t("picker.discard.title"),
     desc: t("picker.discard.desc"),
     icon: "edit",
     cancelLabel: t("picker.discard.keep"),
+    onCancel: keep,
     choices: [{ label: t("picker.discard.confirm"), variant: "danger", run: discard }],
   };
   overlays.open("confirm", ctx);

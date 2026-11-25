@@ -37,7 +37,7 @@
   import { LayerSurface } from "./kit";
   import { t } from "$lib/i18n/index.svelte";
   import type { LayerProps } from "../overlays.svelte";
-  import { focusLayer, trapTab } from "./focus";
+  import { focusLayer, focusOnce, trapTab } from "./focus";
 
   let { layer, close }: LayerProps = $props();
 
@@ -48,8 +48,10 @@
   let loaded = $state<{ desc: string; disabled?: boolean } | null>(null);
   let loadFailed = $state(false);
 
+  const focused = { v: false };
+  $effect(() => focusOnce(dialog, focused));
+
   onMount(() => {
-    focusLayer(dialog);
     const load = ctx.load;
     if (!load) return;
     load()

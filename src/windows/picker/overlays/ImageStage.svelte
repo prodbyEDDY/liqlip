@@ -29,8 +29,10 @@
   let dragging = $state(false);
   let failed = $state(false);
 
-  const nw = $derived(natW || width || 0);
-  const nh = $derived(natH || height || 0);
+  // The store's size is the image's real pixel size (the percentage is relative to it); the
+  // loaded image's own size is the fallback.
+  const nw = $derived(width || natW || 0);
+  const nh = $derived(height || natH || 0);
   const fit = $derived(nw && nh && bw && bh ? Math.min((bw - 2 * PAD) / nw, (bh - 2 * PAD) / nh, 2) : 1);
   const scale = $derived(fit * zoom);
   const maxZoom = $derived(Math.max(1, MAX_SCALE / fit));

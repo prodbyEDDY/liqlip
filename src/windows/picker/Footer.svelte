@@ -142,7 +142,9 @@
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    min-width: 0;
+    min-width: 16px;
+    /* Squeezed by "N selected": the name ellipsizes, nothing spills onto the next hint. */
+    overflow: hidden;
     color: var(--color-ink);
     font-weight: 600;
   }
