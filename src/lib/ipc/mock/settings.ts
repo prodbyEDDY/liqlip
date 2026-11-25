@@ -1,13 +1,19 @@
-// Mock of `settings_get` / `settings_set` (owner: W1-F; W0 baseline). Defaults are the
-// Rust ones — `tests/settingsDefaults.test.mjs` checks `MOCK_DEFAULTS` against
+// Mock of `settings_get` / `settings_set` (owner: W1-F). Defaults are the Rust ones —
+// `tests/settingsDefaults.test.mjs` checks `MOCK_DEFAULTS` against
 // `tests/fixtures/settings.default.json`, which a Rust test also checks. Validation mirrors
-// `src-tauri/src/settings.rs::validate`; hotkey conflicts are simulated for a few chords
-// Windows reserves, so the "taken" UI can be built. Persisted in localStorage so every
-// window page of the browser preview shares one state.
+// `src-tauri/src/settings.rs::validate`; hotkey conflicts are simulated (`TAKEN`) so the
+// "taken" UI can be built. Persisted in localStorage so every window page of the browser
+// preview shares one state.
+//
+// Extra URL flags of this module (browser only; see docs/settings.md):
+//   ?mock-lt=1                Liquid Tools is running and holds "Alt + V": the summon chord
+//                             is reported "taken" even when unchanged (the startup case)
+//   ?mock-settings-error=get  settings_get rejects ("busy") — the window's load-error state
+//   ?mock-settings-error=set  settings_set rejects ("busy") — optimistic edits roll back
 //
 // Stable API for other mock modules: `currentSettings()`.
 import type { ResolvedTheme, Settings, SettingsError, SettingsResult } from "../types";
-import { mockEmit } from "./bus";
+import { fail, mockEmit } from "./bus";
 
 export const MOCK_DEFAULTS: Settings = {
   version: 1,
@@ -44,8 +50,21 @@ export const MOCK_DEFAULTS: Settings = {
   window: { settingsBounds: null },
 };
 
-/** Chords the mock pretends another app holds (RegisterHotKey would refuse them). */
-const TAKEN = new Set(["Alt + Tab", "Ctrl + Alt + Delete", "Super + L", "Ctrl + Shift + Escape"]);
+/** Chords the mock pretends another app holds (RegisterHotKey would refuse them). The
+ *  first four are reserved by Windows; the last two can be pressed in a browser to try the
+ *  "taken" message. */
+const TAKEN = new Set(["Alt + Tab", "Ctrl + Alt + Delete", "Super + L", "Ctrl + Shift + Escape", "Ctrl + Alt + T", "Alt + Q"]);
+
+/** The chord Liquid Tools holds while it runs (`?mock-lt=1`). */
+const LT_CHORD = "Alt + V";
+
+function param(name: string): string | null {
+  if (typeof location === "undefined") return null;
+  return new URLSearchParams(location.search).get(name);
+}
+
+const ltRunning = () => param("mock-lt") === "1";
+const settingsError = () => param("mock-settings-error");
 
 const STORAGE_KEY = "liqlip.mock.settings";
 
@@ -120,6 +139,10 @@ export function validate(prev: Settings, input: Settings): { next: Settings; err
     } else if (hk[k] !== prev.hotkeys[k] && TAKEN.has(hk[k])) {
       hk[k] = prev.hotkeys[k];
       bad(`hotkeys.${k}`, "taken");
+    } else if (hk[k] === LT_CHORD && ltRunning()) {
+      // Registration fails whether or not the value changed; an unchanged value stays.
+      if (prev.hotkeys[k] !== LT_CHORD) hk[k] = prev.hotkeys[k];
+      bad(`hotkeys.${k}`, "taken");
     }
   }
   const used = new Map<string, string>();
@@ -169,6 +192,7 @@ function resolved(s: Settings): ResolvedTheme {
 }
 
 function settingsSet({ settings }: Record<string, unknown>): SettingsResult {
+  if (settingsError() === "set") throw fail("busy", "mock-settings-error");
   const prev = currentSettings();
   const { next, errors } = validate(prev, settings as Settings);
   if (JSON.stringify(next) !== JSON.stringify(prev)) {
@@ -181,6 +205,9 @@ function settingsSet({ settings }: Record<string, unknown>): SettingsResult {
 }
 
 export const settingsHandlers: Record<string, (args: Record<string, unknown>) => unknown> = {
-  settings_get: () => structuredClone(currentSettings()),
+  settings_get: () => {
+    if (settingsError() === "get") throw fail("busy", "mock-settings-error");
+    return structuredClone(currentSettings());
+  },
   settings_set: settingsSet,
 };
