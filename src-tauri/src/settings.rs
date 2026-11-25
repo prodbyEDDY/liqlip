@@ -181,6 +181,14 @@ fn migrate(mut file: Value) -> Value {
     file
 }
 
+/// A `settings.json` read field by field exactly like at start-up ([`parse_lenient`]:
+/// migration, a field that does not fit keeps its default, semantic validation). Used to
+/// restore the settings of a backup (`import::commands`, FIX-03), so one broken field no
+/// longer throws away the whole file.
+pub(crate) fn parse_file(raw: &[u8]) -> Settings {
+    parse_lenient(raw).0
+}
+
 /// Overlay the file onto the defaults one field at a time; a field whose value does not
 /// deserialize (wrong type, unknown enum value) keeps its default. Returns the settings
 /// and whether the file was fully valid.
@@ -489,6 +497,16 @@ mod tests {
         assert_eq!(s.storage.max_entries, 5000); // negative → default
         assert_eq!(s.storage.retention, Retention::Year1);
         assert_eq!(s.version, CURRENT_VERSION);
+    }
+
+    #[test]
+    fn parse_file_is_the_lenient_load() {
+        let raw = br#"{ "picker": { "hints": "yes", "favoritesFirst": true }, "storage": { "maxEntries": 20000 } }"#;
+        let s = parse_file(raw);
+        assert!(s.picker.hints, "a broken field keeps its default");
+        assert!(s.picker.favorites_first);
+        assert_eq!(s.storage.max_entries, 20_000);
+        assert_eq!(s, parse_lenient(raw).0);
     }
 
     #[test]
