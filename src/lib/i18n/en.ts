@@ -184,7 +184,11 @@ export const en = {
   "picker.outcome.copied_elevated": "Copied — press Ctrl+V in the administrator window",
   "picker.outcome.copied_focus_lost": "Copied — press Ctrl+V",
   "picker.outcome.copied_clipboard_busy": "Copied",
-  "picker.outcome.copied_not_found": "Copied",
+  "picker.outcome.copied_not_found": "Copied — some items no longer exist",
+  "picker.outcome.copied_partial": "Copied — some items were skipped",
+  "picker.outcome.pasted_partial": "Pasted — images can't be joined into text and were skipped",
+  "picker.outcome.pasted_not_found": "Pasted — some items no longer exist",
+  "picker.outcome.pasted_clipboard_busy": "Pasted",
   "picker.outcome.copied_stack_empty": "Copied",
   "picker.outcome.failed": "Couldn't paste. Try again",
   "picker.outcome.no_target": "There is no window to paste into",
@@ -193,6 +197,7 @@ export const en = {
   "picker.outcome.clipboard_busy": "The clipboard is busy. Try again",
   "picker.outcome.not_found": "This item no longer exists",
   "picker.outcome.stack_empty": "The paste stack is empty",
+  "picker.outcome.partial": "Some items were skipped",
 
   // --- settings.* (W1-F) --- (W0 seed for the stub window; W1-F owns and may rename)
   "settings.nav.label": "Settings sections",

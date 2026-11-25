@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { importTs } from "./helpers/bundle.mjs";
 
-const { resolveKey, isTypingKey } = await importTs("src/windows/picker/keymap.ts");
+const { resolveKey, isTypingKey, isSwallowedRepeat } = await importTs("src/windows/picker/keymap.ts");
 
 const key = (code, mods = {}, keyChar = "") => ({ code, key: keyChar, ctrlKey: false, shiftKey: false, altKey: false, metaKey: false, ...mods });
 const empty = { inSearch: true, inOtherInput: false, onButton: false, searchEmpty: true, caretAtEnd: true, undoAvailable: false };
@@ -74,6 +74,18 @@ test("pills, stack, rename, search focus, Esc; other inputs own the keyboard", (
   assert.equal(r("KeyD", { ctrlKey: true }, other), null);
   assert.deepEqual(r("Escape", {}, other), { type: "escape" });
   assert.equal(r("KeyD", { metaKey: true }), null);
+});
+
+test("auto-repeat never pastes twice; navigation keeps repeating", () => {
+  const rep = (code, mods = {}) => resolveKey(key(code, { repeat: true, ...mods }), empty);
+  assert.equal(rep("Enter"), null);
+  assert.equal(rep("Digit1", { ctrlKey: true }), null);
+  assert.equal(rep("Delete"), null);
+  assert.equal(rep("KeyD", { ctrlKey: true }), null);
+  assert.deepEqual(rep("ArrowDown"), { type: "nav", dir: "down", extend: false });
+  assert.equal(isSwallowedRepeat(key("Enter", { repeat: true }), empty), true);
+  assert.equal(isSwallowedRepeat(key("Enter"), empty), false);
+  assert.equal(isSwallowedRepeat(key("ArrowDown", { repeat: true }), empty), false);
 });
 
 test("typing keys go to the search", () => {

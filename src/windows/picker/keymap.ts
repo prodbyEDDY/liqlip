@@ -55,8 +55,43 @@ export interface KeyContext {
 
 const DIGIT = /^(?:Digit|Numpad)([1-9])$/;
 
-/** Map a key press to a shelf command, or `null` to let the focused element have it. */
+/** One-shot commands ignore auto-repeat: a held Enter / Ctrl+1 must never paste twice
+ *  (coordinator note, W1-C acceptance), a held Delete must not wipe a row of cards. */
+const NO_REPEAT: ReadonlySet<Command["type"]> = new Set<Command["type"]>([
+  "paste",
+  "pastePlain",
+  "copy",
+  "pasteKeepOpen",
+  "pasteNth",
+  "favorite",
+  "delete",
+  "undo",
+  "rename",
+  "open",
+  "reveal",
+  "settings",
+  "preview",
+  "actions",
+  "stack",
+  "selectAll",
+]);
+
+/** Map a key press to a shelf command, or `null` to let the focused element have it.
+ *  An auto-repeated one-shot command resolves to null (see `isSwallowedRepeat`). */
 export function resolveKey(e: KeyInput, ctx: KeyContext): Command | null {
+  const cmd = resolveRaw(e, ctx);
+  if (cmd && e.repeat && NO_REPEAT.has(cmd.type)) return null;
+  return cmd;
+}
+
+/** A held key repeating a one-shot command: the caller prevents its default (a held Enter
+ *  must not reach a focused button either) and does nothing else. */
+export function isSwallowedRepeat(e: KeyInput, ctx: KeyContext): boolean {
+  const cmd = resolveRaw(e, ctx);
+  return !!cmd && !!e.repeat && NO_REPEAT.has(cmd.type);
+}
+
+function resolveRaw(e: KeyInput, ctx: KeyContext): Command | null {
   if (e.metaKey) return null;
   const { code } = e;
   const ctrl = e.ctrlKey;

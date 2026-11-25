@@ -68,27 +68,36 @@ function separator(ids: readonly number[]): string | undefined {
   return ids.length > 1 ? SEPARATORS[shelf.settings?.picker.mergeSeparator ?? "newline"] : undefined;
 }
 
-/** Toast for a paste/copy outcome while the shelf is still visible. */
-function reportOutcome(o: PasteOutcome, stillVisible: boolean): void {
+/**
+ * Toast for a paste/copy outcome (coordinator rules, W1-C acceptance): failures, `partial`,
+ * `clipboard_busy`, `not_found` — always; `no_target` / `elevated` / `focus_lost` only while
+ * the shelf stays visible (keepOpen, or no target with `closeOnCopy` off) — otherwise Rust
+ * hides the shelf and shows the HUD.
+ */
+function reportOutcome(o: PasteOutcome, keepOpen: boolean): void {
   if (o.result === "failed") {
-    const key = `picker.outcome.${o.reason ?? "failed"}` as TranslationKey;
-    toasts.error(t(o.reason ? key : "picker.outcome.failed"));
+    toasts.error(t(o.reason ? (`picker.outcome.${o.reason}` as TranslationKey) : "picker.outcome.failed"));
     if (o.reason === "not_found") void shelf.refreshMeta();
     return;
   }
-  if (!stillVisible) return;
+  if (o.reason === "partial" || o.reason === "clipboard_busy" || o.reason === "not_found") {
+    toasts.show(t(`picker.outcome.${o.result}_${o.reason}` as TranslationKey), { icon: "info" });
+    return;
+  }
+  const closeOnCopy = shelf.settings?.picker.closeOnCopy ?? true;
+  const visible = keepOpen || (o.reason === "no_target" && !closeOnCopy);
+  if (!visible) return;
   if (o.result === "pasted") toasts.show(t("picker.outcome.pasted"));
   else toasts.show(t(o.reason ? (`picker.outcome.copied_${o.reason}` as TranslationKey) : "picker.outcome.copied"));
 }
 
+/** Paste through Rust's flow (ARCHITECTURE §6): it knows the live target, hides the shelf,
+ *  copies instead when there is no target (per `closeOnCopy`) and honours `alwaysPlain`. */
 async function paste(ids: number[], mode: PasteMode, keepOpen: boolean): Promise<void> {
   if (ids.length === 0 || pasting) return;
-  // No target window: Enter copies (the footer says "↵ Copy").
-  if (!shelf.target && !keepOpen) return copy(ids, mode);
-  const effective: PasteMode = mode === "auto" && shelf.settings?.picker.alwaysPlain ? "plain" : mode;
   pasting = true;
   try {
-    const o = await clipPaste({ ids, mode: effective, separator: separator(ids), keepOpen: keepOpen || undefined });
+    const o = await clipPaste({ ids, mode, separator: separator(ids), keepOpen: keepOpen || undefined });
     reportOutcome(o, keepOpen);
   } catch (e) {
     toasts.error(errorMessage(e));
@@ -102,7 +111,11 @@ async function copy(ids: number[], mode: PasteMode = "auto"): Promise<void> {
   try {
     const o = await clipCopy({ ids, mode, separator: separator(ids) });
     if (o.result === "failed") return reportOutcome(o, true);
-    if (shelf.settings?.picker.closeOnCopy ?? true) await shelf.hide();
+    if (shelf.settings?.picker.closeOnCopy ?? true) {
+      await shelf.hide();
+      return;
+    }
+    if (o.reason === "partial") reportOutcome(o, true);
     else toasts.show(ids.length > 1 ? t("picker.outcome.copiedMany", { n: ids.length }) : t("picker.outcome.copied"));
   } catch (e) {
     toasts.error(errorMessage(e));
@@ -266,7 +279,6 @@ export async function moveFavorite(id: number, beforeId: number | null): Promise
 
 export async function pasteSnippet(s: Snippet, plain: boolean, keepOpen = false): Promise<void> {
   if (pasting) return;
-  if (!shelf.target && !keepOpen) return copySnippet(s);
   pasting = true;
   try {
     const o = await textPaste({ text: s.body, plain: plain || (shelf.settings?.picker.alwaysPlain ?? false), keepOpen: keepOpen || undefined });

@@ -107,10 +107,8 @@
   }
 
   function autofocus(el: HTMLInputElement) {
-    requestAnimationFrame(() => {
-      el.focus();
-      el.select();
-    });
+    el.focus();
+    el.select();
   }
 
   // ── context menu ──

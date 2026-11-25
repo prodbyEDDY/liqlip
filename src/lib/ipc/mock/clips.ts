@@ -536,6 +536,14 @@ function outcome(): PasteOutcome {
   return { result: "pasted" };
 }
 
+/** Rust's plan (ARCHITECTURE §6.6): the shelf hides first — except with `keepOpen`, and when
+ *  there is no target and `closeOnCopy` is off (the shelf stays and toasts `no_target`). */
+function hideForPaste(keepOpen: boolean | undefined): void {
+  if (keepOpen) return;
+  if (!mockTarget() && !currentSettings().picker.closeOnCopy) return;
+  mockHidePicker();
+}
+
 function markUsed(list: MockClip[]): void {
   const bump = currentSettings().picker.bumpOnPaste;
   const t = now();
@@ -568,9 +576,10 @@ function clipPaste({ req }: Args): PasteOutcome {
   if (!list || list.length === 0) return { result: "failed", reason: "not_found" };
   writeClipboard(joinedText(list, r.separator));
   markUsed(list);
-  // The paste flow starts with `picker::hide_now()` unless the shelf is kept open.
-  if (!r.keepOpen) mockHidePicker();
-  return outcome();
+  hideForPaste(r.keepOpen);
+  const o = outcome();
+  const images = list.filter((c) => c.kind === "image").length;
+  return images > 0 && images < list.length ? { ...o, reason: o.reason ?? "partial" } : o;
 }
 
 function clipCopy({ req }: Args): PasteOutcome {
@@ -585,7 +594,7 @@ function clipCopy({ req }: Args): PasteOutcome {
 function textPaste({ req }: Args): PasteOutcome {
   const r = req as TextPasteRequest;
   writeClipboard(r.text);
-  if (!r.keepOpen) mockHidePicker();
+  hideForPaste(r.keepOpen);
   return outcome();
 }
 

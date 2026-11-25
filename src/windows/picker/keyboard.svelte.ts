@@ -12,7 +12,7 @@ import { toasts } from "./toasts.svelte";
 import { view } from "./view.svelte";
 import { drag } from "./drag.svelte";
 import { copySnippet, pasteSnippet, runAction } from "./actions.svelte";
-import { isTypingKey, resolveKey, type Command } from "./keymap";
+import { isSwallowedRepeat, isTypingKey, resolveKey, type Command } from "./keymap";
 
 /** Ctrl must be held this long before the digits appear (quick chords don't flash them). */
 const CTRL_HINT_DELAY_MS = 120;
@@ -40,14 +40,19 @@ class Keyboard {
     const inOtherInput = !inSearch && el !== null && (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el.isContentEditable);
     const input = shelf.searchEl;
     const caretAtEnd = !input || (input.selectionStart === input.value.length && input.selectionEnd === input.value.length);
-    const cmd = resolveKey(e, {
+    const ctx = {
       inSearch,
       inOtherInput,
       onButton: el instanceof HTMLButtonElement,
       searchEmpty: shelf.draft.length === 0,
       caretAtEnd,
       undoAvailable: toasts.undoToken !== null,
-    });
+    };
+    if (isSwallowedRepeat(e, ctx)) {
+      e.preventDefault();
+      return;
+    }
+    const cmd = resolveKey(e, ctx);
     if (!cmd) {
       // Type-to-search: focusing the field during keydown makes the character land in it.
       if (!inSearch && !inOtherInput && (isTypingKey(e) || e.code === "Backspace")) shelf.focusSearch(false);

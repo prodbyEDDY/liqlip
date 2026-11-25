@@ -185,7 +185,11 @@ export const ru: Record<TranslationKey, string> = {
   "picker.outcome.copied_elevated": "Скопировано — нажмите Ctrl+V в окне администратора",
   "picker.outcome.copied_focus_lost": "Скопировано — нажмите Ctrl+V",
   "picker.outcome.copied_clipboard_busy": "Скопировано",
-  "picker.outcome.copied_not_found": "Скопировано",
+  "picker.outcome.copied_not_found": "Скопировано — некоторых записей уже нет",
+  "picker.outcome.copied_partial": "Скопировано — часть записей пропущена",
+  "picker.outcome.pasted_partial": "Вставлено — картинки нельзя склеить с текстом, они пропущены",
+  "picker.outcome.pasted_not_found": "Вставлено — некоторых записей уже нет",
+  "picker.outcome.pasted_clipboard_busy": "Вставлено",
   "picker.outcome.copied_stack_empty": "Скопировано",
   "picker.outcome.failed": "Не удалось вставить. Попробуйте ещё раз",
   "picker.outcome.no_target": "Некуда вставить",
@@ -194,6 +198,7 @@ export const ru: Record<TranslationKey, string> = {
   "picker.outcome.clipboard_busy": "Буфер обмена занят. Попробуйте ещё раз",
   "picker.outcome.not_found": "Этой записи больше нет",
   "picker.outcome.stack_empty": "Очередь вставки пуста",
+  "picker.outcome.partial": "Часть записей пропущена",
 
   // --- settings.* (W1-F) ---
   "settings.nav.label": "Разделы настроек",
