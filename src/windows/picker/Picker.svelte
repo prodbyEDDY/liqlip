@@ -1,96 +1,99 @@
 <script lang="ts">
-  // W0 stub of the shelf (W1-E replaces it): the monochrome panel sized by
-  // `picker:layout` and a plain list of the first records from `clips_list` — proof that
-  // the IPC layer (Tauri or the browser mock) works end to end. Not the final design.
+  // Thin root of the shelf: the stage (window minus the transparent BLEED margin that holds
+  // the shadow), the panel and its parts. State lives in `*.svelte.ts` (shelf, feed,
+  // selection, keyboard, overlays); see docs/picker.md.
   import { onMount } from "svelte";
   import Ico from "$lib/components/Ico.svelte";
-  import Skeleton from "$lib/components/Skeleton.svelte";
-  import EmptyState from "$lib/components/EmptyState.svelte";
-  import Button from "$lib/components/Button.svelte";
-  import Badge from "$lib/components/Badge.svelte";
-  import { t, type TranslationKey } from "$lib/i18n/index.svelte";
-  import { clipsList } from "$lib/ipc/commands";
-  import { onClipsChanged, onPickerLayout } from "$lib/ipc/events";
-  import { errorMessage } from "$lib/ipc/errors";
-  import type { Clip, Kind, PickerLayout } from "$lib/ipc/types";
-  import type { IconName } from "$lib/icons";
+  import { getLocale, t } from "$lib/i18n/index.svelte";
+  import { isTauri } from "$lib/ipc/runtime";
+  import SearchBar from "./SearchBar.svelte";
+  import Pills from "./Pills.svelte";
+  import Grid from "./Grid.svelte";
+  import Footer from "./Footer.svelte";
+  import ToastDock from "./ToastDock.svelte";
+  import DragGhost from "./DragGhost.svelte";
+  import OverlayHost from "./overlays/OverlayHost.svelte";
+  import { registerDefaultLayers } from "./overlays/defaults";
+  import { shelf } from "./shelf.svelte";
+  import { keyboard } from "./keyboard.svelte";
+  import { drag } from "./drag.svelte";
+  import { clockTime } from "./format";
 
-  // Default = the centre sheet (SPEC §3.1) until Rust sends the real layout.
-  let layout = $state<PickerLayout>({ position: "center", centerRow: false, width: 760, height: 640, bleed: 72 });
-  let items = $state<Clip[]>([]);
-  let status = $state<"loading" | "ready" | "error">("loading");
-  let error = $state("");
+  registerDefaultLayers();
 
-  const KIND_ICON: Record<Kind, IconName> = {
-    text: "text",
-    link: "link",
-    code: "code",
-    color: "palette",
-    contact: "at",
-    image: "image",
-    file: "file",
-  };
+  let panel = $state<HTMLElement | null>(null);
+  $effect(() => {
+    shelf.panelEl = panel;
+    drag.panel = panel;
+  });
 
-  async function load() {
-    if (items.length === 0) status = "loading";
-    try {
-      const page = await clipsList({ text: "", exclude: [], filter: {}, cursor: null, limit: 40 });
-      items = page.items;
-      status = "ready";
-    } catch (e) {
-      error = errorMessage(e);
-      status = "error";
-    }
-  }
-
-  // onMount, not $effect: `load` reads `items`/`status`, which an effect would track and
-  // re-run on every result (a fetch loop).
   onMount(() => {
-    void load();
-    const subs = [onPickerLayout((l) => (layout = l)), onClipsChanged(() => void load())];
+    // Browser preview only: a neutral backdrop so the panel's shadow reads like on a desktop.
+    // (picker.html paints the body transparent inline for the real, transparent window.)
+    if (!isTauri()) document.body.style.background = "var(--color-page)";
+    let stop: (() => void) | undefined;
+    let disposed = false;
+    void shelf.start().then((s) => {
+      if (disposed) s();
+      else stop = s;
+    });
     return () => {
-      for (const s of subs) void s.then((off) => off());
+      disposed = true;
+      stop?.();
+      drag.cancel();
     };
+  });
+
+  // Close mid-drag (Esc, focus loss) must not leave the gesture armed.
+  $effect(() => {
+    if (!shelf.open) {
+      drag.cancel();
+      keyboard.releaseCtrl();
+    }
+  });
+
+  const pausedText = $derived.by(() => {
+    const until = shelf.capture.pausedUntil;
+    if (until === null) return "";
+    return until === -1 ? t("picker.paused.title") : t("picker.paused.until", { time: clockTime(until, getLocale()) });
   });
 </script>
 
-<div class="stage" style="--bleed:{layout.bleed}px">
-  <section
-    class="panel squircle"
-    style="width:{layout.width}px;height:{layout.height}px"
-    aria-label="Liqlip"
-  >
-    <div class="search squircle">
-      <Ico name="search" size={16} />
-      <span>{t("picker.search")}</span>
-    </div>
+<svelte:window onkeydown={keyboard.onKeydown} onkeyup={keyboard.onKeyup} onblur={keyboard.releaseCtrl} />
 
-    {#if status === "loading"}
-      <ul class="list" aria-busy="true">
-        {#each Array.from({ length: 8 }, (_, i) => i) as i (i)}
-          <li class="row"><Skeleton width="16px" height="16px" radius={5} /><Skeleton height="12px" /></li>
-        {/each}
-      </ul>
-    {:else if status === "error"}
-      <EmptyState icon="warning" title={t("picker.error.title")} desc={error}>
-        <Button variant="secondary" size="sm" icon="refresh" onclick={() => void load()}>{t("common.retry")}</Button>
-      </EmptyState>
-    {:else if items.length === 0}
-      <EmptyState icon="clipboard" title={t("picker.empty.title")} desc={t("picker.empty.desc")} />
-    {:else}
-      <ul class="list">
-        {#each items as clip (clip.id)}
-          <li class="row">
-            <span class="row__icon"><Ico name={KIND_ICON[clip.kind]} size={16} /></span>
-            <span class="row__text" class:row__text--mono={clip.kind === "code"}>
-              {clip.title ?? (clip.preview || (clip.width ? `${clip.width} × ${clip.height}` : ""))}
-            </span>
-            <Badge>{t(`common.kind.${clip.kind}` as TranslationKey)}</Badge>
-          </li>
-        {/each}
-      </ul>
+<div class="stage" class:stage--open={shelf.open} data-edge={shelf.layout.position} style="--bleed:{shelf.layout.bleed}px">
+  <section
+    bind:this={panel}
+    class="panel squircle"
+    style="width:{shelf.layout.width}px;height:{shelf.layout.height}px"
+    aria-label={t("picker.panel.label")}
+    aria-hidden={!shelf.open}
+    inert={!shelf.open}
+  >
+    <SearchBar />
+    {#if shelf.paused}
+      <div class="banner squircle" role="status">
+        <Ico name="pause" size={14} />
+        <span class="banner__text">{pausedText}</span>
+        <button type="button" class="banner__btn" onmousedown={(e) => e.preventDefault()} onclick={() => void shelf.resume()}>
+          <Ico name="play" size={12} />{t("picker.paused.resume")}
+        </button>
+      </div>
     {/if}
+    <Pills />
+    <Grid />
+    {#if shelf.settings?.picker.hints ?? true}
+      <Footer />
+    {/if}
+    <ToastDock />
+    <OverlayHost />
   </section>
+
+  <!-- The ghost lives at the stage level (outside the panel): the panel's transform would
+       clip it and shift it off the cursor. -->
+  {#if drag.active}
+    <DragGhost />
+  {/if}
 </div>
 
 <style>
@@ -101,17 +104,48 @@
   :global(#app) {
     height: 100%;
   }
+
+  /* The window is the panel + a transparent BLEED margin on the non-docked sides (all four
+     for the centre) so the shadow renders inside the window. In a browser tab the viewport
+     is larger: the panel keeps its size from `picker:layout` and docks to the same edge. */
   .stage {
-    display: grid;
-    place-items: center;
-    width: 100%;
-    height: 100%;
+    position: fixed;
+    inset: 0;
+    display: flex;
+    background: transparent;
+  }
+  .stage[data-edge="left"] {
+    align-items: center;
+    justify-content: flex-start;
+    padding: var(--bleed) var(--bleed) var(--bleed) 0;
+  }
+  .stage[data-edge="right"] {
+    align-items: center;
+    justify-content: flex-end;
+    padding: var(--bleed) 0 var(--bleed) var(--bleed);
+  }
+  .stage[data-edge="top"] {
+    align-items: flex-start;
+    justify-content: center;
+    padding: 0 var(--bleed) var(--bleed) var(--bleed);
+  }
+  .stage[data-edge="bottom"] {
+    align-items: flex-end;
+    justify-content: center;
+    padding: var(--bleed) var(--bleed) 0 var(--bleed);
+  }
+  .stage[data-edge="center"] {
+    align-items: center;
+    justify-content: center;
     padding: var(--bleed);
   }
+
+  /* Panel: paper, the `summoned` shadow, radius 24 on every edge (Liquid Tools 2026-09-22:
+     all positions share the same corners). */
   .panel {
+    position: relative;
     display: flex;
     flex-direction: column;
-    gap: 10px;
     max-width: 100%;
     max-height: 100%;
     padding: 14px 14px 6px;
@@ -119,53 +153,107 @@
     background: var(--color-paper);
     box-shadow: var(--shadow-summoned);
     overflow: hidden;
+    opacity: 0;
+    pointer-events: none;
+    /* Exit: the soft ease (a dismiss never bounces). */
+    transition:
+      transform var(--dur-base) var(--ease-in-out),
+      opacity var(--dur-base) var(--ease-out-soft);
   }
-  .search {
+  .stage[data-edge="top"] .panel,
+  .stage[data-edge="bottom"] .panel {
+    padding: 16px 14px 6px;
+  }
+  .stage[data-edge="center"] .panel {
+    padding: 16px 16px 8px;
+    transform: scale(0.8);
+  }
+  /* Edges slide out of the docked screen edge (no overshoot: it would open a gap at the edge). */
+  .stage[data-edge="left"] .panel {
+    transform: translateX(calc(-100% - 4px));
+  }
+  .stage[data-edge="right"] .panel {
+    transform: translateX(calc(100% + 4px));
+  }
+  .stage[data-edge="top"] .panel {
+    transform: translateY(calc(-100% - 4px));
+  }
+  .stage[data-edge="bottom"] .panel {
+    transform: translateY(calc(100% + 4px));
+  }
+  .stage--open[data-edge] .panel {
+    opacity: 1;
+    pointer-events: auto;
+    transform: translate(0, 0) scale(1);
+    transition:
+      transform var(--dur-slow) var(--ease-out-soft),
+      opacity var(--dur-fast) var(--ease-out-soft);
+  }
+  /* Centre: summoned, never hovered — it settles with the liquid overshoot. */
+  .stage--open[data-edge="center"] .panel {
+    transition:
+      transform var(--dur-slow) var(--ease-liquid),
+      opacity var(--dur-base) var(--ease-out-soft);
+  }
+
+  /* "Recording is paused · Resume" under the search (SPEC §2.4.4, §3.13). */
+  .banner {
     display: flex;
     flex: 0 0 auto;
     align-items: center;
     gap: 8px;
-    height: 38px;
-    padding: 0 12px;
-    border-radius: var(--radius-control);
+    height: 34px;
+    margin-top: 8px;
+    padding: 0 4px 0 12px;
+    border-radius: 12px;
     background: var(--color-track);
-    color: var(--color-ink-3);
+    color: var(--color-ink-2);
+    font-size: var(--text-secondary);
+    animation: banner-in var(--dur-base) var(--ease-out-soft);
   }
-  .list {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    margin: 0;
-    padding: 0 0 8px;
-    list-style: none;
-    overflow-y: auto;
+  @keyframes banner-in {
+    from {
+      opacity: 0;
+      transform: translateY(-4px);
+    }
   }
-  .row {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    min-height: 34px;
-    padding: 0 10px;
-    border-radius: var(--radius-control-sm);
-    color: var(--color-ink);
-  }
-  .row:hover {
-    background: var(--color-hover);
-  }
-  .row__icon {
-    display: inline-flex;
-    color: var(--color-ink-3);
-  }
-  .row__text {
+  .banner__text {
     flex: 1 1 auto;
     min-width: 0;
     overflow: hidden;
-    white-space: nowrap;
+    color: var(--color-ink);
+    font-weight: 600;
     text-overflow: ellipsis;
-    font-size: var(--text-row);
+    white-space: nowrap;
   }
-  .row__text--mono {
-    font-family: var(--font-mono);
+  .banner__btn {
+    display: inline-flex;
+    flex: 0 0 auto;
+    align-items: center;
+    gap: 5px;
+    height: 26px;
+    padding: 0 11px;
+    border: 0;
+    border-radius: 999px;
+    background: var(--color-ink);
+    color: var(--color-paper);
+    font: inherit;
     font-size: var(--text-secondary);
+    font-weight: 600;
+    cursor: pointer;
+    transition:
+      background-color var(--dur-fast) var(--ease-out-soft),
+      transform var(--dur-fast) var(--ease-out-soft);
+  }
+  .banner__btn:hover {
+    background: var(--color-ink-hover);
+  }
+  .banner__btn:active {
+    background: var(--color-ink-active);
+    transform: scale(0.97);
+  }
+  .banner__btn:focus-visible {
+    outline: 2px solid var(--color-ink);
+    outline-offset: 2px;
   }
 </style>

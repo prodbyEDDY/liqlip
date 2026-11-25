@@ -32,7 +32,7 @@ import { KINDS } from "../types";
 import { fail, flags, mockEmit, now, rng } from "./bus";
 import { makeClip, metrics, previewOf, seed, type MockClip, type MockDb, type MockSnippet } from "./seed";
 import { currentSettings } from "./settings";
-import { captureFlags, mockTarget } from "./system";
+import { captureFlags, mockHidePicker, mockTarget } from "./system";
 
 export type Args = Record<string, unknown>;
 
@@ -568,6 +568,8 @@ function clipPaste({ req }: Args): PasteOutcome {
   if (!list || list.length === 0) return { result: "failed", reason: "not_found" };
   writeClipboard(joinedText(list, r.separator));
   markUsed(list);
+  // The paste flow starts with `picker::hide_now()` unless the shelf is kept open.
+  if (!r.keepOpen) mockHidePicker();
   return outcome();
 }
 
@@ -581,7 +583,9 @@ function clipCopy({ req }: Args): PasteOutcome {
 }
 
 function textPaste({ req }: Args): PasteOutcome {
-  writeClipboard((req as TextPasteRequest).text);
+  const r = req as TextPasteRequest;
+  writeClipboard(r.text);
+  if (!r.keepOpen) mockHidePicker();
   return outcome();
 }
 
@@ -664,6 +668,18 @@ export function startLive(): void {
     if (cap.paused) return;
     if (cap.consumeIgnoreNext()) return;
     const d = db();
+    // Every fourth capture re-copies an existing record: dedup raises it to the top
+    // (`change: 'updated'`), like the store does (ARCHITECTURE §4.2).
+    const older = d.clips.filter(visible).slice(4, 60);
+    if (older.length && liveRng() < 0.25) {
+      const c = older[Math.floor(liveRng() * older.length)];
+      c.copiedAt = now();
+      c.copyCount++;
+      d.clips = [c, ...d.clips.filter((x) => x !== c)];
+      changed("updated", [c.id], "capture");
+      if (cap.collectToStack) stackPush(c);
+      return;
+    }
     const kinds: Kind[] = ["text", "text", "link", "code", "image", "color", "contact", "file"];
     const kind = kinds[Math.floor(liveRng() * kinds.length)];
     if (!currentSettings().storage.types[kind]) return;

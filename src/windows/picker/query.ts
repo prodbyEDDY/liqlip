@@ -325,6 +325,8 @@ export interface Suggestion {
   label?: string;
   /** App icon URL (app suggestions). */
   icon?: string | null;
+  /** The typed value is a prefix of this suggestion (safe to complete on Space). */
+  prefix?: boolean;
 }
 
 export interface SuggestContext extends QueryContext {
@@ -384,7 +386,15 @@ export function suggest(word: string, ctx: SuggestContext, limit = 8): Suggestio
     .map((x, i) => ({ ...x, i }))
     .sort((a, b) => a.r - b.r || a.i - b.i)
     .slice(0, limit)
-    .map((x) => x.s);
+    .map((x) => (typed && x.r === 0 ? { ...x.s, prefix: true } : x.s));
+}
+
+/** Space after an unfinished token (`type:te `): the first suggestion when the typed value
+ *  is a prefix of it — the token completes instead of turning into search text. */
+export function completeToken(word: string, ctx: SuggestContext): string | null {
+  if (parseQuery(word, ctx).tokens.length) return null;
+  const first = suggest(word, ctx, 1)[0];
+  return first?.prefix ? first.insert : null;
 }
 
 /** The word under the caret (from the previous whitespace to the caret) and where it starts. */

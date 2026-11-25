@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { importTs } from "./helpers/bundle.mjs";
 
-const { parseQuery, mergeFilters, extractChips, suggest, serializeToken, wordAt, dateBounds, chipToken } = await importTs(
+const { parseQuery, mergeFilters, extractChips, suggest, serializeToken, wordAt, dateBounds, chipToken, completeToken } = await importTs(
   "src/windows/picker/query.ts",
 );
 
@@ -114,6 +114,16 @@ test("autocomplete after ':' — apps, kinds, folders, flags, dates", () => {
   assert.deepEqual(suggest("date:вч", ctx).map((s) => s.value), ["yesterday"]);
   assert.deepEqual(suggest("hello", ctx), []);
   assert.deepEqual(suggest("foo:", ctx), []);
+});
+
+test("Space completes a unique-prefix token; otherwise leaves it alone", () => {
+  assert.equal(completeToken("type:te", ctx), "type:text");
+  assert.equal(completeToken("type:сс", ctx), "type:link");
+  assert.equal(completeToken("app:tele", ctx), null, "app values are open-ended: already a valid token");
+  assert.equal(completeToken("type:link", ctx), null, "already valid");
+  assert.equal(completeToken("type:zz", ctx), null);
+  assert.equal(completeToken("type:", ctx), null, "nothing typed yet");
+  assert.equal(completeToken("hello", ctx), null);
 });
 
 test("wordAt finds the word under the caret", () => {
