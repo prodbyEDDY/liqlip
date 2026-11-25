@@ -622,6 +622,7 @@ export interface ImportReport { imported: number; skipped: number; folders: numb
 - **Настройки** (`windows/settings/`): `Settings.svelte` — сайдбар + секции (`sections/*.svelte`),
   онбординг (`onboarding/*.svelte`); стор настроек — один `settings.svelte.ts` поверх
   `settings_get/set` + `settings:changed`.
+- **Окно настроек (W1-F, сделано)** — реверс-док [settings.md](settings.md): корень `SettingsWindow.svelte` (коллизия `Settings.svelte` ↔ `settings.svelte.ts` на регистронезависимой ФС), разделы, онбординг, общая развёртка плейсхолдеров `src/lib/snippets/expand.ts`.
 - **Тема/язык** — из `Settings.general` (бэкенд авторитетен; рассылка `settings:changed`).
 
 ## 11. Дизайн-система

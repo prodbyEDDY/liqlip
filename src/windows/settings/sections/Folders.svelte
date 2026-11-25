@@ -85,6 +85,7 @@
   }
 
   async function rename(f: Folder) {
+    if (editing !== f.id) return; // cancelled with Esc (a late blur must not save)
     if (editDraft.trim() === f.name) {
       editing = null;
       return;

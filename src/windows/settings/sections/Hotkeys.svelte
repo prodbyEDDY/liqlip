@@ -4,6 +4,7 @@
   import Kbd from "$lib/components/Kbd.svelte";
   import { t, type TranslationKey } from "$lib/i18n/index.svelte";
   import { HOTKEY_ACTIONS } from "../logic";
+  import { settings } from "../settings.svelte";
   import Group from "../ui/Group.svelte";
   import HotkeyRow from "../ui/HotkeyRow.svelte";
 
@@ -35,6 +36,9 @@
     [[["Ctrl", ","]], "settings"],
     [[["Esc"]], "escape"],
   ];
+
+  // Conflicts that exist since startup show at the field as soon as the section opens.
+  $effect(() => settings.watchConflicts());
 
   const cap = (k: string) => (k.startsWith("@") ? t(`settings.keys.k.${k.slice(1)}` as TranslationKey) : k);
 </script>

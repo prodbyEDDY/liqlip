@@ -49,11 +49,11 @@
   </div>
   {#if control && stack}<div class="row__below">{@render control()}</div>{/if}
   {#if children}<div class="row__below">{@render children()}</div>{/if}
-  {#if note}
-    <div class="row__note" id="{uid}-n"><Ico name="info" size={14} />{note}</div>
-  {/if}
   {#if error}
     <div class="row__error" id="{uid}-e" role="alert"><Ico name="warning" size={14} /><span>{error}</span></div>
+  {/if}
+  {#if note}
+    <div class="row__note" id="{uid}-n"><Ico name="info" size={14} />{note}</div>
   {/if}
 </div>
 

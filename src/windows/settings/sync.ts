@@ -7,7 +7,9 @@
 // time, each request carrying everything queued so far on top of the latest confirmed
 // state. A request that rejects rolls its patches back and marks their fields `failed`;
 // `SettingsResult.errors` (taken / invalid) mark fields too — the backend already reverted
-// those values, so the view shows the previous value next to the message.
+// those values, so the view shows the previous value next to the message. Each answer
+// validates the whole object (the hotkey engine is asked every time), so its errors
+// replace the previous taken/invalid set.
 import type { Settings, SettingsError, SettingsResult } from "$lib/ipc/types";
 import { pathsOverlap, setPath, type FieldErrorCode } from "./logic";
 
@@ -96,7 +98,7 @@ export class SettingsSync {
     try {
       const res = await this.send(this.confirmed);
       this.confirmed = res.settings;
-      for (const e of res.errors) this.errors[e.field] = { code: e.code };
+      this.adopt(res.errors);
       return res.errors;
     } finally {
       this.settle();
@@ -118,12 +120,21 @@ export class SettingsSync {
     try {
       const res = await this.send(payload);
       this.confirmed = res.settings;
-      for (const e of res.errors) this.errors[e.field] = { code: e.code };
+      this.adopt(res.errors);
     } catch (cause) {
       for (const p of batch) this.errors[p.path] = { code: "failed", cause };
     } finally {
       this.settle();
     }
+  }
+
+  /** A settings_set answer validates the WHOLE object, so its `errors` replace every
+   *  earlier taken/invalid error (a conflict that went away — Liquid Tools closed, the
+   *  engine re-registered — disappears; one that persists is reported again). `failed`
+   *  errors of other edits stay until their field is edited. */
+  private adopt(errors: SettingsError[]): void {
+    for (const [field, e] of Object.entries(this.errors)) if (e.code !== "failed") delete this.errors[field];
+    for (const e of errors) this.errors[e.field] = { code: e.code };
   }
 
   /** After a request: send what queued meanwhile, or wake idle() waiters. */

@@ -101,7 +101,7 @@
   }
   .ph {
     display: grid;
-    grid-template-columns: minmax(0, auto) 1fr;
+    grid-template-columns: max-content minmax(0, 1fr);
     grid-template-areas: "code ex" "desc desc";
     align-items: baseline;
     gap: 2px 12px;

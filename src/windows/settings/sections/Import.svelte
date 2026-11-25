@@ -142,7 +142,7 @@
 </Group>
 
 <Group title={t("settings.import.backup")} desc={t("settings.import.backup.desc")}>
-  <Row label={t("settings.import.export")} icon="upload" note={backupOff ? t("settings.import.unavailable") : null}>
+  <Row label={t("settings.import.export")} desc={t("settings.import.export.desc")} icon="upload" note={backupOff ? t("settings.import.unavailable") : null}>
     {#snippet control()}
       <Button
         variant="secondary"
@@ -152,11 +152,11 @@
         title={backupOff ? t("settings.import.unavailable") : undefined}
         onclick={exportBackup}
       >
-        {t("settings.import.export")}
+        {t("settings.import.export.button")}
       </Button>
     {/snippet}
   </Row>
-  <Row label={t("settings.import.restore")} icon="download" note={backupOff ? t("settings.import.unavailable") : null}>
+  <Row label={t("settings.import.restore")} desc={t("settings.import.restore.desc")} icon="download" note={backupOff ? t("settings.import.unavailable") : null}>
     {#snippet control()}
       <Button
         variant="secondary"
@@ -166,7 +166,7 @@
         title={backupOff ? t("settings.import.unavailable") : undefined}
         onclick={restore}
       >
-        {t("settings.import.restore")}
+        {t("settings.import.restore.button")}
       </Button>
     {/snippet}
   </Row>

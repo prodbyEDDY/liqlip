@@ -56,7 +56,9 @@
     }
   }
   $effect(() => {
-    if (current === "hotkey" && !checked) void check();
+    if (current !== "hotkey") return;
+    if (!checked) void check();
+    return settings.watchConflicts(false);
   });
   const summonError = $derived(settings.error("hotkeys.summon"));
   const SUGGESTIONS = ["Ctrl + Alt + V", "Alt + Shift + C", "Ctrl + Shift + Space"];
@@ -68,7 +70,13 @@
     settings.set("general.onboardingDone", true);
     await settings.idle();
     finishing = false;
-    toasts.show({ message: t("onboarding.done.toast", { hotkey: summon || "Alt + V" }), icon: "check" });
+    // Not saved → the onboarding simply shows again next time; say why now.
+    const failed = settings.message("general.onboardingDone");
+    toasts.show(
+      failed
+        ? { message: failed, icon: "warning" }
+        : { message: t("onboarding.done.toast", { hotkey: summon || "Alt + V" }), icon: "check" },
+    );
     onFinish();
   }
 

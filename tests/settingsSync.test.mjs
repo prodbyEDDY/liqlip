@@ -135,3 +135,30 @@ test("the mock emits settings:changed once per effective change", async () => {
   assert.equal(events.length, 1);
   assert.equal(events[0].stack.newlineAfterPaste, true);
 });
+
+test("each answer's errors replace earlier taken/invalid ones; failed errors stay", async () => {
+  let answer = [{ field: "hotkeys.summon", code: "taken" }];
+  let fail = false;
+  const { sync, last } = harness(async (s) => {
+    if (fail) throw "busy: x";
+    return { settings: s, errors: answer };
+  });
+  sync.receive(await mockInvoke("settings_get", {}));
+  await sync.recheck();
+  assert.deepEqual(last().errors["hotkeys.summon"], { code: "taken" });
+  // The conflict persists: reported again with an unrelated edit.
+  sync.update("picker.hints", true);
+  await sync.idle();
+  assert.deepEqual(last().errors["hotkeys.summon"], { code: "taken" });
+  // An edit that fails keeps its own "failed" error...
+  fail = true;
+  sync.update("general.theme", "dark");
+  await sync.idle();
+  assert.equal(last().errors["general.theme"].code, "failed");
+  // ...and once the other app lets go, the next answer clears the conflict only.
+  fail = false;
+  answer = [];
+  await sync.recheck();
+  assert.equal(last().errors["hotkeys.summon"], undefined);
+  assert.equal(last().errors["general.theme"].code, "failed");
+});

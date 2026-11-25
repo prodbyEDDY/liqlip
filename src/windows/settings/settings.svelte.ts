@@ -90,6 +90,21 @@ class SettingsStore {
   idle(): Promise<void> {
     return this.sync.idle();
   }
+
+  /** Show hotkey conflicts that exist since startup (e.g. Liquid Tools holds "Alt + V"):
+   *  re-send the current settings now — the engine answers `taken` for a binding it could
+   *  not register even when the value did not change — and again every 30 s (the engine's
+   *  own retry period) while a conflict is shown and the window is visible, so the message
+   *  goes away by itself once the other app lets go. Returns a disposer. */
+  watchConflicts(immediate = true): () => void {
+    const check = () => void this.sync.recheck().catch(() => {});
+    if (immediate) check();
+    const timer = setInterval(() => {
+      const conflict = Object.entries(this.errors).some(([f, e]) => f.startsWith("hotkeys.") && e.code === "taken");
+      if (conflict && document.visibilityState === "visible") check();
+    }, 30_000);
+    return () => clearInterval(timer);
+  }
 }
 
 export const settings = new SettingsStore();

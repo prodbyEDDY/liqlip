@@ -1,6 +1,6 @@
 // Pure logic of the settings window (no Svelte, no IPC, no i18n runtime) — covered by
 // tests/settingsLogic.test.mjs. Components turn the returned i18n keys into text.
-import type { CaptureStatus, HotkeySettings, Settings, SettingsError } from "$lib/ipc/types";
+import type { CaptureStatus, HotkeySettings, SettingsError } from "$lib/ipc/types";
 
 // ── dotted paths ─────────────────────────────────────────────────────────────
 
@@ -241,9 +241,4 @@ export function moveBefore<T>(ids: T[], id: T, beforeId: T | null): T[] {
   if (at < 0) return ids;
   rest.splice(at, 0, id);
   return rest;
-}
-
-/** The settings object with only the sections a user sees (used to compare snapshots). */
-export function sameSettings(a: Settings | null, b: Settings | null): boolean {
-  return JSON.stringify(a) === JSON.stringify(b);
 }

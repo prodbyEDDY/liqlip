@@ -30,6 +30,8 @@
 
   let recording = $state(false);
   let localError = $state<string | null>(null);
+  /** The chord last sent from this row (a rejected attempt reverts to the old value). */
+  let attempted = $state<string | null>(null);
   let button = $state<HTMLButtonElement>();
 
   const label = $derived(t(`settings.hotkeys.${action}` as TranslationKey));
@@ -37,6 +39,11 @@
   const keys = $derived(comboKeys(value).map(display));
   const def = $derived(HOTKEY_DEFAULTS[action]);
   const error = $derived(localError ?? settings.message(`hotkeys.${action}`));
+  // The current binding itself is taken (not a rejected new attempt): the engine keeps
+  // retrying every 30 s, so say that it will start working on its own.
+  const retrying = $derived(
+    !localError && settings.error(`hotkeys.${action}`)?.code === "taken" && (attempted === null || attempted === value),
+  );
 
   /** Windows calls the Super key "Win". */
   function display(k: string): string {
@@ -90,6 +97,7 @@
       onChange?.(combo);
       return;
     }
+    attempted = combo;
     settings.set(`hotkeys.${action}`, combo);
     onChange?.(combo);
   }
@@ -97,7 +105,7 @@
   onDestroy(stop);
 </script>
 
-<Row {label} desc={compact ? null : t(`settings.hotkeys.${action}.desc` as TranslationKey)} {error} stack={compact}>
+<Row {label} desc={compact ? null : t(`settings.hotkeys.${action}.desc` as TranslationKey)} {error} note={retrying ? t("settings.hotkey.retryNote") : null} stack={compact}>
   {#snippet control()}
     <button
       type="button"

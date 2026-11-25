@@ -86,7 +86,9 @@
       await load(true);
       if (!list.some((x) => x.id === s.id)) list = [...list, s];
       selectedId = s.id;
+      // Focus the new name once (the editor reads it on mount), never again on re-mounts.
       focusNew = s.id;
+      setTimeout(() => (focusNew = null), 0);
       total = Math.max(total, list.length);
     } catch (e) {
       toasts.show({ message: errorMessage(e), icon: "warning" });
@@ -255,7 +257,13 @@
     gap: 6px;
   }
   .pane__top :global(.field) {
-    flex: 1 1 auto;
+    flex: 1 1 0;
+    min-width: 0;
+  }
+  .pane__top :global(.btn) {
+    flex: 0 0 auto;
+    width: 36px;
+    padding: 0;
   }
   .items {
     display: flex;
