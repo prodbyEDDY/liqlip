@@ -35,10 +35,13 @@ pub(crate) struct Paths {
 }
 
 impl Paths {
+    /// All paths are absolute (`PastePayload.png_path` goes to the clipboard writer as is);
+    /// a relative `data` (never the case for `app_data_dir`) is resolved against the cwd.
     pub fn new(data: &Path) -> Paths {
+        let data = std::path::absolute(data).unwrap_or_else(|_| data.to_path_buf());
         let media = data.join("media");
         Paths {
-            data: data.to_path_buf(),
+            data: data.clone(),
             db: data.join("liqlip.db"),
             thumbs: media.join("thumbs"),
             media,

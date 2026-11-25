@@ -929,8 +929,11 @@ pub struct PastePayload { id: i64, kind: Kind, text: Option<String>, html: Optio
   путей, пустой хэш), `busy`/`failed` (БД, диск). Подъём существующей: `copied_at = max(…)`,
   `copy_count + 1`, воскрешение, источник и `kind` — новые, `meta` — слияние. После — сигнал ретенции.
 - `set_app_icon`: PNG (сигнатура) ≤ 1 МБ → `icons\<id>.png`; нет приложения → `not_found`.
-- `get_for_paste`: удалённая/несуществующая → `not_found`; html — UTF-8 `String`, rtf — байты, files —
-  из `clip_formats` (или из `text`), `png_path` только если файл на месте (иначе и `formats` без `png`).
+- `get_for_paste`: несуществующая, мягко или жёстко удалённая → `not_found: clip <id>` (как и все
+  обращения по id: `clip_detail`, `clip_rename`, `clip_update_text`, `clips_delete`, избранное, папка;
+  на этом префиксе вставка чистит очередь); html — UTF-8 `String`, rtf — байты, files — из
+  `clip_formats` (или из `text`); `png_path` — **абсолютный** путь (`Paths` приводит каталог данных к
+  абсолютному) и только если файл на месте (иначе и `formats` без `png`).
 - `mark_used`: неизвестные/удалённые id пропускаются; `bump` → `copied_at = max(copied_at, now)`.
 - `delete_recent`: число удалённых; мягко удалённые в окне тоже; вызывающий эмитит `deleted` (трей —
   без `ids`, команда — с `ids`).

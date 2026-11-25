@@ -890,6 +890,7 @@ mod tests {
         assert_eq!(p.html.as_deref(), Some("<b>rich</b>"));
         assert_eq!(p.rtf.as_deref(), Some(&b"{\\rtf1 rich}"[..]));
         assert!(p.png_path.as_ref().unwrap().exists());
+        assert!(p.png_path.as_ref().unwrap().is_absolute(), "the paste writer gets an absolute path");
         let expect = 4 + 11 + 12 + c.png.as_ref().unwrap().len() as i64;
         assert_eq!(row_i64(&t, "SELECT size FROM clips WHERE id = ?1", id), expect);
 
@@ -908,7 +909,14 @@ mod tests {
         std::fs::remove_file(p.png_path.unwrap()).unwrap();
         let p = t.get_for_paste(img).unwrap();
         assert!(p.formats.is_empty() && p.png_path.is_none(), "a vanished file is not offered");
+        // Missing and soft-deleted records → `not_found:` (the paste stack prunes on it).
         assert!(t.get_for_paste(9_999).unwrap_err().starts_with("not_found:"));
+        t.delete(&[f]).unwrap();
+        assert!(t.get_for_paste(f).unwrap_err().starts_with("not_found:"));
+        t.purge_deleted().unwrap();
+        t.set_now(10_000_000 + super::super::lifecycle::UNDO_TTL_MS + 1);
+        t.purge_deleted().unwrap();
+        assert!(t.get_for_paste(f).unwrap_err().starts_with("not_found:"), "hard-deleted too");
     }
 
     #[test]
