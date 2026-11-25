@@ -1,6 +1,6 @@
 [package]
 name = "liqlip"
-version = "0.1.0"
+version = "1.0.0"
 description = "Liqlip — a keyboard-first clipboard manager for Windows."
 authors = ["Liqlip"]
 edition = "2021"
@@ -109,4 +109,18 @@ windows = { version = "0.62", features = [
     "Storage_Streams",
     "Globalization",
     "Win32_System_WinRT",
+    # W2-D tray: a timed pause's end in local time (FileTimeToSystemTime,
+    # SystemTimeToTzSpecificLocalTime; GetTimeFormatEx is in Globalization above).
+    "Win32_System_Time",
 ] }
+
+# Release build for the NSIS installer (W2-D, ARCHITECTURE §16). Speed over size:
+# opt-level 3 keeps the hot paths (SQLite compiled by cc with the same level, PNG
+# encode/decode of clipboard images) at full speed; fat LTO + one codegen unit + stripped
+# symbols win back most of the size. `panic` stays `unwind` (the default): capture restarts
+# its threads through `catch_unwind` (ARCHITECTURE §5), which `abort` would make impossible.
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true

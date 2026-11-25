@@ -1628,3 +1628,214 @@ pub fn apply_settings(app: &AppHandle, prev: &HotkeySettings, next: &HotkeySetti
 флаги `?mock-empty=1`, `?mock-error=1`, `?mock-live=0`, `?mock-size=N`,
 `?mock-target=chrome|none|elevated`, `?mock-unimpl=ocr,import`; задержка 30–80 мс), стабильный API
 `settings.ts::currentSettings()` для остальных мок-модулей.
+
+## 16. Упаковка (W2-D, 2026-11-26)
+
+> Замер: 2026-11-26 (W2-D: знак, иконки, трей, NSIS 1.0.0, CSP, release-профиль, лицензии;
+> установщик собран, не запускался — PQ-02).
+
+### 16.1. Знак
+
+**Идея:** буфер обмена + жидкость — родственник колбы Liquid Tools. Портретный планшет-сквиркл,
+капсула-зажим поверх верхней кромки, внутри жидкость с рябью. В паузе жидкость уступает место паре
+капсул «‖» в том же планшете. Монохром: без градиентов, теней и свечения.
+
+**Геометрия:**
+- углы планшета — квартика `|x|⁴ + |y|⁴ = 1`, то же, что CSS `corner-shape: squircle`
+  (`superellipse(2)`): одна кубическая кривая на угол, ручки на 9,09 % радиуса от угла;
+- зажим — капсула с круглыми концами (правило дизайн-системы: капсулы — не сквиркл);
+- радиусы концентричны: внутренний = внешний − отступ;
+- на крупных размерах вокруг зажима вырезан зазор (маска `liqlip-clip-gap`), и зажим читается
+  отдельной деталью.
+
+**Один генератор — `node scripts/brand.mjs`.** Геометрия живёт в коде: `MASTER` — сетка 24,
+`TRAY` — по пиксельным размерам. Растр делает `tauri icon` проекта (resvg), без новых зависимостей.
+Скрипт перезаписывает всё ниже; после него — `cargo test` (тест трея сверяет размеры PNG).
+
+| Файл | Что |
+|---|---|
+| `design/logo.svg` · `design/logo-1024.png` | исходник знака (чёрный, viewBox 24, 1024 px) |
+| `design/app-icon.svg` · `design/app-icon-1024.png` | плитка приложения: сквиркл `#171717` (тёмный `paper`) со знаком `#F4F5F7` (тёмный `ink`), как у Liquid Tools; знак — 68 % плитки, радиус — 36 % стороны |
+| `public/brand/logo-light.svg` · `logo-dark.svg` | знак для интерфейса: `ink` светлой (`#252525`) и тёмной (`#F4F5F7`) темы, viewBox 24; от 24 px (мельче — глифы трея) |
+| `src-tauri/icons/icon.ico` + `32x32` · `64x64` · `128x128` · `128x128@2x` · `icon.png` | иконки приложения (`tauri icon design/app-icon.svg`) |
+| `src-tauri/icons/tray/<px>.png` · `<px>-paused.png` | глифы трея 16/20/24/28/32/40/48 px, чёрные на прозрачном |
+| `src-tauri/icons/nsis-sidebar.bmp` | картинка страниц «Добро пожаловать»/«Готово» установщика, 164×314, 24-bit BMP |
+
+**Оптические размеры трея.** 16/20/24 px нарисованы по пиксельной сетке: кромки и обводка — на
+целых или половинных пикселях. Зазора между стенкой и жидкостью нет, зажим слит с кромкой, волна
+одна, S-образная (рябь на 16 px не видна). С 28 px — полный знак (`MASTER` в масштабе).
+
+### 16.2. Иконки приложения
+
+`tauri icon` (v2.tauri.app/develop/icons) рендерит SVG под каждый размер. ICO содержит слои
+32, 16, 24, 48, 64, 256 (PNG); 32 стоит первым, как требуют доки. macOS-, AppX- и мобильные файлы
+генератор выкидывает: Liqlip только для Windows.
+
+В `bundle.icon` четыре файла: 32, 128, 128@2x и ico. Windows берёт ico для ресурса exe, иконки окна
+и ярлыков. Мелкие слои ICO (16/24) — тот же вектор без хинтинга, поэтому они мягче глифов трея.
+
+### 16.3. Трей (`tray.rs`)
+
+**Иконка.** Размер — `SM_CXSMICON` на DPI панели задач: `GetDpiForWindow(Shell_TrayWnd)`, иначе
+`GetDpiForSystem`. Получается 16 px при 100 %, 20 — при 125 %, 24 — при 150 % и так далее. Берётся
+PNG ближайшего размера не меньше нужного; оболочке не приходится масштабировать картинку. Глиф
+чёрный, для тёмной панели (`SystemUsesLightTheme = 0`) он перекрашивается в белый с сохранением
+альфы. Пауза — свой глиф «‖».
+
+**Подсказка.** Формат: «Liqlip — запись идёт» / «Liqlip — пауза до 14:30» / «Liqlip — запись на
+паузе», а пока очередь не пуста — ещё « · Очередь: 3». Время переводится в локальный пояс через
+`SystemTimeToTzSpecificLocalTime` и форматируется `GetTimeFormatEx` в формате пользователя. Строка
+«пауза до {time}» пока лежит в `tray.rs` (временная функция `paused_until_template`), до сниппета
+в `i18n_native` (отчёт W2-D).
+
+**Меню** сверено со SPEC §5 — без изменений.
+
+**Обновление.** `refresh` вызывается при смене паузы, очереди, языка, хоткея и темы. На смену
+масштаба на лету отдельного вызова нет (сниппет для `lib.rs` — в отчёте W2-D); иначе иконка
+обновится при ближайшем `refresh`.
+
+### 16.4. Установщик (NSIS, `tauri.conf.json`)
+
+| Ключ | Значение | Зачем |
+|---|---|---|
+| `productName` / `version` | `Liqlip` / `1.0.0` (так же в `Cargo.toml` и `package.json`) | `app_info.version` = `package_info().version` = версия из конфига |
+| `bundle.targets` | `["nsis"]` | только `…-setup.exe` |
+| `bundle.publisher` / `copyright` | `Liqlip` / `© 2026 Liqlip. All rights reserved.` | «Приложения» Windows, свойства exe, строка внизу окон установщика |
+| `bundle.shortDescription` / `longDescription` | EN | описание exe и пакета |
+| `nsis.installMode` | `currentUser` | без прав администратора, `%LOCALAPPDATA%\Liqlip`, ключи в HKCU |
+| `nsis.languages` | `["English", "Russian"]`, `displayLanguageSelector: false` | язык по языку системы, иначе первый (английский); строки Tauri для русского есть (`Russian.nsh`) |
+| `nsis.installerIcon` / `uninstallerIcon` | `icons/icon.ico` | вместо иконок NSIS по умолчанию |
+| `nsis.sidebarImage` | `icons/nsis-sidebar.bmp` | вместо синей картинки NSIS по умолчанию |
+
+**Сознательно не задано:**
+- `headerImage`: в MUI2 картинка шапки стоит слева и сдвигает заголовок страницы на 150 px; без неё
+  шапка чище.
+- `startMenuFolder`: ярлык ложится прямо в «Пуск» (`Programs\Liqlip.lnk`).
+- `webviewInstallMode`: остаётся по умолчанию `downloadBootstrapper` (тихий). WebView2 на
+  Windows 10/11 обычно уже есть; если нет, установщик скачает бутстрэппер, нужен интернет.
+- Подпись и автообновление (PQ-03): SmartScreen покажет «Windows защитила ваш компьютер» →
+  «Подробнее → Выполнить в любом случае».
+
+**Поведение шаблона Tauri:**
+- ярлык на рабочем столе — галочкой на последней странице;
+- «Запустить Liqlip» — там же, запуск от имени пользователя;
+- повторная установка поверх — обновление, данные сохраняются; `allowDowngrades` по умолчанию `true`;
+- установщик просит закрыть запущенный Liqlip.
+
+**Удаление** — через «Параметры → Приложения» или `uninstall.exe`:
+- убирает файлы, ярлыки и значение автозапуска `HKCU\…\Run\Liqlip` — его имя совпадает с
+  `productName`, так значение называет `tauri-plugin-autostart`;
+- галочка «Удалить данные приложения» дополнительно удаляет `%APPDATA%\com.liqlip.app` (база,
+  медиа, настройки, логи) и `%LOCALAPPDATA%\com.liqlip.app` (данные WebView2).
+
+### 16.5. CSP
+
+```json
+"csp": {
+  "default-src": "'self'",
+  "connect-src": "ipc: http://ipc.localhost 'self'",
+  "img-src": "'self' data: http://liq.localhost",
+  "style-src": "'self' 'unsafe-inline'",
+  "font-src": "'self' data:"
+}
+```
+
+**Что дописывает Tauri** (`tauri-codegen`/`tauri` 2.11, `manager::set_csp`):
+- в `script-src` — `'self'` и sha256 каждого JS из `dist`;
+- в `style-src` — nonce только для элементов `<style>` в HTML. В наших HTML их нет, поэтому
+  `'unsafe-inline'` не отменяется nonce'ом.
+
+**Директивы:**
+- `connect-src`: IPC Tauri v2 — `fetch` на `http://ipc.localhost` (`ipc:` — на других ОС), как в
+  доках Security → CSP. `'self'` — для будущего встроенного просмотра лицензий (`fetch` своих
+  `/licenses/*.txt`).
+- `img-src`: `http://liq.localhost` — схема `liq` в WebView2 (§9.8); `data:` — иконки приложений и
+  мок-превью.
+- `font-src data:`: Vite встраивает мелкий сабсет JetBrains Mono (< 4 КБ) как `data:` (`assetsInlineLimit`).
+- `style-src 'unsafe-inline'` нужен. Проверено в Chromium (тот же движок, что WebView2) на `dist` под
+  этим заголовком:
+  - без `'unsafe-inline'` блокируются `style`-атрибуты разметки (`<body style="background:
+    transparent">` в `picker.html`/`hud.html` — шелф и HUD потеряли бы прозрачность) и
+    `setAttribute('style')`;
+  - CSSOM (`el.style.*`, `style.cssText`) работает и без него;
+  - с итоговой политикой нарушений нет, шрифты Inter и JetBrains Mono грузятся.
+
+**Где действует.** Только в собранном приложении: в `tauri dev` WebView грузит Vite напрямую, и
+заголовок CSP не ставится. Проверка — на установленной сборке. Откат — `"csp": null`, одна строка.
+
+### 16.6. Release-профиль (`Cargo.toml`)
+
+```toml
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
+```
+
+**`opt-level = 3`**, а не `"s"`, который советуют доки Tauri (App Size): «use 3 if you prefer
+speed». Горячие места Liqlip — это:
+- SQLite: `cc` собирает его с тем же уровнем;
+- кодек PNG для картинок буфера;
+- FTS-поиск.
+
+Для личного установщика размер не критичен. Выигрыш размера от `"s"` не замерялся: разрешена одна
+release-сборка.
+
+**`lto`, один codegen unit и `strip`** возвращают большую часть размера.
+
+**`panic` не задан**, остаётся `unwind`: захват перезапускает свои потоки через `catch_unwind`
+(§5), а `abort` сделал бы это невозможным.
+
+### 16.7. Лицензии
+
+**Собственная лицензия Liqlip** — проприетарная, «все права защищены», для личного использования:
+`public/licenses/LICENSE.txt`, `bundle.copyright`, README. MIT не выбран: он безвозвратно разрешил
+бы любому копировать и распространять код. Личной v1 из приватного репозитория это не нужно;
+открыть код позже можно всегда, а отозвать MIT нельзя.
+
+**Сторонние компоненты** — `node scripts/licenses.mjs` → `public/licenses/THIRD-PARTY.txt`.
+Запускать после изменения зависимостей; вывод детерминирован. Что попадает в список:
+- **Rust:** `cargo metadata --filter-platform x86_64-pc-windows-msvc --locked --offline`, обход
+  обычных (normal) зависимостей от `liqlip`. Build/dev-зависимости и proc-macro-крейты пропускаются
+  вместе со всем, что достижимо только через них. `cargo metadata` объединяет фичи, поэтому
+  несколько крейтов, нужных только `tauri-build`, всё же попадают в список — это безвредно.
+- **npm:** `pnpm licenses list --json --prod` (в том числе рантайм Svelte как peer-зависимость
+  `bits-ui`) плюс `tailwindcss`: его preflight копируется в CSS. Набор сверен с sourcemap
+  production-сборки.
+
+**Формат файла:**
+- у каждого пакета — лицензия и ссылка;
+- тексты лицензий из самого пакета; для «A OR B» берётся один (MIT, если есть);
+- одинаковые тексты печатаются один раз;
+- пакеты без файла лицензии вынесены отдельным списком с лицензией из метаданных.
+
+На 2026-11-26: 234 крейта + 36 npm-пакетов, 131 уникальный текст, 285 КБ.
+
+**Где лежит.** Vite копирует `public/licenses/` в `dist`, и Tauri вшивает файлы в exe. Раздел «О
+Liqlip» пока ссылается только на `licenses/heroicons.txt`; ссылки на `LICENSE.txt` и
+`THIRD-PARTY.txt` подключают W2-E или координатор (INT-2).
+
+### 16.8. Как собрать установщик
+
+```bash
+pnpm install
+node scripts/brand.mjs        # только после правки знака
+node scripts/licenses.mjs     # после изменения зависимостей
+CARGO_TARGET_DIR=… pnpm tauri build   # beforeBuildCommand = pnpm build
+```
+
+**Результат:** `<target>/release/bundle/nsis/Liqlip_1.0.0_x64-setup.exe`. NSIS и плагин
+`nsis_tauri_utils` CLI Tauri при первой сборке сам скачивает в `%LOCALAPPDATA%\tauri\NSIS`.
+
+**В `dist` не попадают:** `.map` (sourcemap включается только при `TAURI_ENV_DEBUG`), тесты и
+фикстуры.
+
+**Попадает:** мок-адаптер `mock-*.js` — до 33 КБ с демо-данными. В Tauri он не загружается:
+`import("./mock")` выполняется только вне Tauri.
+
+**Замер сборки W2-D** (2026-11-26, первая release-сборка в общем target):
+- `pnpm tauri build` — 219 с, из них cargo release — 3 мин 25 с;
+- `liqlip.exe` — 15 175 168 байт (14,5 МиБ);
+- `Liqlip_1.0.0_x64-setup.exe` — 4 219 963 байт (4,0 МиБ);
+- единственное предупреждение сборщика — идентификатор `com.liqlip.app` оканчивается на `.app` (касается только macOS; менять нельзя: это путь к данным).
