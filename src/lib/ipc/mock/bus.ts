@@ -11,6 +11,7 @@
 //   ?mock-unimpl=ocr,import             make those (W2) command groups reject "unimplemented"
 //   ?mock-position=center|left|right|top|bottom   shelf position the picker mock lays out (W1-E, system.ts)
 //   ?mock-row=1          centre position as a single row (W1-E, system.ts)
+//   ?mock-ocr=nolang     no OCR language packs (system.ts, W2-A)
 
 export type Unlisten = () => void;
 
