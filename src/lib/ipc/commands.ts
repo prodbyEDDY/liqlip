@@ -158,6 +158,10 @@ export const snippetDelete = (id: number): Promise<void> =>
 export const snippetMarkUsed = (id: number): Promise<void> =>
   call<void>("snippet_mark_used", { id });
 
+/** `snippet_move` — Manual snippet order (W2-B); `beforeId: null` = move to the end. */
+export const snippetMove = (id: number, beforeId: number | null): Promise<void> =>
+  call<void>("snippet_move", { id, beforeId });
+
 /** `apps_list` — Source applications with record counts. */
 export const appsList = (): Promise<AppInfo[]> =>
   call<AppInfo[]>("apps_list");

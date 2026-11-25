@@ -514,6 +514,18 @@ function snippetSave({ input }: Args): Snippet {
   return snippetOut(s);
 }
 
+/** `snippet_move` (W2-B): same fractional placement as `folder_move`. */
+function snippetMove({ id, beforeId }: Args): void {
+  const d = db();
+  const s = snippetById(id);
+  if (beforeId === id) return;
+  const others = d.snippets.filter((x) => x.id !== s.id);
+  const before = beforeId === null ? null : (others.find((x) => x.id === beforeId)?.position ?? null);
+  if (beforeId !== null && before === null) throw fail("not_found", `snippet ${String(beforeId)}`);
+  s.position = between(others.map((x) => x.position).sort((a, b) => a - b), before);
+  changed("updated");
+}
+
 function snippetById(id: unknown): MockSnippet {
   const s = db().snippets.find((x) => x.id === id);
   if (!s) throw fail("not_found", `snippet ${String(id)}`);
@@ -748,6 +760,7 @@ export const clipsHandlers: Record<string, (args: Args) => unknown> = {
   snippet_mark_used: ({ id }) => {
     snippetById(id).useCount++;
   },
+  snippet_move: snippetMove,
   apps_list: appsList,
   storage_stats: storageStats,
 

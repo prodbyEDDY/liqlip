@@ -3,6 +3,7 @@
 //! by the frontend (`src/lib/snippets/`), not here.
 
 use super::feed::{fts_quote, parse_terms, split_terms};
+use super::write::{place_before, Placement};
 use super::{db_err, is_unique_violation, Store};
 use crate::content::TEXT_MAX_BYTES;
 use crate::model::{Snippet, SnippetInput};
@@ -117,6 +118,35 @@ impl Store {
         Ok(snippet)
     }
 
+    /// Manual order (W2-B): put snippet `id` before `before_id` (None = at the end) — the
+    /// same fractional placement as `folder_move`.
+    pub(crate) fn snippet_move(&self, id: i64, before_id: Option<i64>) -> Result<(), String> {
+        let mut conn = self.lock();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate).map_err(db_err)?;
+        snippet_by_id(&tx, id)?;
+        if before_id == Some(id) {
+            return Ok(());
+        }
+        let others: Vec<(i64, f64)> = {
+            let mut st =
+                tx.prepare("SELECT id, position FROM snippets WHERE id <> ?1 ORDER BY position, id").map_err(db_err)?;
+            let rows = st.query_map([id], |r| Ok((r.get(0)?, r.get(1)?))).map_err(db_err)?;
+            rows.collect::<Result<_, _>>().map_err(db_err)?
+        };
+        match place_before(id, &others, before_id) {
+            Err(()) => return Err(format!("not_found: snippet {}", before_id.unwrap_or_default())),
+            Ok(Placement::At(pos)) => {
+                tx.execute("UPDATE snippets SET position = ?1 WHERE id = ?2", params![pos, id]).map_err(db_err)?;
+            }
+            Ok(Placement::Renumber(all)) => {
+                for (sid, pos) in all {
+                    tx.execute("UPDATE snippets SET position = ?1 WHERE id = ?2", params![pos, sid]).map_err(db_err)?;
+                }
+            }
+        }
+        tx.commit().map_err(db_err)
+    }
+
     pub(crate) fn snippet_delete(&self, id: i64) -> Result<(), String> {
         let n = self.lock().execute("DELETE FROM snippets WHERE id = ?1", [id]).map_err(db_err)?;
         if n == 0 {
@@ -172,6 +202,26 @@ mod tests {
         assert!(t.snippets_list("казань").unwrap().is_empty());
         assert!(t.snippet_delete(addr.id).unwrap_err().starts_with("not_found:"));
         assert!(t.snippet_mark_used(addr.id).unwrap_err().starts_with("not_found:"));
+    }
+
+    #[test]
+    fn move_reorders_like_folders() {
+        let t = TestStore::new();
+        let ids: Vec<i64> = ["a", "b", "c"].iter().map(|n| t.snippet_save(&input(None, n, n, None)).unwrap().id).collect();
+        let order = |t: &TestStore| t.snippets_list("").unwrap().into_iter().map(|s| s.id).collect::<Vec<_>>();
+        t.snippet_move(ids[2], Some(ids[0])).unwrap();
+        assert_eq!(order(&t), vec![ids[2], ids[0], ids[1]]);
+        t.snippet_move(ids[2], None).unwrap();
+        assert_eq!(order(&t), vec![ids[0], ids[1], ids[2]]);
+        t.snippet_move(ids[0], Some(ids[0])).unwrap();
+        assert_eq!(order(&t), vec![ids[0], ids[1], ids[2]], "before itself = no-op");
+        for _ in 0..60 {
+            t.snippet_move(ids[1], Some(ids[0])).unwrap();
+            t.snippet_move(ids[0], Some(ids[1])).unwrap();
+        }
+        assert_eq!(order(&t), vec![ids[0], ids[1], ids[2]], "renumbering keeps the order");
+        assert!(t.snippet_move(999, None).unwrap_err().starts_with("not_found:"));
+        assert!(t.snippet_move(ids[0], Some(999)).unwrap_err().starts_with("not_found:"));
     }
 
     #[test]

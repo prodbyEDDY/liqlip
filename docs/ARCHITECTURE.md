@@ -1070,6 +1070,7 @@ export interface ImportReport { imported: number; skipped: number; folders: numb
 | `folders_list` / `folder_create` / `folder_rename` / `folder_move` / `folder_delete` | `…` / `name`→`Folder` / `id,name` / `id,beforeId` / `id, withClips` → `{undoToken}` | store |
 | `snippets_list` | `text` → `Snippet[]` | store |
 | `snippet_save` / `snippet_delete` / `snippet_mark_used` | `SnippetInput`→`Snippet` / `id` / `id` | store |
+| `snippet_move` | `id, beforeId: number\|null` → `()` (ручной порядок сниппетов, как `folder_move`; W2-B, аддитивно) | store |
 | `apps_list` | → `AppInfo[]` (источники с числом записей) | store |
 | `storage_stats` | → `StorageStats` | store |
 | `clip_paste` | `PasteRequest` → `PasteOutcome` | paste |
@@ -1095,7 +1096,7 @@ export interface ImportReport { imported: number; skipped: number; folders: numb
 | `pick_exe` | → `string \| null` (диалог) | settings |
 | `ocr_status` / `ocr_reindex` / `clip_ocr` | → `{ available, languages, pending }` / `()` / `id` → `string` | ocr (W2) |
 | `import_lt_probe` / `import_lt_run` | → `ImportProbe` / `ImportReport` | import (W2) |
-| `backup_export` / `backup_import` | → `string\|null` / `mode: 'replace'\|'merge'` → `ImportReport` | import (W2) |
+| `backup_export` / `backup_import` | → `string\|null` / `mode: 'replace'\|'merge'` → `ImportReport` (отмена диалога: экспорт → `null`, восстановление → `invalid: cancelled`; §16.6) | import (W2) |
 
 Ошибки команд — `Result<T, String>` с машинным кодом в начале строки (`"not_found: …"`,
 `"busy: …"`, `"invalid: …"`, `"failed: …"` — сбой ОС/плагина, добавлен в W0; заглушки —

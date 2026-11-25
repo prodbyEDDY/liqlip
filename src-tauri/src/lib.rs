@@ -155,6 +155,7 @@ pub fn run() {
             store::commands::snippet_save,
             store::commands::snippet_delete,
             store::commands::snippet_mark_used,
+            store::commands::snippet_move,
             store::commands::apps_list,
             store::commands::storage_stats,
             // paste (W1-C)
