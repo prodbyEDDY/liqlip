@@ -213,11 +213,15 @@ export const en = {
 
   // --- onboarding.* (W1-F) ---
 
-  // --- hud.* (W1-D) --- (W0 seed, names from the W1-D prompt)
-  "hud.copied": "Copied — press Ctrl+V",
+  // --- hud.* (W1-D) ---
+  // {keys} renders as a key chip (hud.pasteKeys).
+  "hud.copied": "Copied — press {keys}",
+  "hud.elevated": "Administrator window — press {keys}",
   "hud.stackEmpty": "Paste stack is empty",
-  "hud.paused": "Recording is paused",
-  "hud.elevated": "Administrator window — press Ctrl+V",
+  "hud.paused": "Recording paused",
+  "hud.resumed": "Recording resumed",
+  "hud.skipNext": "The next copy won't be saved",
+  "hud.pasteKeys": "Ctrl+V",
 } as const;
 
 export type TranslationKey = keyof typeof en;

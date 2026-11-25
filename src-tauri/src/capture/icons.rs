@@ -30,32 +30,104 @@ use windows::Win32::UI::WindowsAndMessaging::{DestroyIcon, GetIconInfo, HICON, I
 pub const ICON_SIZE: u32 = 64;
 const CACHE_MAX: usize = 512;
 
-type Cache = Mutex<HashMap<String, Option<Arc<Vec<u8>>>>>;
+/// One extracted icon: the PNG (for `Store::set_app_icon`) and its data URL, encoded once.
+pub struct IconData {
+    pub png: Vec<u8>,
+    pub data_url: String,
+}
+
+#[derive(Clone)]
+enum Entry {
+    /// Extraction queued on the background icon thread.
+    Pending,
+    /// Done; `None` = the exe has no usable icon (remembered: never extracted again).
+    Ready(Option<Arc<IconData>>),
+}
+
+type Cache = Mutex<HashMap<String, Entry>>;
 
 fn cache() -> &'static Cache {
     static CACHE: OnceLock<Cache> = OnceLock::new();
     CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// PNG icon of `exe` (full path), extracted on first use. `None` when the exe has no icon or
-/// cannot be read (remembered, not retried every capture).
-pub fn png_for(exe: &str) -> Option<Arc<Vec<u8>>> {
-    let key = exe.to_lowercase();
-    if let Some(hit) = cache().lock().get(&key) {
-        return hit.clone();
-    }
-    let png = extract_png(&key).map(Arc::new);
+/// Extract `key` (lower-cased path) and store the result; returns it.
+fn extract_and_store(key: &str) -> Option<Arc<IconData>> {
+    let data = extract_png(key).map(|png| {
+        let data_url = format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(&png));
+        Arc::new(IconData { png, data_url })
+    });
     let mut c = cache().lock();
-    if c.len() >= CACHE_MAX {
-        c.clear();
+    if c.len() >= CACHE_MAX && !c.contains_key(key) {
+        c.retain(|_, e| matches!(e, Entry::Pending)); // keep in-flight markers consistent
     }
-    c.insert(key, png.clone());
-    png
+    c.insert(key.to_string(), Entry::Ready(data.clone()));
+    data
 }
 
-/// `data:image/png;base64,…` for `TargetInfo.iconUrl` / `RunningApp.iconUrl`.
+/// Background extraction for the non-blocking path: one long-lived thread, requests
+/// de-duplicated by the `Pending` marker.
+fn queue(key: String) {
+    static TX: OnceLock<Option<Mutex<std::sync::mpsc::Sender<String>>>> = OnceLock::new();
+    let tx = TX.get_or_init(|| {
+        let (tx, rx) = std::sync::mpsc::channel::<String>();
+        std::thread::Builder::new()
+            .name("liqlip-clip-icons".into())
+            .spawn(move || {
+                for key in rx {
+                    let still_pending = matches!(cache().lock().get(&key), Some(Entry::Pending));
+                    if still_pending && std::panic::catch_unwind(|| extract_and_store(&key)).is_err() {
+                        cache().lock().insert(key, Entry::Ready(None));
+                    }
+                }
+            })
+            .ok()
+            .map(|_| Mutex::new(tx))
+    });
+    let sent = tx.as_ref().is_some_and(|tx| tx.lock().send(key.clone()).is_ok());
+    if !sent {
+        // No background thread: drop the marker so a blocking caller can still extract.
+        cache().lock().remove(&key);
+    }
+}
+
+/// Icon of `exe` (full path), extracted on first use — **blocking** on a miss (capture worker,
+/// `apps_running`). Never extracts the same exe twice once a result is cached.
+pub fn icon_for(exe: &str) -> Option<Arc<IconData>> {
+    let key = exe.to_lowercase();
+    if let Some(Entry::Ready(hit)) = cache().lock().get(&key) {
+        return hit.clone();
+    }
+    extract_and_store(&key)
+}
+
+/// PNG icon of `exe` (blocking on a miss, see [`icon_for`]).
+pub fn png_for(exe: &str) -> Option<Arc<IconData>> {
+    icon_for(exe)
+}
+
+/// `data:image/png;base64,…` (blocking on a miss) — `RunningApp.iconUrl`.
 pub fn data_url(exe: &str) -> Option<String> {
-    png_for(exe).map(|png| format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(&*png)))
+    icon_for(exe).map(|d| d.data_url.clone())
+}
+
+/// `data:image/png;base64,…` **without blocking**: a cache hit (a map lookup + a copy of the
+/// pre-encoded URL), or `None` on a miss while the icon is extracted in the background — the
+/// next call returns it. Used on the shelf summon path (`TargetInfo.iconUrl`).
+pub fn data_url_cached(exe: &str) -> Option<String> {
+    let key = exe.to_lowercase();
+    {
+        let mut c = cache().lock();
+        match c.get(&key) {
+            Some(Entry::Ready(hit)) => return hit.as_ref().map(|d| d.data_url.clone()),
+            Some(Entry::Pending) => return None,
+            None => {
+                c.insert(key.clone(), Entry::Pending);
+            }
+        }
+    }
+    queue(key);
+    None
 }
 
 /// Balanced COM init for this call (SHGetFileInfoW requires it). `S_FALSE` (already
@@ -226,13 +298,14 @@ mod tests {
         if !std::path::Path::new(&explorer).exists() {
             return;
         }
-        let png = png_for(&explorer).expect("explorer.exe has an icon");
-        let d = super::super::imaging::decode(super::super::imaging::ImageSource::Png, &png).unwrap();
+        let icon = png_for(&explorer).expect("explorer.exe has an icon");
+        let d = super::super::imaging::decode(super::super::imaging::ImageSource::Png, &icon.png).unwrap();
         assert_eq!((d.width, d.height), (ICON_SIZE, ICON_SIZE));
         assert!(d.rgba.chunks(4).any(|p| p[3] > 0), "not fully transparent");
         let again = png_for(&explorer.to_uppercase()).unwrap();
-        assert!(Arc::ptr_eq(&png, &again), "served from the cache");
+        assert!(Arc::ptr_eq(&icon, &again), "served from the cache");
         assert!(data_url(&explorer).unwrap().starts_with("data:image/png;base64,"));
+        assert_eq!(data_url_cached(&explorer.to_lowercase()), Some(icon.data_url.clone()));
     }
 
     #[test]
@@ -240,7 +313,44 @@ mod tests {
         // SHGetFileInfoW may still return a generic icon for a non-existent .exe path; either
         // way the call must not fail hard and the result is cached.
         let first = png_for("c:\\definitely\\not\\here\\nothing.exe");
+        let t = std::time::Instant::now();
         let second = png_for("c:\\definitely\\not\\here\\nothing.exe");
+        assert!(t.elapsed() < std::time::Duration::from_millis(5), "no second extraction");
         assert_eq!(first.is_some(), second.is_some());
+    }
+
+    /// The shelf summon path: never blocks on extraction; a miss queues it in the background
+    /// and a later call returns the cached data URL.
+    #[test]
+    fn cached_data_url_never_blocks() {
+        let windir = std::env::var("WINDIR").unwrap_or_else(|_| "C:\\Windows".into());
+        let exe = format!("{windir}\\System32\\cmd.exe").to_lowercase();
+        if !std::path::Path::new(&exe).exists() {
+            return;
+        }
+        let t = std::time::Instant::now();
+        let first = data_url_cached(&exe);
+        assert!(t.elapsed() < std::time::Duration::from_millis(5), "summon path blocked {:?}", t.elapsed());
+        assert!(first.is_none(), "first call is a miss");
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut got = None;
+        while got.is_none() && std::time::Instant::now() < end {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            got = data_url_cached(&exe);
+        }
+        let url = got.expect("extracted in the background");
+        assert!(url.starts_with("data:image/png;base64,"));
+        let t = std::time::Instant::now();
+        assert_eq!(data_url_cached(&exe), Some(url));
+        assert!(t.elapsed() < std::time::Duration::from_millis(2));
+
+        // A file without an icon: the failure is cached too, no re-extraction.
+        let missing = "c:\\definitely\\not\\here\\summon-target.exe";
+        assert_eq!(data_url_cached(missing), None);
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while matches!(cache().lock().get(missing), Some(Entry::Pending)) && std::time::Instant::now() < end {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(matches!(cache().lock().get(missing), Some(Entry::Ready(_))));
     }
 }

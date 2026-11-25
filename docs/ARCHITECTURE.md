@@ -361,7 +361,7 @@ CREATE VIRTUAL TABLE snippets_fts USING fts5(name, body, content='snippets', con
 
 ## 5. Захват (`capture/`)
 
-> Замер: 2026-11-26 (W1-B: реализовано целиком; `cargo test` — 65 тестов модуля зелёные, включая
+> Замер: 2026-11-26 (W1-B: реализовано целиком; `cargo test` — 67 тестов модуля зелёные, включая
 > стенд 10 копий/с × 10 с: 100/100, задержка копия → запись p50 38 мс, max 47 мс; нативно не
 > запускалось — живая проверка по чек-листу в отчёте W1-B).
 
@@ -428,7 +428,11 @@ worker, `build_clip`, стенд), `formats.rs` (разбор CF_UNICODETEXT/CF_
   PNG»; только если тип image включён, иначе не читается вовсе). Картинка основная, если текста нет
   (пробельный текст = нет) или HTML-фрагмент — один `<img>` без видимого текста (браузерное
   «Копировать изображение»); нераскодируемая картинка при наличии текста → запись-текст.
-- **Self-copy:** `mark_own_write(seq)` кладёт номер в кольцо из 64 последних; проверка — в
+- **Self-copy:** вставка (W1-C, `paste::writer`) зовёт `mark_own_write(GetClipboardSequenceNumber())`
+  сразу после своего `CloseClipboard`, в том числе после частично неудачной записи (после успешного
+  `EmptyClipboard` номер всегда новый); пропускается обновление **ровно с этим номером**, следующее
+  (`seq + 1`, даже в том же окне дебаунса) захватывается — тест `own_write_skips_exactly_its_sequence_number`.
+  `mark_own_write(seq)` кладёт номер в кольцо из 64 последних; проверка — в
   capture-цикле до чтения, внутри снимка и ещё раз в worker (если `mark_own_write` проиграл гонку
   дебаунсу). Плюс страховка: владелец буфера — окно процесса Liqlip → пропуск. Если владельца нет,
   а впереди окно Liqlip (`echo x | clip` при открытых настройках) — это не «свой», источник неизвестен.
@@ -470,9 +474,14 @@ worker, `build_clip`, стенд), `formats.rs` (разбор CF_UNICODETEXT/CF_
   `events::capture_status` + `tray::refresh`.
 - **Иконки:** `SHDefExtractIconW` 64 px → иначе `SHGetFileInfoW(SHGFI_ICON|SHGFI_LARGEICON)` →
   `GetIconInfo`/`GetDIBits` → RGBA (альфа из AND-маски, если её нет в цвете) → 64×64 PNG; COM
-  STA на время вызова; кэш в памяти на exe (и промах тоже, ≤ 512); в Store — при
-  `InsertOutcome.app_icon_missing`. `app_icon_data_url` при промахе кэша **блокирует** на время
-  извлечения (единицы–десятки мс, один раз на exe).
+  STA на время вызова; кэш в памяти на exe (PNG + заранее закодированный data-URL; неудача тоже
+  запоминается — повторно не извлекается; ≤ 512); в Store — при `InsertOutcome.app_icon_missing`
+  (worker, блокирующе, один раз на приложение). **`app_icon_data_url` не блокирует никогда** — его
+  зовёт вставка на пути summon шелфа (`paste::focus`, путь exe в нижнем регистре): попадание —
+  поиск в карте + копия готовой строки; промах — сразу `None`, извлечение уходит в фоновый поток
+  `liqlip-clip-icons` (запросы дедуплицируются маркером «в работе»), следующий summon получает иконку.
+  Worker прогревает кэш для каждого приложения, из которого копируют. Блокирующие варианты
+  (`icons::png_for`/`data_url`) — только worker и `apps_running`.
 - **Имя приложения** — `FileDescription` (`GetFileVersionInfoW`/`VerQueryValueW`, языки из
   `\VarFileInfo\Translation` + запасные 0409/04B0, 0409/04E4), иначе имя файла без `.exe`; кэш.
 - **`apps_running`** — `EnumWindows`: видимые, без владельца, не tool-окна (кроме `WS_EX_APPWINDOW`),
@@ -490,15 +499,16 @@ worker, `build_clip`, стенд), `formats.rs` (разбор CF_UNICODETEXT/CF_
 (команда `apps_running`), `capture::clipboard_sequence()` (номер для `mark_own_write` без своей
 Win32-обвязки). Контракт IPC (§9) не менялся.
 
-**Тесты** (`cargo test capture::`, 65): классификация (цвета/ссылки/контакты/код/края), секреты
+**Тесты** (`cargo test capture::`, 67): классификация (цвета/ссылки/контакты/код/края), секреты
 (карты/ключи/PEM/ложные), CF_HTML и заголовки, состояние (пауза, таймер, пропуск, свои номера),
 снимок на фейковом буфере (один OpenClipboard, только нужные форматы, приоритеты, маркеры — 7 случаев
 вкл. Bitwarden и битый DWORD, игнор-лист, свой процесс, занятый буфер, лимиты, зависший формат и
 зависший маркер), worker (`build_clip`: поля, секреты, тумблеры, усечение, Excel текст+PNG, «Копировать
 изображение», дедуп PNG≡DIB, файлы), конвейер (старт, дубли событий, self-copy, пауза, пропуск,
 режим сбора, повторы при занятом буфере и неотвечающем владельце, игнор/маркеры, зависший рендер,
-поток событий), Win32-обёртки (зарегистрированные форматы, свой exe, FileDescription, иконка
-explorer.exe 64×64, listener — `WM_CLIPBOARDUPDATE`, отправленное самому себе, и остановка,
+поток событий, self-copy ровно по номеру), Win32-обёртки (зарегистрированные форматы, свой exe,
+FileDescription, иконка explorer.exe 64×64, неблокирующий `app_icon_data_url` < 5 мс на промахе и
+фоновое извлечение, listener — `WM_CLIPBOARDUPDATE`, отправленное самому себе, и остановка,
 `apps_running`), **стенд** `bench_10_copies_per_second_for_10_seconds`: 100 записей за 10 с из
 другого потока → 100/100 по порядку, все хэши разные, задержка p50 38 мс / max 47 мс (норма SPEC §7 —
 ≤ 300 мс).
@@ -704,49 +714,216 @@ Enter после вставки; пустая очередь → `failed/stack_e
 
 ## 7. Окно шелфа (`picker/`)
 
-Перенос логики Liquid Tools `src-tauri/src/screenshot/shotlib.rs` (докинг по физическому `rcWork`
-монитора, строгий hover-триггер, `BLEED = 72`, отложенный `hide` 260 мс под анимацию выхода) с
-переработкой состояния:
+> Замер: 2026-11-26 (W1-D: реализовано целиком; `cargo test` — 47 тестов чистой логики модулей
+> `picker`/`hotkeys`; нативно не запускалось — чек-лист живой проверки в отчёте W1-D).
 
-- Явная стейт-машина `Hidden → Armed(hover) → Open{mode: Summon|Hover, interactive} → Closing → Hidden`
-  в одном `Mutex<PickerState>` вместо пяти статиков Liquid Tools.
-- **Summon** (хоткей/трей/второй экземпляр): `paste::focus::capture_target()` → dock на монитор
-  (по настройке: под курсором / основной / конкретный) → показать → **активировать** окно
-  (клавиатура сразу работает) → `picker:open {mode:"summon", target, interactive:true}`.
-  Повтор хоткея при открытом шелфе → закрыть.
-- **Hover** (только край, если `hoverOpen`): окно неактивируемое (`set_focusable(false)`),
-  `interactive:false`; `picker_make_interactive` (клик в поиск) делает его фокусируемым и
-  активирует.
-- **Выходы** (одна воронка `close(reason, restore_focus)`): Esc с фронта · повтор хоткея ·
-  клик вне панели (опрос кнопок мыши, пока открыт) · потеря фокуса (`WindowEvent::Focused(false)`
-  для interactive) · вставка (без restore — фокус уже у цели) · уход курсора (только hover).
-- **Без LL-хука на Esc** — Esc обрабатывает фронт (окно активно). LL-хук нужен только движку
-  хоткеев для «голых» модификаторов/особых клавиш.
-- Изменение расположения/монитора/«одной строки» → `picker:layout`.
-- **HUD** (`hud.rs`): `show(kind, text)` — позиционировать у курсора на его мониторе, показать без
-  активации, автоскрытие 1.6 с.
+Перенос логики Liquid Tools `src-tauri/src/screenshot/shotlib.rs` (докинг по физическому `rcWork`,
+строгий hover-триггер, `BLEED = 72`, отложенный `hide` 260 мс, двухскоростной опрос) с новой
+моделью состояния. Файлы: `machine.rs` (стейт-машина, чистая), `geometry.rs` (докинг/hover/HUD,
+чистая), `mod.rs` (диспетчер + исполнитель эффектов, API §15), `poll.rs` (фоновый опрос),
+`win.rs` (тонкие Win32-обёртки), `hud.rs`, `commands.rs`.
+
+### 7.1. Стейт-машина
+
+Одно состояние `Machine` в одном `Mutex` (+ `Condvar` для опроса); события → эффекты; исполнитель
+выполняет эффекты **на главном потоке** (`run_on_main_thread`; там tao применяет флаги окна
+синхронно, поэтому эффекты идут строго по порядку, а `WS_EX_TOOLWINDOW` возвращается сразу после
+каждого изменения флагов). Замок не держится во время эффекта (вызов окна может синхронно породить
+событие). Результат активации приходит обратно событием `Activated(ok)`.
+
+```
+            Config(hover вкл, край)                     HoverTrigger (курсор упёрся в край ≥200 мс)
+  Hidden ─────────────────────────────▶ Armed ──────────────────────────────▶ Open{Hover, passive}
+    │  ◀── Config(hover выкл) ───────────┘ │                                     │ MakeInteractive /
+    │ Summon                        Summon │                                     │ Summon (апгрейд)
+    ▼                                      ▼                                     ▼
+  Open{Summon, interactive = SetForegroundWindow удался}  ◀─────────  Open{_, interactive}
+    │ Hide(Esc) · Summon(повтор) · ClickOutside · Blur(interactive) · CursorLeft(passive hover)
+    │ · CloseRequested(Alt+F4) · ShowSettings          HideNow (вставка: нативный hide сразу)
+    ▼                                                                    │
+  Closing ── 260 мс (HideTimer того же поколения) ──▶ Armed, если hover вкл., иначе Hidden
+    └── Summon в эти 260 мс отменяет скрытие (поколение +1) и открывает снова
+  Open{_, interactive} ── Deactivated (фокус ушёл при keepOpen-вставке / drag-out) ──▶ Open{_, passive}
+```
+
+- **Armed** — окно показано, click-through, не фокусируемое (`WS_EX_NOACTIVATE`), фронт в закрытом
+  состоянии (панель за краем); опрос следит за краем. Только для краёв и при `hoverOpen`.
+- **Хоткей при открытом hover-шелфе** не закрывает, а апгрейдит до `Summon` с активацией
+  (пользователь хочет клавиатуру) и шлёт второй `picker:open {mode:'summon'}`.
+- **Alt+F4**: `lib.rs` прячет окно (`CloseRequested` → `hide`), второй слушатель модуля переводит
+  машину в `Closing`; страховка — `Summon { visible }`: если машина «открыта», а окно невидимо,
+  summon открывает, а не закрывает.
+
+### 7.2. Summon и фокус
+
+Порядок: `CaptureTarget` (до показа: `GetForegroundWindow` — куда вернуть фокус, кроме самого
+шелфа/HUD/панели задач; `paste::focus::capture_target()` — цель вставки, и при summon, и при hover)
+→ `Dock` (+ `picker:layout`) → `ShowActive`: `set_ignore_cursor_events(false)`, `set_focusable(true)`,
+`show()`, затем [`SetForegroundWindow`](https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-setforegroundwindow)
+с проверкой `GetForegroundWindow` → `picker:open { mode, target, interactive }`.
+
+- Право на foreground: «The calling process received the last input event» — после `WM_HOTKEY`,
+  клика по иконке трея, выбора пункта меню. **Ничего не форсируем**: без `AttachThreadInput`, без
+  `SPI_SETFOREGROUNDLOCKTIMEOUT`, без инъекции Alt (tao `set_focus` делает Alt-трюк — шелф его не
+  вызывает). Отказ Windows (например, второй экземпляр из ярлыка — права у него, а не у нас) → шелф
+  открывается пассивным (`interactive:false`); клик по нему активирует окно (`Focused(true)` →
+  interactive), клик в поиск → `picker_make_interactive`.
+- **Возврат фокуса** (`RestoreFocus`): `SetForegroundWindow(запомненное окно)`, только если шелф ещё
+  держит фокус (или foreground пуст) и окно живо (`IsWindow`) — клик в другое окно уже отдал фокус
+  туда, куда хотел пользователь. Окно настроек — допустимая точка возврата.
+- `hide_now()` (вставка, W1-C §6.6: вызывается после `SetForegroundWindow(цель)`) — `HideNow`:
+  нативный `hide` сразу, без анимации и без возврата фокуса; идемпотентен (в `Hidden`/`Armed` —
+  ничего, в `Closing` после выхода по потере фокуса — тоже прячет сразу); блокирует вызывающего
+  ≤ 1 с, работает и с главного потока (`run_on_main_thread` там выполняется сразу). Если hover
+  включён, через 260 мс окно снова взводится.
+- **keepOpen-вставка / drag-out** (W1-C): пока `paste::focus::handoff_active()` или
+  `paste::dragout::active()`, выход по потере фокуса не срабатывает и фокус не возвращается; если
+  после них фокус к шелфу не вернулся — `Deactivated`: шелф остаётся открытым и пассивным (клик
+  активирует). Модальный цикл drag-out идёт на главном потоке, и `Focused(false)` может прийти уже
+  после него — опрос запоминает, когда последний раз видел активную передачу/перетаскивание, и
+  сторож считает потерю фокуса в течение 0.8 с после этого той же «передачей».
+
+### 7.3. Выходы (одна воронка `close(reason, restore)`)
+
+| Выход | Как ловится | Возврат фокуса |
+|---|---|---|
+| Esc | фронт → `picker_hide(true)` | да |
+| Повтор хоткея / клик по трею | `Summon` при `Open{Summon}` | да |
+| Клик вне панели | опрос кнопок мыши (30 мс): нажатие вне физического rect панели (в т. ч. по прозрачному bleed); закрытие через 100 мс после отпускания (кликнутое окно успевает активироваться, клик по трею первым отрабатывает свой toggle) или через 400 мс удержания; клик по диалогу своего процесса (не Tauri-окно) игнорируется; во время drag-out/передачи фокуса не отслеживается | да, если фокус ещё у шелфа |
+| Потеря фокуса | `WindowEvent::Focused(false)` для interactive → поток-сторож: ждёт конца передачи фокуса / drag-out / удержания кнопки (≤ 15 с) + 100 мс; foreground снова шелф или окно своего процесса (диалог, настройки) — не закрывает; после передачи/drag-out — `Deactivated` вместо закрытия | нет |
+| Вставка | `hide_now()` | нет (возвращает W1-C) |
+| Уход курсора | только `Open{Hover, passive}`: курсор вне окна, продлённого до истинного края экрана | нет |
+| Alt+F4 | `CloseRequested` | да, если foreground пуст/шелф |
+| Открытие настроек | `show_settings` закрывает шелф до показа окна настроек | нет |
+
+Закрытие: `picker:close` → окно click-through → через 260 мс нативный `hide` (или повторное
+взведение). Почему опрос, а не хук мыши: пассивный шелф не получает `Focused(false)`, а клики по
+прозрачному bleed приходят в webview; LL-хуки зарезервированы за движком хоткеев (§8).
+
+### 7.4. Докинг
+
+`geometry::dock` (физические px; процесс Per-Monitor V2 — tao `become_dpi_aware` →
+`SetProcessDpiAwarenessContext(PER_MONITOR_AWARE_V2)`, проверено по исходнику tao 0.35.3): панель по
+расположению (center 760×640, `centerRow` 760×360, left/right 400×826, top/bottom 800×360 —
+логические × масштаб монитора), прижата к краю `rcWork`, центрирована по другой оси, ужата до рабочей
+области; окно = панель + `BLEED` (72 × масштаб) на недокованных сторонах (центр — со всех). Монитор
+(`pick_monitor`): `cursor` — под курсором (в щели между мониторами — ближайший), `primary`, имя
+устройства GDI (`\\.\DISPLAY2`; отключён → основной). Мониторы — `available_monitors()` Tauri
+(`rcMonitor`; `work_area` = `GetMonitorInfoW::rcWork`; `scale_factor`). Применение: позиция → размер
+→ позиция (на мониторе с другим масштабом tao обрабатывает `WM_DPICHANGED` на первом перемещении и
+может сдвинуть окно в предложенный Windows rect; размер и второе перемещение ставят точную
+геометрию), после показа геометрия перепроверяется. `picker:layout` (логические ширина/высота панели
+и bleed) — после каждого докинга, до показа.
+
+Без перезапуска: опрос сравнивает сигнатуру дисплеев (`SM_CMONITORS`, виртуальный экран,
+`rcMonitor`/`rcWork`/эффективный DPI докованного монитора) → `Redock`; во взведённом состоянии с
+`monitor: cursor` край следует за монитором курсора. `settings.picker.{position, centerRow, monitor,
+hoverOpen}` применяются на лету (`settings::subscribe` → `Config`).
+
+### 7.5. Hover
+
+Строгий триггер (`HoverTracker`): курсор на крайнем физическом пикселе истинного края монитора
+(`rcMonitor`, не `rcWork` — ниже панели задач), в пролёте панели (углы свободны), без зажатой кнопки,
+≥ 200 мс; дошёл до края с зажатой кнопкой (перетаскивание окна) или шелф только что закрылся —
+триггер разряжен, пока курсор не уйдёт с края. **Стык с соседним монитором** (`edge_is_seam`: другой
+монитор продолжается за этим краем в пролёте панели) — триггера нет. Опрос: 60 мс в полосе 240 px у
+края, 250 мс иначе; 30 мс, пока шелф открыт; спит (condvar), пока скрыт.
+
+### 7.6. Alt+Tab и панель задач
+
+`WS_EX_TOOLWINDOW` включается, `WS_EX_APPWINDOW` снимается (tao ставит его всем окнам без владельца —
+иначе окно вернулось бы в Alt+Tab) **до и после** каждого вызова tao, меняющего флаги
+(`show`/`hide`/`set_focusable`/`set_ignore_cursor_events` переписывают `GWL_EXSTYLE` в `apply_diff`),
+затем `SetWindowPos(SWP_FRAMECHANGED)` («changes … will not take effect until you call
+SetWindowPos», [SetWindowLongPtrW](https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-setwindowlongptrw)).
+До — чтобы оболочка увидела tool window в момент показа, после — потому что tao только что
+переписал стиль.
+
+### 7.7. HUD (`hud.rs`)
+
+Окно `hud` показывается **только** через Win32 `SetWindowPos(HWND_TOPMOST, SWP_SHOWWINDOW |
+SWP_NOACTIVATE)` и прячется `ShowWindow(SW_HIDE)`; tao `show()` не вызывается (`ShowWindow(SW_SHOW)`
+«Activates the window»). tao считает HUD скрытым — согласованно: флаги tao после создания не
+трогаются. Позиция (`hud_rect`): капсула по центру под курсором (над ним у нижнего края), в `rcWork`
+монитора курсора; окно 400×112 логических (прозрачное поле под `--shadow-pop`; `lib.rs` создаёт
+320×56 — размер задаётся при каждом показе). Порядок: `hud:show` → позиция/размер → показ без
+активации → перепроверка геометрии; автоскрытие через 1.66 с после последнего показа (фронт начинает
+выход на 1.4 с); повторный показ того же тоста только продлевает его. Кто показывает: вставка —
+`copied` (focus_lost/нет цели) и `elevated`; очередь на пути хоткея — `stack_empty`; хоткеи паузы и
+пропуска — `paused`/`resumed`/`skip_next`. Фронт — `src/windows/hud/` (капсула 999px, `--shadow-pop`,
+иконка + текст, `{keys}` → чип `Kbd`, вход 190 мс liquid, выход 170 мс, reduced-motion без
+движения; превью `/hud.html?kind=copied|elevated|stack_empty|paused|resumed|skip_next`, `&text=`,
+`?demo=1`).
+
+### 7.8. Команды и требования к фронту шелфа (W1-E)
+
+- `picker_hide(restoreFocus)` — Esc (последний слой); `picker_make_interactive` — клик в поиск
+  пассивного шелфа; `Err("failed: …")`, если Windows отказал в foreground; второго `picker:open` нет.
+- `settings_open(section?)` / `picker::show_settings` — закрыть шелф, показать окно настроек
+  (`unminimize`, `show`, `SetForegroundWindow`; отказ → Windows мигает кнопкой), `settings:navigate`.
+  При запуске (онбординг, setup шаг 10) webview настроек ещё не подписан — режим онбординга фронт
+  берёт из `settings.general.onboardingDone`.
+- `monitors_list` — `id` = имя устройства GDI, `name` = EDID-имя монитора (CCD API:
+  `QueryDisplayConfig` + `DisplayConfigGetDeviceInfo` GET_SOURCE_NAME/GET_TARGET_NAME), иначе имя
+  устройства без `\\.\`; основной первым, затем по расположению.
+- Фронт шелфа: в закрытом состоянии и до первого `picker:open` **ничего не рисует** (взведённое окно
+  видимо, прозрачно и click-through); `picker:close` → анимация выхода ≤ 250 мс; клик по фону (bleed)
+  ничего не делает — закрытие ловит Rust. Повторный `picker:open` без `picker:close` (апгрейд hover →
+  summon) — обновить `interactive`/`mode`/`target`, не сбрасывая поиск.
+- `picker::on_page_load(app, label)` — повторно шлёт `picker:layout` и (если открыт) `picker:open`
+  перезагрузившемуся webview; подключается сниппетом в `lib.rs` (`Builder::on_page_load`).
 
 ## 8. Хоткеи (`hotkeys/`)
 
-Перенос движка Liquid Tools `src-tauri/src/hotkeys.rs` (гибрид `RegisterHotKey` +
-`WH_KEYBOARD_LL`; парсинг/коллизии ~строки 212–316, поток-регистратор ~646–974) **с вырезанием**
-диктовки, PrintScreen-спецслучая, Esc-перехвата и `crate::Feature` Liquid Tools. Новые действия:
+> Замер: 2026-11-26 (W1-D: реализовано; нативно не запускалось).
+
+Перенос движка Liquid Tools `src-tauri/src/hotkeys.rs` **без** диктовки, PrintScreen-спецслучая,
+Esc-перехвата, кнопок мыши, «голых» модификаторов и `crate::Feature`. Файлы: `combo.rs` (нотация +
+план привязок, чистая), `native.rs` (поток-регистратор, LL-хук), `mod.rs` (API §15, диспетчер),
+`commands.rs`.
 
 ```rust
-enum HotkeyAction { Summon, StackNext, PauseToggle, IgnoreNext }
+enum HotkeyAction { Summon, StackNext, PauseToggle, IgnoreNext }   // слоты = поля hotkeys.* по порядку
 ```
 
-- `RegisterHotKey` — для обычных сочетаний (LL-хук **не** ставится без нужды — в Liquid Tools
-  ставится всегда). LL-хук — только если сочетание нельзя зарегистрировать через `RegisterHotKey`.
-- Инвариант Liquid Tools: **коллбек LL-хука не делает работы** (никакого IPC/окон/I/O) — только
-  обновляет состояние, решает «проглотить», планирует и возвращает (иначе Windows молча снимает
-  хук по таймауту; см. Liquid Tools `docs/hotkeys.md` §2, `docs/hotkey-engine-debugging.md`).
-- Конфликт (`RegisterHotKey` вернул ошибку — занято, например, Liquid Tools на `Alt + V`) →
-  `settings_set` возвращает `errors: [{field:"hotkeys.summon", code:"taken"}]`, настройка не
-  применяется, UI показывает ошибку.
-- Запись сочетания — `hotkey_record_start/stop` + событие `hotkeys:captured`; фронтовая часть —
-  перенос `src/lib/hotkeyCapture.ts` (+ тест). Нотация как в Liquid Tools (`"Alt + V"`).
-- Раскладка: регистрация по VK-кодам (физические клавиши) — русская раскладка не ломает `Alt+V`.
+- **Нотация** `"Alt + V"` (модификаторы Ctrl · Alt · Shift · Super, затем одна клавиша) ⇄ VK-коды
+  физических клавиш — русская раскладка не мешает. Каждый токен `src/lib/hotkey.ts::keyToken`
+  разбирается (тест), каждая нативно записанная комбинация разбирается обратно (тест). Отклоняются
+  (`invalid`): кнопки мыши (`MMB/M4/M5`), одиночный модификатор (`LCtrl` срабатывал бы на каждом
+  Ctrl+C). Односторонний модификатор допустим главной клавишей вместе с другим (`Ctrl + LWin`).
+- **Бэкенды.** [`RegisterHotKey`](https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-registerhotkey)
+  (`hWnd = NULL` → `WM_HOTKEY` в очередь потока-регистратора, всегда `MOD_NOREPEAT`) — по умолчанию.
+  `WH_KEYBOARD_LL` — только для клавиш, которые нельзя/не следует регистрировать: Win, Apps, F12
+  («reserved for use by the debugger»), односторонний модификатор главной клавишей; хук **ставится,
+  только пока такая привязка задана или идёт запись**, и снимается после.
+- **Инвариант хука** ([LowLevelKeyboardProc](https://learn.microsoft.com/windows/win32/winmsg/lowlevelkeyboardproc)):
+  коллбек только `try_lock` (никогда не ждёт), обновляет атомарную маску модификаторов, решает
+  «проглотить» и кладёт задачу в канал единственного потока-диспетчера; IPC, окна, I/O — в
+  диспетчере. Синтетический ввод Liqlip (`dwExtraInfo == 0x4C514C50`, маска VK `0xE8` — W1-C
+  `paste::input`) пропускается не глядя. Действие идёт на своём коротком потоке (`paste_next`
+  блокирует до ~1.6 с).
+- **Применение настроек** (`apply_settings`, синхронно из `settings_set`): `combo::desired` — поле не
+  разбирается или повторяет чужое сочетание → `invalid` и прежнее сочетание (сначала «застолбляют»
+  неизменённые поля, затем изменённые по порядку); `combo::reconcile` на потоке-регистраторе —
+  сначала снимаются все меняющиеся привязки (обмен двух сочетаний работает), затем регистрируются
+  новые; отказ ОС (`ERROR_HOTKEY_ALREADY_REGISTERED` → `taken`, иное → `invalid`) возвращает поле к
+  прежнему сочетанию, а если оно теперь занято другим полем — тот тоже откатывается (`taken`). Итог
+  всегда совпадает с тем, что сохраняет `settings_set`.
+- **Конфликт при запуске** (Liquid Tools держит `Alt + V`): сочетание остаётся желаемым, повтор
+  регистрации каждые 30 с (`SetTimer` потока) — когда Liquid Tools закроется, `Alt + V` заработает
+  сам. `apply_settings` и при неизменных хоткеях (после одной попытки) сообщает такие поля как
+  `taken` — для этого `settings_set` должен вызывать хук всегда (сниппет `settings.rs` в отчёте W1-D).
+- **Запись** (`hotkey_record_start/stop` → `hotkeys:captured {combo}` в окно настроек): все
+  глобальные хоткеи приостановлены (`UnregisterHotKey`), хук ставится; Esc без модификаторов →
+  `combo: ""`; аккорд из модификаторов (`Ctrl + LWin`) — на отпускании; записанная клавиша
+  проглатывается; одиночный модификатор не записывается; таймаут 30 с → `combo: ""` и возврат
+  хоткеев; сохранение изменённых хоткеев (`settings_set`) тоже завершает запись. Хук не ставится →
+  `Err("failed: hook: …")`, хоткеи всё равно приостановлены до `stop` (webview-запись
+  `hotkeyCapture.ts` ловит обычные аккорды). Фронту настроек: `startHotkeyCapture` без
+  `bareModifier`/`mouse` (движок их отклоняет).
+- **Действия**: `Summon → picker::summon`; `StackNext → paste::stack::paste_next` (HUD пустой
+  очереди / `copied` / `elevated` показывает сама вставка); `PauseToggle → capture::toggle_pause`
+  (HUD `paused`/`resumed`); `IgnoreNext → capture::ignore_next` (HUD `skip_next`).
 
 ## 9. IPC-контракт
 
@@ -938,7 +1115,7 @@ export interface ImportReport { imported: number; skipped: number; folders: numb
 | `settings:changed` ⚑ | `Settings` | settings → все |
 | `settings:navigate` | `{ section: string }` | picker (`settings_open`) → settings |
 | `hotkeys:captured` | `{ combo: string }` | hotkeys → settings |
-| `hud:show` | `{ kind: 'copied'\|'stack_empty'\|'paused'\|'elevated'; text?: string }` | picker/paste → hud |
+| `hud:show` | `{ kind: 'copied'\|'stack_empty'\|'paused'\|'elevated'\|'resumed'\|'skip_next'; text?: string }` (`resumed`/`skip_next` — W1-D, аддитивно) | picker/paste/hotkeys → hud |
 | `ocr:progress` | `{ done: number; total: number }` | ocr → settings |
 | `import:progress` | `{ phase: string; done: number; total: number }` | import → settings |
 | `theme://changed` ⚑ | `'light'\|'dark'` | theme → все |
@@ -1238,7 +1415,7 @@ pub fn pause(app: &AppHandle, minutes: Option<i64>) -> Result<CaptureStatus, Str
 pub fn resume(app: &AppHandle) -> Result<CaptureStatus, String>;  // ← трей
 pub fn toggle_pause(app: &AppHandle) -> Result<CaptureStatus, String>; // ← хоткей PauseToggle
 pub fn ignore_next(app: &AppHandle) -> Result<CaptureStatus, String>;  // ← трей, хоткей IgnoreNext
-pub fn app_icon_data_url(exe: &str) -> Option<String>;           // ← paste (TargetInfo.iconUrl), apps_running
+pub fn app_icon_data_url(exe: &str) -> Option<String>;           // ← paste (TargetInfo.iconUrl); не блокирует: промах → None + фоновое извлечение
 pub mod classify { pub fn classify_text(text: &str) -> (Kind, ClipMeta); }   // ← store
 // добавлено W1-B (аддитивно):
 pub fn stop();                                                     // ← lib.rs RunEvent::Exit: снять listener, остановить потоки
@@ -1280,7 +1457,10 @@ pub fn summon(app: &AppHandle);                        // ← хоткей, тр
 pub fn hide_now(app: &AppHandle);                      // ← paste: мгновенно, БЕЗ возврата фокуса
 pub fn show_settings(app: &AppHandle, section: Option<&str>); // ← settings_open, трей, онбординг (setup шаг 10)
 pub mod hud { pub fn show(app: &AppHandle, kind: HudKind, text: Option<String>); } // ← paste, хоткеи
+pub fn on_page_load(app: &AppHandle, label: &str);     // W1-D, аддитивно: ← lib.rs Builder::on_page_load (повтор layout/open)
 ```
+Выход по потере фокуса читает `paste::focus::handoff_active()` / `paste::dragout::active()` (W1-C) —
+после них шелф становится пассивным, а не закрывается (§7.2).
 
 **hotkeys (W1-D)** — `src-tauri/src/hotkeys/mod.rs`
 

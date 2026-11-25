@@ -362,15 +362,14 @@ pub async fn settings_set(app: AppHandle, settings: Settings) -> Result<Settings
     let prev = store.current.read().clone();
     let (mut next, mut errors) = validate(&prev, settings);
 
-    // Hotkeys: the engine (W1-D) registers the new chords and reports conflicts; a
-    // rejected chord keeps its previous binding.
-    if next.hotkeys != prev.hotkeys {
-        let hk_errors = crate::hotkeys::apply_settings(&app, &prev.hotkeys, &next.hotkeys);
-        for e in &hk_errors {
-            revert_hotkey(&mut next.hotkeys, &prev.hotkeys, &e.field);
-        }
-        errors.extend(hk_errors);
+    // Hotkeys (W1-D): always consult the engine — it rebinds changed chords and also reports a
+    // chord that is still not active (taken at startup), after one retry. A rejected chord
+    // keeps its previous binding.
+    let hk_errors = crate::hotkeys::apply_settings(&app, &prev.hotkeys, &next.hotkeys);
+    for e in &hk_errors {
+        revert_hotkey(&mut next.hotkeys, &prev.hotkeys, &e.field);
     }
+    errors.extend(hk_errors);
 
     // Launch on login — an explicit user action is applied in every build.
     if next.general.autostart != prev.general.autostart {

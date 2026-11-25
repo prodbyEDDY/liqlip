@@ -91,4 +91,10 @@ windows = { version = "0.62", features = [
     # LibraryLoader/Storage_FileSystem/Gdi/UI_Shell above; plus the cloaked-window filter for
     # apps_running (DwmGetWindowAttribute):
     "Win32_Graphics_Dwm",
+    # W1-D also relies on KeyboardAndMouse (RegisterHotKey), Threading (GetCurrentThreadId /
+    # GetCurrentProcessId), LibraryLoader (SetWindowsHookExW) and Gdi (MonitorFromPoint) above.
+    # W1-D: GetDpiForMonitor (a monitor's scale changed while the shelf is docked on it).
+    "Win32_UI_HiDpi",
+    # W1-D: QueryDisplayConfig / DisplayConfigGetDeviceInfo (monitor friendly names).
+    "Win32_Devices_Display",
 ] }

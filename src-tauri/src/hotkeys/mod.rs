@@ -1,15 +1,28 @@
-//! Global hotkey engine — `RegisterHotKey` first, `WH_KEYBOARD_LL` only when a chord
-//! needs it; chord recording (ARCHITECTURE §8). Owner: **W1-D** (port of Liquid Tools
-//! `hotkeys.rs` without dictation / PrintScreen / Esc / `Feature`). W0 declares the API.
-//! Invariant: the LL-hook callback does no work (no IPC, windows or I/O).
+//! Global hotkey engine — `RegisterHotKey` first, `WH_KEYBOARD_LL` only while a chord that
+//! needs it is bound or the recorder is armed; native chord recording (ARCHITECTURE §8).
+//! Owner: **W1-D**. Port of Liquid Tools `hotkeys.rs` without dictation, PrintScreen
+//! special-casing, Escape interception, mouse buttons, bare modifiers and `Feature`.
+//!
+//! - `combo.rs` — grammar (`"Alt + V"` ⇄ VK + modifiers) and the binding plan (pure, tested).
+//! - `native.rs` — registrar thread (owns registrations, `WM_HOTKEY`) and the hook thread.
+//! - Fired actions and recorder results go through ONE dispatcher thread (`schedule`): the
+//!   hook callback only enqueues (CLAUDE.md hard rule 3), the dispatcher emits events and
+//!   starts each action on its own short-lived thread (a paste may block ~0.5 s).
 
 pub mod commands;
+mod combo;
+#[cfg(windows)]
+mod native;
 
-use crate::model::{HotkeySettings, SettingsError};
+use crate::model::{HotkeySettings, HudKind, SettingsError, SettingsErrorCode};
+use crate::{capture, events, logx, paste, picker};
+use parking_lot::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{mpsc, OnceLock};
+use std::time::Duration;
 use tauri::AppHandle;
 
 /// What a global hotkey does.
-#[allow(dead_code)] // W1-D
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HotkeyAction {
     /// `picker::summon`
@@ -22,22 +35,262 @@ pub enum HotkeyAction {
     IgnoreNext,
 }
 
-/// `setup()` step 7: start the registrar thread and bind the saved chords. Conflicts are
-/// logged (the UI learns about them on the next `settings_set`).
-pub fn start(app: &AppHandle, hotkeys: &HotkeySettings) -> Vec<SettingsError> {
-    let _ = (app, hotkeys); // W1-D
-    Vec::new()
+/// Slot order = `combo::FIELDS` order.
+pub(crate) const ACTIONS: [HotkeyAction; 4] = [
+    HotkeyAction::Summon,
+    HotkeyAction::StackNext,
+    HotkeyAction::PauseToggle,
+    HotkeyAction::IgnoreNext,
+];
+
+/// An armed recorder (between `hotkey_record_start` and a commit / cancel / stop).
+#[derive(Default)]
+pub(crate) struct Capture {
+    /// Last sided modifier pressed with nothing after it.
+    pub last_mod: Option<u32>,
+    /// A chord made only of modifiers ("Ctrl + LWin"), committed when its last key lifts.
+    pub modifier_chord: Option<String>,
 }
 
-/// Synchronous hook from `settings_set` when `hotkeys` changed: (re)bind every changed
-/// action. Return one error per rejected field (`field: "hotkeys.summon"`, code `taken`
-/// when RegisterHotKey refuses, `invalid` for an unparsable or duplicated chord); the
-/// engine must keep the PREVIOUS binding for those — `settings_set` reverts the fields.
-pub fn apply_settings(
-    app: &AppHandle,
-    prev: &HotkeySettings,
-    next: &HotkeySettings,
-) -> Vec<SettingsError> {
-    let _ = (app, prev, next); // W1-D
-    Vec::new()
+/// Read by the hook callback with `try_lock` only.
+pub(crate) static CAPTURE: Mutex<Option<Capture>> = Mutex::new(None);
+/// Bumped on every `hotkey_record_start`, so a stale timeout cannot cancel a newer session.
+static CAPTURE_GEN: AtomicU64 = AtomicU64::new(0);
+/// An abandoned recorder (window closed mid-recording) must not keep the hotkeys suspended.
+const CAPTURE_TIMEOUT: Duration = Duration::from_secs(30);
+
+pub(crate) enum Job {
+    Action(HotkeyAction),
+    /// Recorder finished: a chord, or `""` = cancelled (Esc / timeout).
+    Captured(String),
+    CaptureTimeout(u64),
+}
+
+static JOBS: OnceLock<mpsc::Sender<Job>> = OnceLock::new();
+
+/// Enqueue work for the dispatcher. Non-blocking — callable from the hook callback.
+pub(crate) fn schedule(job: Job) {
+    if let Some(tx) = JOBS.get() {
+        let _ = tx.send(job);
+    }
+}
+
+fn start_dispatcher(app: &AppHandle) {
+    let (tx, rx) = mpsc::channel::<Job>();
+    if JOBS.set(tx).is_err() {
+        return; // already running
+    }
+    let app = app.clone();
+    let spawned = std::thread::Builder::new()
+        .name("liqlip-hotkey-jobs".into())
+        .spawn(move || {
+            for job in rx {
+                match job {
+                    Job::Action(action) => {
+                        let app = app.clone();
+                        let _ = std::thread::Builder::new()
+                            .name("liqlip-hotkey-action".into())
+                            .spawn(move || run_action(&app, action));
+                    }
+                    Job::Captured(combo) => {
+                        events::hotkeys_captured(&app, &combo);
+                        end_recording();
+                    }
+                    Job::CaptureTimeout(gen) => {
+                        if CAPTURE_GEN.load(Ordering::SeqCst) == gen && CAPTURE.lock().take().is_some() {
+                            logx::warn("hotkeys", "recorder timed out");
+                            events::hotkeys_captured(&app, "");
+                            end_recording();
+                        }
+                    }
+                }
+            }
+        });
+    if let Err(e) = spawned {
+        logx::warn("hotkeys", &format!("dispatcher: {e}"));
+    }
+}
+
+/// Run a fired action (its own thread; may block).
+fn run_action(app: &AppHandle, action: HotkeyAction) {
+    match action {
+        HotkeyAction::Summon => picker::summon(app),
+        // Blocking (≤ ~1.6 s) — this is the action's own thread. On the hotkey path
+        // paste_next itself shows the HUD for an empty stack / focus_lost / elevated (W1-C).
+        HotkeyAction::StackNext => {
+            if let Err(e) = paste::stack::paste_next(app) {
+                logx::warn("hotkeys", &format!("stack next: {e}"));
+            }
+        }
+        HotkeyAction::PauseToggle => match capture::toggle_pause(app) {
+            Ok(st) => {
+                let kind = if st.paused_until.is_some() { HudKind::Paused } else { HudKind::Resumed };
+                picker::hud::show(app, kind, None);
+            }
+            Err(e) => logx::warn("hotkeys", &format!("pause toggle: {e}")),
+        },
+        HotkeyAction::IgnoreNext => match capture::ignore_next(app) {
+            Ok(st) if st.ignore_next => picker::hud::show(app, HudKind::SkipNext, None),
+            Ok(_) => {}
+            Err(e) => logx::warn("hotkeys", &format!("ignore next: {e}")),
+        },
+    }
+}
+
+fn to_errors(errs: &[Option<SettingsErrorCode>]) -> Vec<SettingsError> {
+    errs.iter()
+        .zip(combo::FIELDS)
+        .filter_map(|(e, field)| e.map(|code| SettingsError { field: field.into(), code }))
+        .collect()
+}
+
+fn merge(a: [Option<SettingsErrorCode>; 4], b: [Option<SettingsErrorCode>; 4]) -> [Option<SettingsErrorCode>; 4] {
+    std::array::from_fn(|i| a[i].or(b[i]))
+}
+
+/// `setup()` step 7: start the dispatcher + registrar and bind the saved chords. A chord
+/// taken by another app (Liquid Tools on `Alt + V`) stays wanted and is retried every 30 s;
+/// it is reported here (logged by `lib.rs`) and by every `apply_settings`.
+pub fn start(app: &AppHandle, hotkeys: &HotkeySettings) -> Vec<SettingsError> {
+    start_dispatcher(app);
+    let (want, parse_errs) = combo::desired(hotkeys, hotkeys);
+    // `prev = want`: a refused chord stays wanted (pending) instead of falling back to "".
+    let os_errs = native_apply(want, want);
+    sync_hook();
+    to_errors(&merge(parse_errs, os_errs))
+}
+
+/// Synchronous hook from `settings_set` (ARCHITECTURE §15): bind every changed action.
+/// One error per rejected field (`hotkeys.<name>`): `invalid` — unparsable or the same chord
+/// as another action; `taken` — `RegisterHotKey` refused (another app owns it). A rejected
+/// field keeps its PREVIOUS binding, matching the revert `settings_set` applies. When nothing
+/// changed it still reports fields whose chord is not active (startup conflict), after one
+/// retry — see the `settings.rs` snippet in the W1-D report.
+pub fn apply_settings(app: &AppHandle, prev: &HotkeySettings, next: &HotkeySettings) -> Vec<SettingsError> {
+    let _ = app;
+    let (want, parse_errs) = combo::desired(prev, next);
+    let os_errs = if prev == next {
+        native_status()
+    } else {
+        // Saving a chord ends any recording session (the recorder has committed).
+        CAPTURE.lock().take();
+        let prev_c = combo::strings(prev).map(|s| combo::parse(s.trim()));
+        native_apply(prev_c, want)
+    };
+    sync_hook();
+    to_errors(&merge(parse_errs, os_errs))
+}
+
+/// `hotkey_record_start`: suspend every global hotkey (so pressing the current chord records
+/// it instead of firing), arm the recorder and make sure the hook is in. The result arrives
+/// as `hotkeys:captured { combo }` (`""` = cancelled). Errors only when the native hook
+/// cannot be installed — the webview recorder still works for ordinary chords then.
+pub fn record_start() -> Result<(), String> {
+    *CAPTURE.lock() = Some(Capture::default());
+    let gen = CAPTURE_GEN.fetch_add(1, Ordering::SeqCst) + 1;
+    native_suspend(true);
+    std::thread::spawn(move || {
+        std::thread::sleep(CAPTURE_TIMEOUT);
+        schedule(Job::CaptureTimeout(gen));
+    });
+    sync_hook_result().map_err(|e| format!("failed: hook: {e}"))
+}
+
+/// `hotkey_record_stop` (idempotent): disarm and restore the global hotkeys.
+pub fn record_stop() {
+    CAPTURE.lock().take();
+    end_recording();
+}
+
+fn end_recording() {
+    native_suspend(false);
+    sync_hook();
+}
+
+#[cfg(windows)]
+fn native_apply(
+    prev: [Option<combo::Combo>; 4],
+    want: [Option<combo::Combo>; 4],
+) -> [Option<SettingsErrorCode>; 4] {
+    native::request(|reply| native::Request::Apply { prev, want, reply }).unwrap_or_else(|e| {
+        logx::warn("hotkeys", &format!("apply: {e}"));
+        // The engine is unreachable: every requested chord is unusable for now.
+        want.map(|w| w.map(|_| SettingsErrorCode::Invalid))
+    })
+}
+
+#[cfg(windows)]
+fn native_status() -> [Option<SettingsErrorCode>; 4] {
+    native::request(|reply| native::Request::Status { reply }).unwrap_or_else(|e| {
+        logx::warn("hotkeys", &format!("status: {e}"));
+        [None; 4]
+    })
+}
+
+#[cfg(windows)]
+fn native_suspend(suspend: bool) {
+    let r = if suspend {
+        native::request(|reply| native::Request::Suspend { reply })
+    } else {
+        native::request(|reply| native::Request::Resume { reply })
+    };
+    if let Err(e) = r {
+        logx::warn("hotkeys", &format!("suspend({suspend}): {e}"));
+    }
+}
+
+#[cfg(windows)]
+fn sync_hook_result() -> Result<(), String> {
+    let needed = native::has_hook_bindings() || CAPTURE.lock().is_some();
+    native::sync_hook(needed)
+}
+
+#[cfg(not(windows))]
+fn native_apply(_: [Option<combo::Combo>; 4], _: [Option<combo::Combo>; 4]) -> [Option<SettingsErrorCode>; 4] {
+    [None; 4]
+}
+#[cfg(not(windows))]
+fn native_status() -> [Option<SettingsErrorCode>; 4] {
+    [None; 4]
+}
+#[cfg(not(windows))]
+fn native_suspend(_: bool) {}
+#[cfg(not(windows))]
+fn sync_hook_result() -> Result<(), String> {
+    Ok(())
+}
+
+fn sync_hook() {
+    if let Err(e) = sync_hook_result() {
+        logx::warn("hotkeys", &format!("hook: {e}"));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn errors_follow_field_order() {
+        let errs = [None, Some(SettingsErrorCode::Taken), None, Some(SettingsErrorCode::Invalid)];
+        let out = to_errors(&errs);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].field, "hotkeys.stackNext");
+        assert_eq!(out[0].code, SettingsErrorCode::Taken);
+        assert_eq!(out[1].field, "hotkeys.ignoreNext");
+    }
+
+    #[test]
+    fn parse_errors_win_over_os_errors() {
+        let a = [Some(SettingsErrorCode::Invalid), None, None, None];
+        let b = [Some(SettingsErrorCode::Taken), Some(SettingsErrorCode::Taken), None, None];
+        assert_eq!(merge(a, b), [Some(SettingsErrorCode::Invalid), Some(SettingsErrorCode::Taken), None, None]);
+    }
+
+    #[test]
+    fn slots_match_fields() {
+        assert_eq!(ACTIONS.len(), combo::FIELDS.len());
+        assert_eq!(ACTIONS[0], HotkeyAction::Summon);
+        assert_eq!(combo::FIELDS[1], "hotkeys.stackNext");
+    }
 }

@@ -152,16 +152,23 @@ mod runtime {
                     logx::warn("capture", &format!("paste stack push: {e}"));
                 }
             }
-            if outcome.app_icon_missing {
-                if let (Some(app_id), Some(exe)) = (outcome.app_id, exe) {
-                    if let Some(png) = icons::png_for(exe) {
+            match (outcome.app_icon_missing, outcome.app_id, exe) {
+                (true, Some(app_id), Some(exe)) => {
+                    // Blocking is fine here (worker thread, once per app).
+                    if let Some(icon) = icons::png_for(exe) {
                         if let Some(store) = self.app.try_state::<Store>() {
-                            if let Err(e) = store.set_app_icon(app_id, &png) {
+                            if let Err(e) = store.set_app_icon(app_id, &icon.png) {
                                 logx::warn("capture", &format!("set_app_icon({app_id}): {e}"));
                             }
                         }
                     }
                 }
+                // Warm the in-memory cache (background) so `app_icon_data_url` on the shelf
+                // summon path is a hit for apps the user copies from.
+                (_, _, Some(exe)) => {
+                    let _ = icons::data_url_cached(exe);
+                }
+                _ => {}
             }
         }
 
@@ -350,12 +357,15 @@ pub fn set_collect(app: &AppHandle, value: bool) -> Result<CaptureStatus, String
 }
 
 /// `data:image/png;base64,…` icon of an executable from the capture icon cache
-/// (extracted once per exe). Used by paste (`TargetInfo.iconUrl`) and `apps_running`.
-/// `None` when unavailable. Blocking on a cache miss (shell icon extraction).
+/// (extracted once per exe, failures remembered). Used by paste on the shelf summon path
+/// (`TargetInfo.iconUrl`), so it **never blocks**: a hit is a map lookup + a copy of the
+/// pre-encoded URL; a miss returns `None` at once and extracts in the background (the next
+/// call — the next summon — gets the icon). The capture worker pre-warms the cache for every
+/// app the user copies from.
 #[allow(dead_code)] // W1-C calls it
 pub fn app_icon_data_url(exe: &str) -> Option<String> {
     #[cfg(windows)]
-    return icons::data_url(exe);
+    return icons::data_url_cached(exe);
     #[cfg(not(windows))]
     {
         let _ = exe;

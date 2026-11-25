@@ -1,53 +1,136 @@
 <script lang="ts">
-  // W0 stub of the HUD toast (W1-D replaces it): shows the text of the last `hud:show`.
-  // Browser preview: /hud.html?kind=copied|stack_empty|paused|elevated
+  // HUD toast (SPEC §1, ARCHITECTURE §7): a monochrome capsule at the cursor, never focused
+  // (Rust shows the window with SWP_NOACTIVATE; it is click-through). Each `hud:show` shows
+  // the toast for ~1.4 s, then the exit transition runs and Rust hides the window at 1.66 s.
+  // Browser preview on the mock: /hud.html?kind=copied (static) · &text=… · ?demo=1.
+  import { onMount } from "svelte";
   import Ico from "$lib/components/Ico.svelte";
-  import { t, type TranslationKey } from "$lib/i18n/index.svelte";
+  import Kbd from "$lib/components/Kbd.svelte";
+  import { t } from "$lib/i18n/index.svelte";
   import { onHudShow } from "$lib/ipc/events";
-  import type { HudKind, HudShow } from "$lib/ipc/types";
-  import type { IconName } from "$lib/icons";
+  import type { HudShow } from "$lib/ipc/types";
+  import { HUD_KINDS, KIND_ICON, KIND_KEY, VISIBLE_MS, isSameToast, previewFromQuery, segments } from "./toast";
 
-  const KEY: Record<HudKind, TranslationKey> = {
-    copied: "hud.copied",
-    stack_empty: "hud.stackEmpty",
-    paused: "hud.paused",
-    elevated: "hud.elevated",
-  };
-  const ICON: Record<HudKind, IconName> = { copied: "check", stack_empty: "stack", paused: "pause", elevated: "shield" };
+  const preview = typeof location !== "undefined" ? previewFromQuery(location.search) : { toast: null, demo: false };
 
-  const initialKind = typeof location !== "undefined" ? new URLSearchParams(location.search).get("kind") : null;
-  let shown = $state<HudShow | null>(initialKind && initialKind in KEY ? { kind: initialKind as HudKind } : null);
+  let toast = $state<HudShow | null>(preview.toast);
+  let visible = $state(preview.toast !== null);
+  /** Re-keys the capsule so a different toast plays its entry again. */
+  let seq = $state(0);
+  let hideTimer: ReturnType<typeof setTimeout> | undefined;
 
-  $effect(() => {
-    const off = onHudShow((p) => (shown = p));
-    return () => void off.then((f) => f());
+  function present(next: HudShow, autoHide = true): void {
+    if (!isSameToast(toast, visible, next)) {
+      toast = next;
+      seq += 1;
+    }
+    visible = true;
+    clearTimeout(hideTimer);
+    if (autoHide) hideTimer = setTimeout(() => (visible = false), VISIBLE_MS);
+  }
+
+  // onMount, not $effect: present() reads state, which an effect would track and re-run on.
+  onMount(() => {
+    const off = onHudShow((p) => present(p));
+    // ?demo=1 — every kind in turn with the real timing (checks the motion in a browser).
+    let i = 0;
+    const demo = preview.demo ? setInterval(() => present({ kind: HUD_KINDS[i++ % HUD_KINDS.length] }), 2200) : undefined;
+    if (preview.demo) present({ kind: HUD_KINDS[i++] });
+    return () => {
+      clearTimeout(hideTimer);
+      clearInterval(demo);
+      void off.then((f) => f());
+    };
   });
+
+  const parts = $derived(toast && !toast.text ? segments(t(KIND_KEY[toast.kind])) : null);
 </script>
 
-{#if shown}
-  <div class="hud" role="status" aria-live="polite">
-    <Ico name={ICON[shown.kind]} size={16} />
-    <span>{shown.text ?? t(KEY[shown.kind])}</span>
-  </div>
-{/if}
+<div class="stage">
+  {#if toast}
+    {#key seq}
+      <div class="hud" class:out={!visible} role="status" aria-live="polite">
+        <Ico name={KIND_ICON[toast.kind]} size={16} />
+        <span class="msg">
+          {#if parts}
+            {#each parts as part, i (i)}
+              {#if part.kind === "keys"}<Kbd>{t("hud.pasteKeys")}</Kbd>{:else}{part.text}{/if}
+            {/each}
+          {:else}
+            {toast.text}
+          {/if}
+        </span>
+      </div>
+    {/key}
+  {/if}
+</div>
 
 <style>
   :global(html),
   :global(body) {
     background: transparent;
+    overflow: hidden;
+    user-select: none;
+  }
+  /* The window is larger than the capsule (picker/geometry.rs HUD_SIZE 400×112): the
+     transparent margin holds --shadow-pop. The capsule is 40 px tall, centred. */
+  .stage {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
   }
   .hud {
     display: inline-flex;
     align-items: center;
     gap: 8px;
-    margin: 8px;
-    padding: 10px 16px;
+    height: 40px;
+    max-width: calc(100% - 64px);
+    box-sizing: border-box;
+    padding: 0 16px 0 14px;
     border-radius: 999px;
     background: var(--color-paper);
     color: var(--color-ink);
     box-shadow: var(--shadow-pop);
     font-size: var(--text-row);
     font-weight: 600;
+    line-height: 1;
     white-space: nowrap;
+    /* No fill-mode: a kept end frame would override the .out transition. */
+    animation: hud-in 190ms var(--ease-liquid);
+    transition:
+      opacity 170ms var(--ease-out-soft),
+      transform 170ms var(--ease-out-soft);
+  }
+  .hud.out {
+    opacity: 0;
+    transform: translateY(4px) scale(0.97);
+  }
+  .msg {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  @keyframes hud-in {
+    from {
+      opacity: 0;
+      transform: translateY(6px) scale(0.94);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+  /* app.css collapses durations under reduced motion; also drop the movement itself. */
+  @media (prefers-reduced-motion: reduce) {
+    .hud,
+    .hud.out {
+      transform: none;
+    }
   }
 </style>
