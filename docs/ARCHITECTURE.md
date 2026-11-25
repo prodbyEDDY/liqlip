@@ -74,7 +74,7 @@ liqlip/
       content.rs                общий хэш + правила содержимого (превью, усечение, метрики) — §15
       events.rs                 типизированные эмиттеры всех событий §9.7 (имена + адресация)
       tray.rs · theme.rs · logx.rs · fsx.rs · autostart.rs · i18n_native.rs
-    tauri.conf.json · capabilities/default.json · icons/ (временные, PQ-01)
+    tauri.conf.json · capabilities/default.json · icons/ (знак Liqlip, W2-D — §16)
   tests/                        *.test.mjs (node:test) · helpers/bundle.mjs (esbuild → ESM) ·
                                 fixtures/settings.default.json (дефолты: Rust ≡ мок)
   docs/                         эта библиотека
