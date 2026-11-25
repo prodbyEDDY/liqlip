@@ -1,0 +1,16 @@
+Liqlip
+Copyright © 2026 Liqlip. All rights reserved.
+
+Liqlip 1.x is proprietary software distributed for personal use. No license is
+granted to copy, modify, redistribute, sublicense or sell it, in whole or in part,
+beyond what applicable law allows without one.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY ARISING
+FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR ITS USE.
+
+Liqlip contains open-source components that remain under their own licenses:
+see THIRD-PARTY.txt (Rust crates, JavaScript packages, fonts) and heroicons.txt
+(interface icons).

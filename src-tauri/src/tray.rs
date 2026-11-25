@@ -1,7 +1,8 @@
-//! Tray icon + menu (SPEC §5). Coordinator module (W0). Labels come from `i18n_native`;
-//! actions call the module APIs of §15 (stubs until W1). The menu is rebuilt by
-//! [`refresh`] — call it after anything the menu shows changes (pause state, stack size,
-//! language, summon hotkey); it is cheap and callable from any thread.
+//! Tray icon + menu (SPEC §5). Coordinator module (W0, polished in W2-D). Labels come
+//! from `i18n_native`; actions call the module APIs of §15. The menu, icon and tooltip are
+//! rebuilt by [`refresh`] — call it after anything they show changes (pause state, stack
+//! size, language, summon hotkey, taskbar theme or scale); it is cheap and callable from any
+//! thread.
 
 use crate::i18n_native::{self, Key, Lang};
 use crate::model::{ChangeOrigin, ClipsChange, ClipsChanged};
@@ -13,10 +14,23 @@ use tauri::{AppHandle, Manager};
 
 const TRAY_ID: &str = "liqlip";
 
-const ICON_LIGHT: &[u8] = include_bytes!("../icons/tray-light.png");
-const ICON_DARK: &[u8] = include_bytes!("../icons/tray-dark.png");
-const ICON_LIGHT_PAUSED: &[u8] = include_bytes!("../icons/tray-light-paused.png");
-const ICON_DARK_PAUSED: &[u8] = include_bytes!("../icons/tray-dark-paused.png");
+/// Tray glyphs from `scripts/brand.mjs` (ARCHITECTURE §16): black on transparent, hinted per
+/// pixel size. Windows draws a notification-area icon at SM_CXSMICON for the taskbar's DPI —
+/// 16 px at 100 %, 20 at 125 %, 24 at 150 %, 28 at 175 %, 32 at 200 %, 40 at 250 %, 48 at
+/// 300 % — so the exact size is handed over instead of letting the shell resample one PNG.
+/// `(px, recording, paused)`; ascending.
+const ICONS: [(u32, &[u8], &[u8]); 7] = [
+    (16, include_bytes!("../icons/tray/16.png"), include_bytes!("../icons/tray/16-paused.png")),
+    (20, include_bytes!("../icons/tray/20.png"), include_bytes!("../icons/tray/20-paused.png")),
+    (24, include_bytes!("../icons/tray/24.png"), include_bytes!("../icons/tray/24-paused.png")),
+    (28, include_bytes!("../icons/tray/28.png"), include_bytes!("../icons/tray/28-paused.png")),
+    (32, include_bytes!("../icons/tray/32.png"), include_bytes!("../icons/tray/32-paused.png")),
+    (40, include_bytes!("../icons/tray/40.png"), include_bytes!("../icons/tray/40-paused.png")),
+    (48, include_bytes!("../icons/tray/48.png"), include_bytes!("../icons/tray/48-paused.png")),
+];
+
+/// `CaptureStatus.pausedUntil` for "paused until resumed" (contract §9.5, `model.rs`).
+const PAUSED_UNTIL_RESUMED: i64 = -1;
 
 /// Pause / delete-recent periods offered by the menu, in minutes.
 const PAUSES: [(&str, Option<i64>, Key); 4] = [
@@ -87,16 +101,20 @@ struct TrayState {
     lang: Lang,
     summon: String,
     paused: bool,
+    /// `CaptureStatus.pausedUntil`: `None` recording, [`PAUSED_UNTIL_RESUMED`], or Unix ms.
+    paused_until: Option<i64>,
     stack: usize,
 }
 
 impl TrayState {
     fn read(app: &AppHandle) -> TrayState {
         let s = settings::get(app);
+        let paused_until = capture::status(app).paused_until;
         TrayState {
             lang: i18n_native::resolve(s.general.language),
             summon: s.hotkeys.summon,
-            paused: capture::status(app).paused_until.is_some(),
+            paused: paused_until.is_some(),
+            paused_until,
             stack: paste::stack::len(app),
         }
     }
@@ -105,21 +123,60 @@ impl TrayState {
         i18n_native::tr(self.lang, key)
     }
 
-    fn tooltip(&self) -> &'static str {
-        self.t(if self.paused { Key::TrayTooltipPaused } else { Key::TrayTooltip })
+    /// "Liqlip — recording" / "Liqlip — paused until 14:30" / "Liqlip — recording paused",
+    /// plus " · Paste stack: 3" while the stack is not empty.
+    fn tooltip(&self) -> String {
+        let until = self.paused_until.filter(|&ms| ms != PAUSED_UNTIL_RESUMED).and_then(local_time_label);
+        tooltip_text(self.lang, self.paused, until.as_deref(), self.stack)
     }
 
     fn icon(&self) -> Image<'static> {
-        let light_taskbar = taskbar_is_light();
-        let bytes = match (light_taskbar, self.paused) {
-            (true, false) => ICON_LIGHT,
-            (true, true) => ICON_LIGHT_PAUSED,
-            (false, false) => ICON_DARK,
-            (false, true) => ICON_DARK_PAUSED,
-        };
-        // The PNGs are compiled in; decoding can only fail if they were replaced by junk.
-        Image::from_bytes(bytes).unwrap_or_else(|_| Image::new(&[0, 0, 0, 0], 1, 1).to_owned())
+        let px = tray_icon_px();
+        let (_, recording, paused) = ICONS.iter().find(|(size, _, _)| *size >= px).unwrap_or(&ICONS[ICONS.len() - 1]);
+        let bytes = if self.paused { paused } else { recording };
+        // The PNGs are compiled in (and decoded by a test); failure means they were replaced by junk.
+        let Ok(img) = Image::from_bytes(bytes) else { return Image::new_owned(vec![0, 0, 0, 0], 1, 1) };
+        if taskbar_is_light() {
+            img
+        } else {
+            whitened(&img)
+        }
     }
+}
+
+/// The tooltip from its parts (pure, so it is unit-tested). `until` = the local time a
+/// timed pause ends, already formatted.
+fn tooltip_text(lang: Lang, paused: bool, until: Option<&str>, stack: usize) -> String {
+    let t = |k| i18n_native::tr(lang, k);
+    let state = match (paused, until) {
+        (false, _) => t(Key::TrayTooltip).to_string(),
+        (true, Some(time)) => paused_until_template(lang).replace("{time}", time),
+        (true, None) => t(Key::TrayTooltipPaused).to_string(),
+    };
+    if stack == 0 {
+        state
+    } else {
+        format!("{state} · {}", t(Key::TrayStack).replace("{n}", &stack.to_string()))
+    }
+}
+
+/// TEMPORARY (W2-D): this string belongs in `i18n_native` as `Key::TrayTooltipPausedUntil`
+/// — the coordinator's file; the snippet is in the W2-D report. Replace the call with
+/// `t(Key::TrayTooltipPausedUntil)` and delete this function when it lands.
+fn paused_until_template(lang: Lang) -> &'static str {
+    match lang {
+        Lang::En => "Liqlip — paused until {time}",
+        Lang::Ru => "Liqlip — пауза до {time}",
+    }
+}
+
+/// The glyph recoloured white for a dark taskbar (alpha kept: the glyph is one colour).
+fn whitened(img: &Image<'_>) -> Image<'static> {
+    let mut rgba = img.rgba().to_vec();
+    for px in rgba.chunks_exact_mut(4) {
+        px[..3].fill(255);
+    }
+    Image::new_owned(rgba, img.width(), img.height())
 }
 
 /// `"Alt + V"` → `"Alt+V"` for the right-aligned menu hint.
@@ -273,6 +330,64 @@ fn taskbar_is_light() -> bool {
     false
 }
 
+/// The pixel size Windows draws a notification-area icon at: SM_CXSMICON for the taskbar's
+/// DPI. The taskbar's own DPI (`GetDpiForWindow` on `Shell_TrayWnd`) follows a scale change
+/// made after sign-in; the system DPI is the fallback when there is no Explorer taskbar.
+/// https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-getsystemmetricsfordpi
+/// https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-getdpiforwindow
+#[cfg(windows)]
+fn tray_icon_px() -> u32 {
+    use windows::core::{w, PCWSTR};
+    use windows::Win32::UI::HiDpi::{GetDpiForSystem, GetDpiForWindow, GetSystemMetricsForDpi};
+    use windows::Win32::UI::WindowsAndMessaging::{FindWindowW, SM_CXSMICON};
+    // SAFETY: plain queries with constant arguments and no out-pointers; FindWindowW returns
+    // an error instead of a null HWND, and GetDpiForWindow returns 0 for an invalid one.
+    let px = unsafe {
+        let taskbar = FindWindowW(w!("Shell_TrayWnd"), PCWSTR::null()).map(|hwnd| GetDpiForWindow(hwnd)).unwrap_or(0);
+        let dpi = if taskbar != 0 { taskbar } else { GetDpiForSystem() };
+        GetSystemMetricsForDpi(SM_CXSMICON, dpi)
+    };
+    u32::try_from(px).ok().filter(|&p| p > 0).unwrap_or(16)
+}
+
+#[cfg(not(windows))]
+fn tray_icon_px() -> u32 {
+    16
+}
+
+/// A Unix-ms instant as the user's local short time ("14:30", "2:30 PM"): UTC → local time
+/// zone, then the locale's time format without seconds.
+/// https://learn.microsoft.com/windows/win32/api/timezoneapi/nf-timezoneapi-systemtimetotzspecificlocaltime
+/// https://learn.microsoft.com/windows/win32/api/datetimeapi/nf-datetimeapi-gettimeformatex
+#[cfg(windows)]
+fn local_time_label(unix_ms: i64) -> Option<String> {
+    use windows::core::PCWSTR;
+    use windows::Win32::Foundation::{FILETIME, SYSTEMTIME};
+    use windows::Win32::Globalization::{GetTimeFormatEx, TIME_NOSECONDS};
+    use windows::Win32::System::Time::{FileTimeToSystemTime, SystemTimeToTzSpecificLocalTime};
+    // FILETIME counts 100 ns ticks since 1601-01-01 UTC; Unix time starts 11 644 473 600 s later.
+    let ticks = u64::try_from(unix_ms).ok()?.checked_add(11_644_473_600_000)?.checked_mul(10_000)?;
+    let ft = FILETIME { dwLowDateTime: ticks as u32, dwHighDateTime: (ticks >> 32) as u32 };
+    let (mut utc, mut local) = (SYSTEMTIME::default(), SYSTEMTIME::default());
+    let mut buf = [0u16; 64];
+    // SAFETY: every pointer refers to a live local of the right type; the buffer length is
+    // passed by the slice; a null locale name = LOCALE_NAME_USER_DEFAULT, a null format = the
+    // locale's own.
+    let written = unsafe {
+        FileTimeToSystemTime(&ft, &mut utc).ok()?;
+        SystemTimeToTzSpecificLocalTime(None, &utc, &mut local).ok()?;
+        GetTimeFormatEx(PCWSTR::null(), TIME_NOSECONDS, Some(&local), PCWSTR::null(), Some(&mut buf))
+    };
+    // The count includes the terminating NUL; 0 = failure.
+    let len = usize::try_from(written).ok()?.checked_sub(1)?;
+    Some(String::from_utf16_lossy(&buf[..len]))
+}
+
+#[cfg(not(windows))]
+fn local_time_label(_unix_ms: i64) -> Option<String> {
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -284,10 +399,55 @@ mod tests {
     }
 
     #[test]
-    fn tray_icons_decode() {
-        for bytes in [ICON_LIGHT, ICON_DARK, ICON_LIGHT_PAUSED, ICON_DARK_PAUSED] {
-            let img = Image::from_bytes(bytes).unwrap();
-            assert_eq!((img.width(), img.height()), (32, 32));
+    fn tray_icons_decode_at_their_size() {
+        let mut last = 0;
+        for (px, recording, paused) in ICONS {
+            assert!(px > last, "ICONS must be ascending");
+            last = px;
+            for bytes in [recording, paused] {
+                let img = Image::from_bytes(bytes).unwrap();
+                assert_eq!((img.width(), img.height()), (px, px));
+                // Monochrome glyph on transparency: some opaque ink, some empty pixels.
+                assert!(img.rgba().chunks_exact(4).any(|p| p[3] == 255));
+                assert!(img.rgba().chunks_exact(4).any(|p| p[3] == 0));
+            }
         }
+    }
+
+    #[test]
+    fn whitened_keeps_the_alpha() {
+        let img = Image::new_owned(vec![0, 0, 0, 255, 0, 0, 0, 128, 0, 0, 0, 0], 3, 1);
+        let white = whitened(&img);
+        assert_eq!(white.rgba(), &[255, 255, 255, 255, 255, 255, 255, 128, 255, 255, 255, 0]);
+        assert_eq!((white.width(), white.height()), (3, 1));
+    }
+
+    #[test]
+    fn tooltip_says_the_state_and_the_stack() {
+        let rec = tooltip_text(Lang::En, false, None, 0);
+        assert_eq!(rec, i18n_native::tr(Lang::En, Key::TrayTooltip));
+        assert_eq!(tooltip_text(Lang::En, true, Some("14:30"), 0), "Liqlip — paused until 14:30");
+        assert_eq!(tooltip_text(Lang::Ru, true, Some("14:30"), 0), "Liqlip — пауза до 14:30");
+        assert_eq!(tooltip_text(Lang::Ru, true, None, 0), i18n_native::tr(Lang::Ru, Key::TrayTooltipPaused));
+        let with_stack = tooltip_text(Lang::Ru, true, Some("14:30"), 3);
+        assert_eq!(with_stack, format!("Liqlip — пауза до 14:30 · {}", i18n_native::tr(Lang::Ru, Key::TrayStack).replace("{n}", "3")));
+        // Shell_NotifyIcon truncates szTip at 128 UTF-16 units.
+        assert!(with_stack.encode_utf16().count() < 128);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn local_time_label_formats_a_time() {
+        // 2023-11-14 22:13:20 UTC — a time of day in any zone; the format is the user's.
+        let label = local_time_label(1_700_000_000_000).unwrap();
+        assert!(label.chars().any(|c| c.is_ascii_digit()), "{label}");
+        assert!(!label.contains('\0'));
+        assert_eq!(local_time_label(-5), None);
+    }
+
+    #[test]
+    fn tray_icon_px_is_a_real_size() {
+        let px = tray_icon_px();
+        assert!((16..=256).contains(&px), "{px}");
     }
 }

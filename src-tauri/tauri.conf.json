@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Liqlip",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "identifier": "com.liqlip.app",
   "build": {
     "beforeDevCommand": "pnpm dev",
@@ -12,17 +12,37 @@
   "app": {
     "windows": [],
     "security": {
-      "csp": null
+      "csp": {
+        "default-src": "'self'",
+        "connect-src": "ipc: http://ipc.localhost 'self'",
+        "img-src": "'self' data: http://liq.localhost",
+        "style-src": "'self' 'unsafe-inline'",
+        "font-src": "'self' data:"
+      }
     }
   },
   "bundle": {
     "active": true,
     "targets": ["nsis"],
+    "publisher": "Liqlip",
+    "copyright": "© 2026 Liqlip. All rights reserved.",
+    "shortDescription": "Keyboard-first clipboard manager for Windows",
+    "longDescription": "Liqlip keeps everything you copy (text, links, code, colors, contacts, images and files) on your computer, one Alt + V away: a monochrome shelf of cards with full-text search and filter tokens, Quick Look, an actions menu, text transforms, folders, favorites, snippets, a paste stack and OCR on images. Password-manager copies are never stored.",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
       "icons/128x128@2x.png",
       "icons/icon.ico"
-    ]
+    ],
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "languages": ["English", "Russian"],
+        "displayLanguageSelector": false,
+        "installerIcon": "icons/icon.ico",
+        "uninstallerIcon": "icons/icon.ico",
+        "sidebarImage": "icons/nsis-sidebar.bmp"
+      }
+    }
   }
 }
