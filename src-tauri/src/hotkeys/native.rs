@@ -10,7 +10,9 @@
 //!   callback does no work (CLAUDE.md hard rule 3): it reads/updates small state with
 //!   `try_lock` (never blocks), decides "swallow", posts a job to the dispatcher, returns.
 //!   https://learn.microsoft.com/windows/win32/winmsg/lowlevelkeyboardproc — a callback that
-//!   exceeds `LowLevelHooksTimeout` is silently removed on Windows 7+.
+//!   exceeds `LowLevelHooksTimeout` is silently removed on Windows 7+, and "there is no way for
+//!   the application to know whether the hook is removed". So the hook thread re-installs the
+//!   hook every [`HOOK_REFRESH_MS`] while it exists — the watchdog (W4, FIX-12).
 
 use super::combo::{self, Backend, Combo, Mods, Slots};
 use super::{Capture, Job, CAPTURE};
@@ -30,9 +32,9 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, DispatchMessageW, GetMessageW, KillTimer, PeekMessageW, PostThreadMessageW,
-    SetTimer, SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx, HC_ACTION, KBDLLHOOKSTRUCT,
-    MSG, PM_NOREMOVE, WH_KEYBOARD_LL, WM_APP, WM_HOTKEY, WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN,
-    WM_SYSKEYUP, WM_TIMER,
+    SetTimer, SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx, HC_ACTION, HHOOK,
+    KBDLLHOOKSTRUCT, MSG, PM_NOREMOVE, WH_KEYBOARD_LL, WM_APP, WM_HOTKEY, WM_KEYDOWN, WM_KEYUP,
+    WM_SYSKEYDOWN, WM_SYSKEYUP, WM_TIMER,
 };
 
 /// Liqlip's own SendInput (W1-C `paste::input::{EXTRA_INFO_TAG, MASK_VK}`): every injected
@@ -49,6 +51,8 @@ const WM_WAKE: u32 = WM_APP + 0x4C;
 const ID_BASE: i32 = 0x4C10;
 /// A chord taken by another app at startup is retried this often until it binds.
 const RETRY_MS: u32 = 30_000;
+/// Hook watchdog period (FIX-12): a hook Windows removed silently is back within this time.
+const HOOK_REFRESH_MS: u32 = 10_000;
 const REPLY_TIMEOUT: Duration = Duration::from_secs(2);
 
 // ── Registrar ───────────────────────────────────────────────────────────────
@@ -387,30 +391,85 @@ fn install() -> Result<HookThread, String> {
     }
 }
 
-fn hook_loop(ready: mpsc::Sender<Result<u32, String>>) {
-    let mut msg = MSG::default();
-    // SAFETY: create the queue first (see registrar_loop), then install the global LL hook;
-    // "this hook is called in the context of the thread that installed it … the thread that
-    // installed the hook must have a message loop" (LowLevelKeyboardProc docs).
-    let hook = unsafe {
-        let _ = PeekMessageW(&mut msg, None, 0, 0, PM_NOREMOVE);
+/// `SetWindowsHookExW(WH_KEYBOARD_LL)` from the calling thread — always the hook thread: "this
+/// hook is called in the context of the thread that installed it … the thread that installed
+/// the hook must have a message loop" (LowLevelKeyboardProc docs).
+fn install_ll_hook() -> Result<HHOOK, String> {
+    // SAFETY: global LL hook with this module's procedure; no other preconditions.
+    unsafe {
         let hinst = GetModuleHandleW(None).map(|h| HINSTANCE(h.0)).ok();
         SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_proc), hinst, 0)
-    };
-    let hook = match hook {
+    }
+    .map_err(|e| format!("SetWindowsHookExW: {e}"))
+}
+
+fn remove_ll_hook(hook: HHOOK) -> Result<(), String> {
+    // SAFETY: a handle returned by SetWindowsHookExW on this thread.
+    unsafe { UnhookWindowsHookEx(hook) }.map_err(|e| format!("UnhookWindowsHookEx: {e}"))
+}
+
+/// One watchdog step (FIX-12). The fresh hook goes in FIRST — "the SetWindowsHookEx function
+/// always installs a hook procedure at the beginning of a hook chain" (Hooks Overview) — and
+/// only then the old one is removed, so there is no moment without a hook. Both calls run
+/// back to back on the hook thread, which pumps no messages in between, so no key event is
+/// handled twice. A failed install keeps the old hook (tried again on the next tick); a failed
+/// removal is only logged (Windows may have removed that hook already).
+fn refresh_hook<H>(
+    old: H,
+    install: impl FnOnce() -> Result<H, String>,
+    remove: impl FnOnce(H) -> Result<(), String>,
+) -> (H, bool) {
+    match install() {
+        Ok(new) => {
+            if let Err(e) = remove(old) {
+                logx::warn("hotkeys", &format!("hook watchdog: old hook: {e}"));
+            }
+            (new, true)
+        }
+        Err(e) => {
+            logx::warn("hotkeys", &format!("hook watchdog: {e}; the current hook is kept"));
+            (old, false)
+        }
+    }
+}
+
+fn hook_loop(ready: mpsc::Sender<Result<u32, String>>) {
+    let mut msg = MSG::default();
+    // SAFETY: create the queue first (see registrar_loop), then install the global LL hook.
+    unsafe {
+        let _ = PeekMessageW(&mut msg, None, 0, 0, PM_NOREMOVE);
+    }
+    let mut hook = match install_ll_hook() {
         Ok(h) => h,
         Err(e) => {
-            let _ = ready.send(Err(format!("SetWindowsHookExW: {e}")));
+            let _ = ready.send(Err(e));
             return;
         }
     };
     // SAFETY: trivial.
     let _ = ready.send(Ok(unsafe { GetCurrentThreadId() }));
+    // The watchdog: a thread timer (hWnd NULL → WM_TIMER on this thread's queue, SetTimer docs),
+    // alive exactly as long as the hook is needed — this thread exists only then.
+    // SAFETY: thread timer owned by this thread, killed below.
+    let watchdog = unsafe { SetTimer(None, 0, HOOK_REFRESH_MS, None) };
+    if watchdog == 0 {
+        logx::warn("hotkeys", "hook watchdog timer could not be created");
+    }
     loop {
         // SAFETY: message loop on the hook thread (required for LL hooks).
         let r = unsafe { GetMessageW(&mut msg, None, 0, 0) };
         if r.0 <= 0 || msg.message == WM_WAKE {
             break;
+        }
+        if msg.message == WM_TIMER && watchdog != 0 && msg.wParam.0 == watchdog {
+            let (h, fresh) = refresh_hook(hook, install_ll_hook, remove_ll_hook);
+            hook = h;
+            if fresh {
+                // A modifier that changed while a removed hook was gone is not missed. Safe
+                // between callbacks: the key state is current for every event already seen.
+                seed_modifiers();
+            }
+            continue;
         }
         // SAFETY: msg came from GetMessageW.
         unsafe {
@@ -418,9 +477,12 @@ fn hook_loop(ready: mpsc::Sender<Result<u32, String>>) {
             DispatchMessageW(&msg);
         }
     }
-    // SAFETY: the handle returned by SetWindowsHookExW on this thread.
-    if let Err(e) = unsafe { UnhookWindowsHookEx(hook) } {
-        logx::warn("hotkeys", &format!("UnhookWindowsHookEx: {e}"));
+    if watchdog != 0 {
+        // SAFETY: the thread timer created above.
+        let _ = unsafe { KillTimer(None, watchdog) };
+    }
+    if let Err(e) = remove_ll_hook(hook) {
+        logx::warn("hotkeys", &e);
     }
 }
 
@@ -577,4 +639,47 @@ fn on_input(vk: u32, pressed: bool, mods: Mods) -> bool {
         super::schedule(Job::Action(super::ACTIONS[slot]));
     }
     swallow
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::RefCell;
+
+    /// W4, FIX-12: the watchdog puts the new hook in before it takes the old one out (never a
+    /// moment without a hook); a failed install keeps the old hook and removes nothing.
+    #[test]
+    fn hook_watchdog_installs_first_then_removes_the_old_hook() {
+        let calls = RefCell::new(Vec::new());
+        let (h, fresh) = refresh_hook(
+            1u32,
+            || {
+                calls.borrow_mut().push("install".to_string());
+                Ok(2)
+            },
+            |old| {
+                calls.borrow_mut().push(format!("remove {old}"));
+                Ok(())
+            },
+        );
+        assert_eq!((h, fresh), (2, true));
+        assert_eq!(*calls.borrow(), ["install", "remove 1"]);
+
+        // Windows had already removed the old hook: the new one is still taken.
+        let (h, fresh) = refresh_hook(2u32, || Ok(3), |_| Err("invalid hook handle".into()));
+        assert_eq!((h, fresh), (3, true));
+
+        // The install fails (e.g. resources): keep the current hook, remove nothing.
+        calls.borrow_mut().clear();
+        let (h, fresh) = refresh_hook(
+            3u32,
+            || Err("SetWindowsHookExW: failed".into()),
+            |old| {
+                calls.borrow_mut().push(format!("remove {old}"));
+                Ok(())
+            },
+        );
+        assert_eq!((h, fresh), (3, false));
+        assert!(calls.borrow().is_empty());
+    }
 }
