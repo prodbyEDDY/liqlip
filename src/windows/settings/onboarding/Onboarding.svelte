@@ -319,13 +319,14 @@
     flex-direction: column;
     min-height: 0;
   }
+  /* Full-width scroller (its bar sits at the window edge, not mid-window) with the step
+     centred inside at ≤ 536 px; the bottom fades where content continues under the footer. */
   .ob__body {
     flex: 1 1 auto;
     width: 100%;
-    max-width: 600px;
-    margin: 0 auto;
-    padding: 32px 32px 24px;
+    padding: 32px max(32px, calc((100% - 536px) / 2)) 24px;
     overflow-y: auto;
+    mask-image: linear-gradient(to bottom, #000 calc(100% - 24px), transparent);
     animation: step-in var(--dur-base) var(--ease-out-soft);
   }
   @keyframes step-in {

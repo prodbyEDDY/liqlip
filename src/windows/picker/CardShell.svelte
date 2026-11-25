@@ -10,6 +10,7 @@
   // field) are rendered by `Card.svelte` as siblings, not inside the option.
   import type { Snippet } from "svelte";
   import Ico from "$lib/components/Ico.svelte";
+  import type { IconName } from "$lib/icons";
   import { t } from "$lib/i18n/index.svelte";
   import Hl from "./Hl.svelte";
 
@@ -21,6 +22,8 @@
     label: string;
     tooltip: string;
     appIcon: string | null;
+    /** Glyph when there is no app icon (snippets: a document). */
+    fallbackIcon?: IconName;
     badge: string;
     favorite?: boolean;
     /** Keyboard cursor (what Enter acts on). */
@@ -49,6 +52,7 @@
     label,
     tooltip,
     appIcon,
+    fallbackIcon = "appWindow",
     badge,
     favorite = false,
     current = false,
@@ -103,7 +107,7 @@
       {#if appIcon && !iconFailed}
         <img class="meta__appimg" src={appIcon} alt="" loading="lazy" decoding="async" draggable="false" onerror={() => (iconFailed = true)} />
       {:else}
-        <Ico name="appWindow" size={14} />
+        <Ico name={fallbackIcon} size={14} />
       {/if}
     </span>
     <span class="meta__title" class:meta__title--hidden={renaming}><Hl text={title} {terms} /></span>

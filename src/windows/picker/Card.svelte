@@ -133,6 +133,7 @@
   {label}
   {tooltip}
   appIcon={app?.iconUrl ?? null}
+  fallbackIcon={snippet ? "document" : "appWindow"}
   {badge}
   favorite={clip?.favorite ?? false}
   {current}
