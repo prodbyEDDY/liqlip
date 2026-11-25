@@ -29,6 +29,17 @@ pub fn init(app: &AppHandle) {
     writer::start_owner();
 }
 
+/// Tap the unassigned "menu mask" key (VK `0xE8`) so a held Alt / Win is not released bare
+/// (menu mode / Start) — the hotkey engine calls it after its hook swallowed a chord's main
+/// key (W3-A, `hotkeys::combo::masks_release`). Tagged like every Liqlip keystroke, so the
+/// hook passes it on unseen.
+pub(crate) fn mask_modifier_release() {
+    #[cfg(windows)]
+    if !input::mask_tap() {
+        crate::logx::warn("paste", "mask key not inserted");
+    }
+}
+
 /// Records for a paste/copy, in request order. Missing / deleted ids are skipped
 /// (`not_found`); any other store error aborts.
 pub(crate) fn load_payloads(app: &AppHandle, ids: &[i64]) -> Result<Vec<PastePayload>, String> {

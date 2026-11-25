@@ -2,7 +2,7 @@
 //! Errors: `Err("<code>: …")` with code `not_found | busy | invalid | failed`.
 
 use super::machine::{Event, Phase};
-use super::{dispatch, dispatch_wait, win, PICKER};
+use super::{dispatch_wait, win, PICKER};
 use crate::events;
 use crate::model::{MonitorInfo, TargetInfo};
 use std::time::Duration;
@@ -12,7 +12,7 @@ use tauri::{AppHandle, Manager};
 /// (only while the shelf still holds focus). Idempotent.
 #[tauri::command]
 pub async fn picker_hide(app: AppHandle, restore_focus: bool) -> Result<(), String> {
-    dispatch(&app, Event::Hide { restore: restore_focus });
+    super::close(&app, restore_focus);
     Ok(())
 }
 

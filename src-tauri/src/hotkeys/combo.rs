@@ -222,6 +222,15 @@ pub fn mods_without_vk(mut mods: Mods, vk: u32) -> Mods {
     mods
 }
 
+/// The hook swallowed a key while these modifiers are held: will their release be "bare"?
+/// A held Alt whose press and release reach the app with nothing between them puts it in
+/// menu mode; a bare Win release opens Start. Then the dispatcher taps the unassigned mask
+/// key (AutoHotkey's "menu mask key", the same trick the paste uses — `paste::input`).
+/// Ctrl and Shift releases do nothing on their own.
+pub fn masks_release(held: Mods) -> bool {
+    held.alt || held.win
+}
+
 /// Canonical display token of a main VK (reverse of `token_vk`). `None` = not bindable.
 pub fn vk_token(vk: u32) -> Option<String> {
     Some(match vk {
@@ -539,6 +548,20 @@ mod tests {
         assert_eq!(combo_string(Mods { alt: true, ..Default::default() }, "V"), "Alt + V");
         let lwin = combo_string(Mods { ctrl: true, ..Default::default() }, sided_modifier_token(0x5B).unwrap());
         assert_eq!(parse(&lwin), Some(c("Ctrl + LWin")));
+    }
+
+    /// W3-A: a swallowed `Alt + F12` / `Super + Menu` would leave a bare Alt / Win release.
+    #[test]
+    fn swallowed_alt_or_win_chords_need_the_mask() {
+        assert!(masks_release(c("Alt + F12").mods));
+        assert!(masks_release(c("Ctrl + Alt + Menu").mods));
+        assert!(masks_release(c("Super + F12").mods));
+        assert!(!masks_release(c("Ctrl + F12").mods));
+        assert!(!masks_release(c("Ctrl + Shift + Menu").mods));
+        assert!(!masks_release(c("F12").mods));
+        // The main key's own family is not "held": swallowing LWin itself leaves no bare Win.
+        assert!(!masks_release(c("Ctrl + LWin").mods));
+        assert!(masks_release(c("Alt + RCtrl").mods), "Alt stays held while RCtrl is swallowed");
     }
 
     #[test]

@@ -182,37 +182,9 @@ pub fn resolve_chord(exe: &str, keys: &[PasteKey]) -> PasteChord {
     user.map(|k| k.chord).or_else(|| builtin_chord(&base)).unwrap_or(PasteChord::CtrlV)
 }
 
-/// Main (non-modifier) key of a hotkey in the Liquid Tools notation (`"Alt + Shift + V"` →
-/// `0x56`): letters, digits, F1–F24 and a few named keys. `None` when unknown — the caller
-/// then simply does not wait for it.
-pub fn hotkey_main_vk(combo: &str) -> Option<u16> {
-    let last = combo.rsplit('+').next()?.trim();
-    let upper = last.to_ascii_uppercase();
-    let b = upper.as_bytes();
-    if b.len() == 1 && (b[0].is_ascii_uppercase() || b[0].is_ascii_digit()) {
-        return Some(b[0] as u16);
-    }
-    if let Some(n) = upper.strip_prefix('F').and_then(|n| n.parse::<u16>().ok()) {
-        if (1..=24).contains(&n) {
-            return Some(0x70 + n - 1);
-        }
-    }
-    match upper.as_str() {
-        "SPACE" => Some(0x20),
-        "ENTER" | "RETURN" => Some(VK_RETURN),
-        "TAB" => Some(0x09),
-        "INSERT" | "INS" => Some(VK_INSERT),
-        "HOME" => Some(0x24),
-        "END" => Some(0x23),
-        "PAGEUP" => Some(0x21),
-        "PAGEDOWN" => Some(0x22),
-        "`" | "BACKQUOTE" => Some(0xC0),
-        _ => None,
-    }
-}
-
 /// Keys that could still be physically down when a paste starts and would autorepeat into
-/// the target once focus moves (Enter / Ctrl+1…9 in the shelf, the hotkey's main key).
+/// the target once focus moves (Enter / Ctrl+1…9 in the shelf, the hotkey's main key —
+/// `hotkeys::main_vk`, the same grammar that binds it).
 pub fn trigger_keys(extra: &[u16]) -> Vec<u16> {
     let mut v: Vec<u16> = vec![VK_RETURN];
     v.extend(0x31..=0x39u16); // '1'..'9'
@@ -236,7 +208,12 @@ pub fn is_extended_vk(vk: u16) -> bool {
 }
 
 #[cfg(windows)]
-pub use win::{foreground_layout, held_modifiers, send, wait_released};
+pub use win::{foreground_layout, held_modifiers, mask_tap, send, wait_released};
+
+/// One tap of the mask key: press + release.
+pub fn mask_keys() -> [Key; 2] {
+    [down(MASK_VK), up(MASK_VK)]
+}
 
 #[cfg(windows)]
 mod win {
@@ -316,6 +293,17 @@ mod win {
                 },
             },
         }
+    }
+
+    /// [`super::mask_keys`] into whatever window has the keyboard (the key is unassigned: no
+    /// app acts on it; it only stops a held Alt / Win from being released bare). Any layout
+    /// will do — an unassigned key maps to no scan code. `true` = both inserted (UIPI blocks
+    /// it when an elevated window has the keyboard).
+    pub fn mask_tap() -> bool {
+        // SAFETY: plain query; 0 = the calling thread's layout, always a valid HKL.
+        let layout = Layout(unsafe { GetKeyboardLayout(0) });
+        let keys = super::mask_keys();
+        send(&keys, layout) == keys.len()
     }
 
     /// Inject `keys` in one `SendInput` call; returns how many events were inserted (0 =
@@ -399,6 +387,8 @@ mod tests {
     fn shift_only_needs_no_mask_and_win_does() {
         assert_eq!(release_sequence(&[VK_RSHIFT, VK_LSHIFT]), vec![up(VK_LSHIFT), up(VK_RSHIFT)]);
         assert_eq!(release_sequence(&[VK_LWIN]), vec![down(MASK_VK), up(MASK_VK), up(VK_LWIN)]);
+        // The hotkey engine's mask tap (W3-A) is the very same press + release.
+        assert_eq!(&release_sequence(&[VK_LWIN])[..2], &mask_keys());
         assert!(release_sequence(&[]).is_empty());
         // Alt+Shift+V (stack hotkey) with both still held; AltGr = LCtrl + RAlt.
         assert_eq!(
@@ -425,18 +415,6 @@ mod tests {
         assert_eq!(resolve_chord("c:\\windows\\notepad.exe", &keys), PasteChord::CtrlV);
         assert_eq!(resolve_chord("", &keys), PasteChord::CtrlV, "unknown exe → Ctrl+V");
         assert_eq!(exe_basename("C:/a/B.EXE"), "b.exe");
-    }
-
-    #[test]
-    fn hotkey_main_key_parsing() {
-        assert_eq!(hotkey_main_vk("Alt + Shift + V"), Some(VK_V));
-        assert_eq!(hotkey_main_vk("Ctrl + 1"), Some(0x31));
-        assert_eq!(hotkey_main_vk("Alt + F12"), Some(0x7B));
-        assert_eq!(hotkey_main_vk("Win + Space"), Some(0x20));
-        assert_eq!(hotkey_main_vk("Alt + v"), Some(VK_V));
-        assert_eq!(hotkey_main_vk("RAlt"), None);
-        assert_eq!(hotkey_main_vk(""), None);
-        assert_eq!(hotkey_main_vk("Alt + F25"), None);
     }
 
     #[test]
