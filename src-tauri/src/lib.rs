@@ -22,6 +22,8 @@ mod theme;
 mod tray;
 
 use model::Bounds;
+use std::sync::mpsc;
+use std::time::Duration;
 use tauri::{
     AppHandle, Manager, PhysicalPosition, PhysicalSize, RunEvent, WebviewUrl, WebviewWindow,
     WebviewWindowBuilder, WindowEvent,
@@ -210,11 +212,15 @@ pub fn run() {
             // W1-B: RemoveClipboardFormatListener + stop the capture threads.
             capture::stop();
             if let Some(win) = app.get_webview_window(events::SETTINGS) {
-                save_settings_bounds(&win);
+                // The process ends after this callback: give the write a moment, never hang.
+                save_settings_bounds(&win, Some(EXIT_SAVE_WAIT));
             }
         }
     });
 }
+
+/// How long the exit waits for the settings-window geometry to be written.
+const EXIT_SAVE_WAIT: Duration = Duration::from_millis(1000);
 
 /// `setup()` step 6. Geometry/visibility after this point belongs to `picker` (W1-D);
 /// these are only the creation parameters of ARCHITECTURE §2.
@@ -285,7 +291,7 @@ fn build_windows(app: &AppHandle, current: &model::Settings) -> tauri::Result<()
         settings_win.on_window_event(move |event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
-                save_settings_bounds(&w);
+                save_settings_bounds(&w, None);
                 let _ = w.hide();
             }
         });
@@ -322,13 +328,33 @@ fn build_windows(app: &AppHandle, current: &model::Settings) -> tauri::Result<()
 
 /// Persist the settings window's outer position + inner size (physical px). Skipped while
 /// minimized / maximized so the restored geometry is the normal one.
-fn save_settings_bounds(win: &WebviewWindow) {
+///
+/// Called on the MAIN thread (close button, exit). The geometry is read here, but the write
+/// goes to a short thread: `patch_window_bounds` takes the settings write lock, and
+/// `settings_set` holds that lock while its subscribers run — some of which wait for the main
+/// thread (window getters, W3-A). Waiting for the lock here would deadlock the app. `wait`
+/// bounds how long the caller waits for the write (`None` — not at all).
+fn save_settings_bounds(win: &WebviewWindow, wait: Option<Duration>) {
     if win.is_minimized().unwrap_or(true) || win.is_maximized().unwrap_or(true) {
         return;
     }
     let (Ok(pos), Ok(size)) = (win.outer_position(), win.inner_size()) else { return };
     let bounds = Bounds { x: pos.x, y: pos.y, w: size.width as i32, h: size.height as i32 };
-    settings::patch_window_bounds(win.app_handle(), bounds);
+    let app = win.app_handle().clone();
+    let (tx, rx) = mpsc::channel();
+    let spawned = std::thread::Builder::new().name("liqlip-settings-bounds".into()).spawn(move || {
+        settings::patch_window_bounds(&app, bounds);
+        let _ = tx.send(());
+    });
+    match (spawned, wait) {
+        (Ok(_), Some(w)) => {
+            if rx.recv_timeout(w).is_err() {
+                logx::warn("settings", "window bounds not saved in time");
+            }
+        }
+        (Ok(_), None) => {}
+        (Err(e), _) => logx::warn("settings", &format!("window bounds thread: {e}")),
+    }
 }
 
 /// Restore saved geometry only if its title-bar strip is still on some monitor
@@ -344,6 +370,10 @@ fn restore_settings_bounds(win: &WebviewWindow, b: Bounds) {
     if !on_screen {
         return;
     }
+    // Position → size → position (as the shelf docks, `picker::apply_geometry`): moving onto a
+    // monitor with another scale makes tao apply WM_DPICHANGED's suggested rect, which would
+    // rescale a size set beforehand; the size set on the target monitor stays exact (W3-A).
+    let _ = win.set_position(PhysicalPosition::new(b.x, b.y));
     let _ = win.set_size(PhysicalSize::new(b.w.max(1) as u32, b.h.max(1) as u32));
     let _ = win.set_position(PhysicalPosition::new(b.x, b.y));
 }
