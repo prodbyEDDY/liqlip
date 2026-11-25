@@ -32,7 +32,9 @@ parking_lot = "0.12"
 base64 = "0.22"
 tokio = { version = "1", features = ["sync"] }
 # Store (W1-A): SQLite compiled in (FTS5 + trigram verified by W0, see ARCHITECTURE §0).
-rusqlite = { version = "0.43", features = ["bundled"] }
+# W1-A: `functions` registers `liq_icontains` (Unicode case-insensitive search for terms
+# shorter than a trigram; SQLite's LIKE folds ASCII only). No extra crates.
+rusqlite = { version = "0.43", features = ["bundled", "functions"] }
 # Image encode/decode for the clipboard (W1-B capture, W1-A thumbnails, W1-C writer).
 # W1-B: `bmp` decodes CF_DIB / CF_DIBV5 (BmpDecoder::new_without_file_header); no extra crates.
 image = { version = "0.25", default-features = false, features = ["png", "bmp"] }
@@ -54,19 +56,38 @@ windows = { version = "0.62", features = [
     "Win32_Globalization",
     # RegGetValueW (tray icon variant for a light / dark taskbar).
     "Win32_System_Registry",
-    # W1-B capture: clipboard listener + snapshot (Open/Enum/GetClipboardData, sequence number,
-    # owner, AddClipboardFormatListener), HGLOBAL access, CF_HDROP (DragQueryFileW), app icons
-    # (SHDefExtractIconW / SHGetFileInfoW → GetIconInfo → GetDIBits, COM per call), owner process
-    # (OpenProcess + QueryFullProcessImageNameW), FileDescription (GetFileVersionInfoW /
-    # VerQueryValueW), message-only window (RegisterClassExW needs Gdi), cloaked-window filter
-    # for apps_running (DwmGetWindowAttribute).
+    # W1-C paste: OpenClipboard/EmptyClipboard/SetClipboardData/RegisterClipboardFormatW/
+    # GetClipboardSequenceNumber (writer.rs).
     "Win32_System_DataExchange",
+    # W1-C paste: GlobalAlloc/GlobalLock/GlobalUnlock for clipboard + drag HGLOBALs.
     "Win32_System_Memory",
-    "Win32_System_Threading",
+    # W1-C paste: CF_* constants, DROPEFFECT, IDropSource, OleInitialize (writer.rs, dragout.rs).
+    "Win32_System_Ole",
+    # W1-C paste: IDataObject/FORMATETC/STGMEDIUM/CoCreateInstance/CoInitializeEx (dragout.rs,
+    # open.rs); STGMEDIUM / IDataObject_Impl are gated on StructuredStorage in windows 0.62.
     "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+    # W1-C paste: MK_LBUTTON / MODIFIERKEYS_FLAGS (IDropSource::QueryContinueDrag).
+    "Win32_System_SystemServices",
+    # W1-C paste: OpenProcess/QueryFullProcessImageNameW/OpenProcessToken (focus.rs, uipi.rs).
+    "Win32_System_Threading",
+    # W1-C paste: GetModuleHandleW for the hidden clipboard-owner window class.
     "Win32_System_LibraryLoader",
+    # W1-C paste: GetTokenInformation(TokenIntegrityLevel) + SID sub-authorities (uipi.rs).
+    "Win32_Security",
+    # W1-C paste: GetFileVersionInfoW/VerQueryValueW (target app FileDescription, focus.rs).
     "Win32_Storage_FileSystem",
-    "Win32_Graphics_Gdi",
-    "Win32_Graphics_Dwm",
+    # W1-C paste: SendInput/GetAsyncKeyState/MapVirtualKeyExW/GetKeyboardLayout (input.rs).
+    "Win32_UI_Input_KeyboardAndMouse",
+    # W1-C paste: DROPFILES, SHOpenWithDialog, SHDoDragDrop, shell data objects, drag helper.
     "Win32_UI_Shell",
+    "Win32_UI_Shell_Common",
+    # W1-C paste: RegisterClassExW (WNDCLASSEXW has an HBRUSH), CreateBitmap for the drag image.
+    "Win32_Graphics_Gdi",
+    # W1-B capture uses the same surface for the clipboard listener + snapshot
+    # (DataExchange, Memory, Threading, LibraryLoader, Gdi for RegisterClassExW), app icons
+    # (Shell: SHDefExtractIconW / SHGetFileInfoW / DragQueryFileW; Com per call; Gdi:
+    # GetIconInfo → GetDIBits) and app names (Storage_FileSystem: GetFileVersionInfoW), plus:
+    # W1-B capture: DwmGetWindowAttribute(DWMWA_CLOAKED) — apps_running skips cloaked windows.
+    "Win32_Graphics_Dwm",
 ] }

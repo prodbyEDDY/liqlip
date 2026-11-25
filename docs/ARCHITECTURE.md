@@ -128,96 +128,93 @@ Alt+Tab, а tao пересчитывает `GWL_EXSTYLE` из своих фла�
 
 ## 4. Данные
 
+> Замер §4: 2026-11-26 (W1-A: хранилище реализовано целиком — `src-tauri/src/store/`;
+> `cargo test` 76/76, из них 53 теста хранилища, включая проверку планов запросов; нативно не
+> запускалось, стенда на 50 000 записей нет — решение Eddy).
+
 ### 4.1. Файлы
 
 ```
 %APPDATA%\com.liqlip.app\
-  liqlip.db (+ -wal, -shm)     SQLite
-  media\<id>.png               полноразмерные картинки
-  media\thumbs\<id>.png        превью 360 px по длинной стороне
+  liqlip.db (+ -wal, -shm)     SQLite (WAL)
+  liqlip.db.check              маркер: в работе встретился SQLITE_CORRUPT → на следующем старте quick_check
+  liqlip.db.corrupt-<ms>       битая база, отодвинутая при открытии (+ media.corrupt-<ms>, icons.corrupt-<ms>)
+  media\<id>.png               полноразмерные картинки и PNG-альтернатива текстовых записей (Excel)
+  media\thumbs\<id>.png        превью ≤ 360 px по длинной стороне (только image)
+  media\.staging-*.png         временные файлы вставки (переименовываются в <id>.png в транзакции)
   icons\<appId>.png            иконки приложений-источников (одна на exe)
   settings.json                Settings (§9.4), с полем version
   logs\liqlip.log              без содержимого буфера
 ```
 
+Имена файлов выводятся **только из id**, а id не переиспользуются (`AUTOINCREMENT`), поэтому файл
+можно удалять после коммита удаления строки, не боясь задеть новую запись. Пути в
+`clip_formats.path` / `apps.icon_path` (`media\<id>.png`, `icons\<id>.png`) — справочные.
+
 ### 4.2. Схема SQLite v1 (`PRAGMA user_version = 1`)
 
-Новое приложение — схема своя (неприкосновенность схемы Liquid Tools здесь не действует, но
-после релиза v1 эта схема меняется **только миграциями**).
+Новое приложение — схема своя; после релиза v1 она меняется **только миграциями** (шаг на
+версию, каждый в своей транзакции, `store/schema.rs::migrate`). Авторитетная копия SQL —
+`store/schema.rs::V1`; здесь — по существу.
+
+**Соединение** (`schema::open_db`, на каждое открытие): `busy_timeout = 3000` →
+`auto_vacuum = INCREMENTAL` (только у пустой базы — до первой таблицы) → `journal_mode = WAL` →
+`synchronous = NORMAL` · `foreign_keys = ON` · `secure_delete = FAST` ·
+`journal_size_limit = 16 МБ` → функция `liq_icontains` → (маркер `.check` → `quick_check`) →
+миграции → ремонт инварианта `fav_order` → `PRAGMA optimize = 0x10002`. Одно соединение под
+`parking_lot::Mutex` (без отравления); команды работают через `spawn_blocking`.
 
 ```sql
-PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;
-PRAGMA busy_timeout = 3000; PRAGMA foreign_keys = ON;
-
-CREATE TABLE apps (
-  id        INTEGER PRIMARY KEY,
-  exe       TEXT NOT NULL UNIQUE,      -- полный путь в нижнем регистре
-  name      TEXT NOT NULL,             -- FileDescription или имя файла без .exe
-  icon_path TEXT                       -- icons\<id>.png или NULL
-);
-
-CREATE TABLE folders (
-  id         INTEGER PRIMARY KEY,
-  name       TEXT NOT NULL UNIQUE COLLATE NOCASE,
-  position   REAL NOT NULL,            -- ручной порядок (дробные вставки)
-  created_at INTEGER NOT NULL
-);
-
+CREATE TABLE apps (id INTEGER PRIMARY KEY AUTOINCREMENT, exe TEXT NOT NULL UNIQUE /*lower*/,
+                   name TEXT NOT NULL, icon_path TEXT);
+CREATE TABLE folders (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+                      position REAL NOT NULL, created_at INTEGER NOT NULL);
 CREATE TABLE clips (
-  id          INTEGER PRIMARY KEY,
-  kind        TEXT NOT NULL,           -- text|link|code|color|contact|image|file
-  title       TEXT,                    -- пользовательское имя (NULL = авто)
-  preview     TEXT NOT NULL,           -- ≤ 512 символов для карточки
-  text        TEXT,                    -- полный текст (text/link/code/color/contact), пути файлов через \n
-  hash        TEXT NOT NULL UNIQUE,    -- хэш содержимого (глобальная дедупликация)
-  size        INTEGER NOT NULL DEFAULT 0, -- байты, которые хранит Liqlip (НЕ размер внешних файлов)
-  char_count  INTEGER, word_count INTEGER, line_count INTEGER,
-  width       INTEGER, height INTEGER, -- картинки
-  file_count  INTEGER,                 -- файлы
-  app_id      INTEGER REFERENCES apps(id) ON DELETE SET NULL,
-  created_at  INTEGER NOT NULL,        -- мс, первое копирование
-  copied_at   INTEGER NOT NULL,        -- мс, последнее копирование (порядок ленты)
-  copy_count  INTEGER NOT NULL DEFAULT 1,
-  used_at     INTEGER,                 -- мс, последняя вставка/копия из Liqlip
-  use_count   INTEGER NOT NULL DEFAULT 0,
-  favorite    INTEGER NOT NULL DEFAULT 0,
-  fav_order   REAL,                    -- ручной порядок в «Избранном»
-  folder_id   INTEGER REFERENCES folders(id) ON DELETE SET NULL,
-  deleted_at  INTEGER,                 -- мягкое удаление (окно отмены), чистится в фоне
-  ocr_text    TEXT,                    -- W2
-  ocr_state   INTEGER NOT NULL DEFAULT 0, -- 0 не нужно/нет, 1 ждёт, 2 готово, 3 ошибка
-  meta        TEXT                     -- JSON: ClipMeta (§9.2)
+  id INTEGER PRIMARY KEY AUTOINCREMENT,  -- id не переиспользуются: очередь вставки, кэш webview, файлы
+  kind TEXT NOT NULL, title TEXT, preview TEXT NOT NULL, text TEXT,
+  hash TEXT NOT NULL UNIQUE,             -- content::content_hash / image_hash (§15)
+  size INTEGER NOT NULL DEFAULT 0,       -- text + все clip_formats (вкл. полный PNG); превью не в счёт
+  char_count, word_count, line_count, width, height, file_count INTEGER,
+  app_id INTEGER REFERENCES apps(id) ON DELETE SET NULL,
+  created_at INTEGER NOT NULL, copied_at INTEGER NOT NULL, copy_count INTEGER NOT NULL DEFAULT 1,
+  used_at INTEGER, use_count INTEGER NOT NULL DEFAULT 0,
+  favorite INTEGER NOT NULL DEFAULT 0, fav_order REAL,
+  folder_id INTEGER REFERENCES folders(id) ON DELETE SET NULL,
+  deleted_at INTEGER, ocr_text TEXT, ocr_state INTEGER NOT NULL DEFAULT 0, meta TEXT /*ClipMeta JSON*/
 );
 CREATE INDEX idx_clips_feed     ON clips(copied_at DESC, id DESC) WHERE deleted_at IS NULL;
-CREATE INDEX idx_clips_kind     ON clips(kind, copied_at DESC)    WHERE deleted_at IS NULL;
-CREATE INDEX idx_clips_folder   ON clips(folder_id, copied_at DESC);
-CREATE INDEX idx_clips_fav      ON clips(favorite, fav_order);
-CREATE INDEX idx_clips_app      ON clips(app_id, copied_at DESC);
-
-CREATE TABLE clip_formats (           -- богатые форматы для «Вставить как…»
-  clip_id INTEGER NOT NULL REFERENCES clips(id) ON DELETE CASCADE,
-  format  TEXT NOT NULL,               -- html|rtf|png|files
-  data    BLOB,                        -- html/rtf/список файлов+DropEffect (≤ 2 МБ)
-  path    TEXT,                        -- для png — media\<id>.png
-  size    INTEGER NOT NULL,
-  PRIMARY KEY (clip_id, format)
-);
-
-CREATE TABLE snippets (
-  id INTEGER PRIMARY KEY, name TEXT NOT NULL, body TEXT NOT NULL,
-  keyword TEXT UNIQUE,                 -- зарезервировано под v2 (авторасширение)
-  position REAL NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
-  use_count INTEGER NOT NULL DEFAULT 0
-);
-
--- полнотекстовый поиск (external content); W1-A проверяет, что bundled SQLite собран с FTS5
--- и tokenizer 'trigram' доступен (SQLite ≥ 3.34); иначе — fallback LIKE с пометкой в отчёте
-CREATE VIRTUAL TABLE clips_fts USING fts5(
-  title, text, ocr_text, content='clips', content_rowid='id', tokenize='trigram'
-);
--- + триггеры AFTER INSERT/UPDATE/DELETE на clips для синхронизации clips_fts
-CREATE VIRTUAL TABLE snippets_fts USING fts5(name, body, content='snippets', content_rowid='id', tokenize='trigram');
+CREATE INDEX idx_clips_favfirst ON clips(favorite DESC, copied_at DESC, id DESC) WHERE deleted_at IS NULL;
+CREATE INDEX idx_clips_kind     ON clips(kind, copied_at DESC, id DESC, deleted_at) WHERE deleted_at IS NULL;
+CREATE INDEX idx_clips_folder   ON clips(folder_id, copied_at DESC, id DESC);   -- полный: и для FK
+CREATE INDEX idx_clips_app      ON clips(app_id, copied_at DESC, id DESC);      -- полный: и для FK
+CREATE INDEX idx_clips_history  ON clips(copied_at, id, size, favorite, folder_id, deleted_at)
+  WHERE deleted_at IS NULL AND favorite = 0 AND folder_id IS NULL;              -- ретенция (INDEXED BY)
+CREATE INDEX idx_clips_deleted  ON clips(deleted_at, copied_at) WHERE deleted_at IS NOT NULL;
+CREATE TABLE clip_formats (clip_id INTEGER NOT NULL REFERENCES clips(id) ON DELETE CASCADE,
+  format TEXT NOT NULL /*html|rtf|png|files*/, data BLOB, path TEXT, size INTEGER NOT NULL,
+  PRIMARY KEY (clip_id, format));
+CREATE TABLE snippets (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, body TEXT NOT NULL,
+  keyword TEXT UNIQUE, position REAL NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+  use_count INTEGER NOT NULL DEFAULT 0);
+CREATE INDEX idx_snippets_position ON snippets(position, id);
+CREATE VIRTUAL TABLE clips_fts USING fts5(title, text, ocr_text, content='clips', content_rowid='id',
+  tokenize='trigram');
+INSERT INTO clips_fts(clips_fts, rank) VALUES ('secure-delete', 1);
+-- триггеры clips_fts_ai (AFTER INSERT), clips_fts_ad (AFTER DELETE → 'delete' со старыми значениями),
+-- clips_fts_au (AFTER UPDATE OF title, text, ocr_text → 'delete' + insert): подъём copied_at,
+-- счётчики и флаги текст не перетокенизируют (lang_createtrigger: UPDATE OF срабатывает, только
+-- если колонка есть в SET)
+CREATE VIRTUAL TABLE snippets_fts USING fts5(name, body, content='snippets', content_rowid='id',
+  tokenize='trigram');   -- + 'secure-delete' + те же три триггера по name, body
 ```
+
+Отличия от плана W0: `AUTOINCREMENT` на всех таблицах; индекс `idx_clips_fav` не нужен
+(планировщик берёт `idx_clips_favfirst (favorite=?)` + маленькую сортировку); добавлены
+`idx_clips_favfirst`, `idx_clips_history`, `idx_clips_deleted`, `idx_snippets_position`;
+`idx_clips_kind` несёт `deleted_at` хвостом (покрывает счётчики — планировщик не считает условие
+частичного индекса выполненным для покрытия); `idx_clips_folder`/`idx_clips_app` с `id` и полные
+(обслуживают и `ON DELETE SET NULL`). `clip_formats` 'files' — JSON `{dropEffect, paths}`; 'png' есть
+у каждой картинки (единый список форматов и путь для вставки).
 
 **Хэш** (W0, `src-tauri/src/content.rs`, §15): XXH3-128 (`xxhash-rust`), 32 hex-символа, от
 `"liqlip:1\0" ‖ семейство ‖ "\0" ‖ каноническое содержимое`. Семейство, а не точный `kind`
@@ -225,33 +222,146 @@ CREATE VIRTUAL TABLE snippets_fts USING fts5(name, body, content='snippets', con
 версии поднимал старую запись, а не плодил двойник. Канон: текст — как есть (после усечения до 2 МБ);
 картинка — `width u32 LE ‖ height u32 LE ‖ RGBA8` (пиксели, а не байты PNG — не зависит от версии
 энкодера); файлы — пути в нижнем регистре, отсортированы, через `\n`. Значение закреплено тестом
-`content::tests::hash_is_stable` — менять формат после релиза нельзя.
+`content::tests::hash_is_stable` — менять формат после релиза нельзя. Хранилище своего хэша не
+заводит: при усечении текста > 2 МБ / списка > 2 000 путей и при правке/создании текста оно зовёт
+те же функции `content.rs`.
 
-**Правила:**
-- Вставка новой записи с существующим `hash` → `copied_at = now, copy_count += 1`, если запись
-  была мягко удалена — воскресить (`deleted_at = NULL`). Это «поднять наверх».
-- Мягкое удаление: `deleted_at = now`; все листинги фильтруют `deleted_at IS NULL`; чистка
-  (жёсткое удаление + файлы) — фоном для записей старше 2 минут после удаления.
-- `undoToken` — непрозрачная строка: список id + тип операции (удаление/перенос/очистка) +
-  предыдущие значения; живёт 2 минуты в памяти.
-- **Ретенция** (на старте, раз в час, после вставки записи с порогом «не чаще раза в 30 с»,
-  при сохранении настроек): удаляются только `favorite = 0 AND folder_id IS NULL` по
-  возрасту (`copied_at`), затем по числу (оставить новейшие N), затем по суммарному
-  `size` (+ размер медиа). Сниппеты не участвуют.
+**Правила (как реализовано):**
+- **Вставка из захвата** (`write.rs::insert_clip`, одна транзакция `IMMEDIATE`): `apps` upsert по exe
+  (`INSERT … ON CONFLICT(exe) DO UPDATE … RETURNING`; непустое имя из захвата обновляет старое,
+  пустое — оставляет; новое без имени — имя файла без `.exe`); запись с тем же `hash` (в том числе мягко
+  удалённая) → `copied_at = max(copied_at, new)`, `copy_count + 1`, `deleted_at = NULL`, источник —
+  последний, `kind` — новая классификация, `meta` — слияние полей (новое побеждает, где оно есть);
+  богатые форматы новой копии заменяют одноимённые старые; файлы картинки дописываются, только если
+  их нет. Иначе новая строка. PNG и превью пишутся **до** захвата блокировки во временный файл
+  `media\.staging-*` и в транзакции переименовываются в `<id>.png` (большая картинка не держит БД);
+  сбой → откат + удаление записанного. `size` пересчитывается из того, что реально сохранено.
+  Валидация: пустой текст / картинка без валидного PNG / файлы без путей / пустой хэш → `invalid`;
+  картинка > 64 МП → `invalid`; html/rtf > 2 МБ — отбрасываются (запись сохраняется); размеры
+  картинки берутся из заголовка PNG. После вставки — сигнал фоновому потоку (ретенция с порогом).
+- **Мягкое удаление** (`clips_delete`, всё или ничего): `deleted_at = now`; все листинги, `liq`-схема,
+  `get_for_paste`, детали фильтруют `deleted_at IS NULL`; фоновая чистка удаляет строки старше
+  2 минут жёстко вместе с файлами.
+- **`undoToken`** — непрозрачная строка-ключ (`u<seq>.<ms>`); данные (id, тип, прежние значения)
+  в памяти, TTL 2 мин, токен срабатывает один раз. Операции: удаление и «Очистить историю»
+  (возврат строк, ещё помеченных **этим** `deleted_at`), перенос в папку (прежняя папка каждой
+  записи; удалённая с тех пор папка → без папки), удаление папки (строка папки с тем же id; если имя
+  занято — «Имя 2»; участники возвращаются в неё, при `withClips` — и из удаления). Событие отмены:
+  удаление → `added`, папка → `updated`, очистка → `reset`.
+- **Удалить недавнее** (`clips_delete_recent`, трей): жёстко, без undo, всё с `copied_at ≥ now − N мин`
+  — избранное, папки и уже мягко удалённые тоже (подтверждает UI). Приватное действие: на его время
+  `secure_delete = ON`, затем `PRAGMA incremental_vacuum` (до конца — по одной странице за шаг) и
+  `PRAGMA wal_checkpoint(TRUNCATE)`; FTS — с `secure-delete`, так что токены пароля не остаются в
+  индексе.
+- **Очистить**: `history` — мягко всё, кроме избранного и папок (undo, событие `reset`); `all` — жёстко
+  все записи и папки (сниппеты и `apps` остаются), FTS очищается одной командой `'delete-all'` (триггер
+  удаления снимается и возвращается в той же транзакции), файлы удаляются, токены отмены сбрасываются,
+  приватный режим как у «удалить недавнее»; `undoToken: null`.
+- **Ретенция** (`lifecycle.rs::run_retention`): только «история» — живые записи с
+  `favorite = 0 AND folder_id IS NULL` (избранное, папки, сниппеты не трогаются **и не считаются** в
+  лимиты); по возрасту (`copied_at`; месяцы = 30 дней: 1d/1w/1m/3m/6m/1y = 1/7/30/90/180/365 дней) →
+  оставить новейшие `maxEntries` → удалять старейшие, пока сумма `size` истории не влезет в
+  `maxSizeMb`. Жёстко с файлами, пачками по 500 строк на транзакцию (захват и UI не ждут). Запуск: на
+  старте, раз в час, после вставки (не чаще раза в 30 с), сразу при смене `settings.storage`
+  (`settings::subscribe` только шлёт сигнал). Событие `clips:changed {origin:'retention',
+  change:'deleted', ids}` (ids — если ≤ 1 000).
+- **Избранное**: новое — в конец ручного порядка (`max(fav_order) + 1`, в порядке переданных id);
+  перенос — дробная середина между соседями, при зазоре < 1e-6 — перенумерация 1, 2, 3…; у каждого
+  избранного `fav_order` не NULL (ремонт на открытии). Папки — тот же алгоритм по `position`.
+- **Правка текста** (`clip_update_text`): только текстовые виды; новый хэш (`content_hash`), превью,
+  метрики, классификация (`capture::classify::classify_text`); **все** богатые форматы (html, rtf и
+  PNG-альтернатива с её файлом) сбрасываются — они больше не соответствуют тексту; совпадение с
+  другой живой записью → `invalid: duplicate`, с мягко удалённой — та удаляется жёстко.
+- **`auto_vacuum = INCREMENTAL`** (решение): включён в v1 (задать можно только до первой таблицы).
+  Свободные страницы возвращаются ОС `incremental_vacuum` после приватных действий, после крупной
+  ретенции (≥ 100 записей) и раз в час, если свободно ≥ 1 024 страниц (4 МБ). `VACUUM` не делается.
+- **Восстановление**: файл, который не открывается как база (`SQLITE_NOTADB`/`SQLITE_CORRUPT`), или
+  чужая SQLite-база без нашей версии отодвигаются вместе с `media\`/`icons\` (`*.corrupt-<ms>`) и
+  создаются заново; ошибка `SQLITE_CORRUPT` во время работы оставляет маркер `liqlip.db.check` →
+  следующий старт делает `quick_check`. База **новее** сборки (`user_version > 1`) не открывается
+  (`failed: …`, старт прерывается) — данные не уничтожаются.
 
 ### 4.3. Порядок ленты и курсор
 
 - По умолчанию: `ORDER BY copied_at DESC, id DESC`.
-- `favoritesFirst`: `ORDER BY favorite DESC, copied_at DESC, id DESC`.
-- Пилюля «Избранное»: `ORDER BY fav_order ASC, id ASC`.
-- Поиск с текстом: тот же порядок (предсказуемость важнее релевантности), матчинг через
-  `clips_fts MATCH`.
-- Курсор — **непрозрачная строка** (base64 от значений ключа сортировки последней строки);
-  фронт её не разбирает. Страница — 40 записей.
+- `favoritesFirst` (из настроек, читается на каждый `clips_list`): `ORDER BY favorite DESC,
+  copied_at DESC, id DESC` — во всех пилюлях, кроме «Избранного».
+- Пилюля «Избранное» (`filter.favorites: true`): `ORDER BY fav_order ASC, id ASC`.
+- Поиск с текстом: тот же порядок (предсказуемость важнее релевантности).
+- Курсор — **непрозрачная строка**: base64url от `r1:<copied_at>:<id>` / `f1:<fav>:<copied_at>:<id>` /
+  `m1:<биты f64 fav_order>:<id>`; keyset-условие row-value (`(copied_at, id) < (?, ?)` и т. п.).
+  Мусор или курсор **другого** порядка (например, `favoritesFirst` переключили между страницами) →
+  `invalid: cursor` (фронт начинает ленту заново). Пустая строка = первая страница.
+- `limit`: ≤ 0 → 40, больше 200 → 200; выбирается `limit + 1` строка — `nextCursor` есть, только если
+  дальше есть данные.
+- Фильтры §9.3 сочетаются через AND; пустой `kinds`/`appIds` = без фильтра; `favorites: false` = без
+  фильтра; `since`/`until` — по `copied_at`, включительно.
+- `thumbUrl` = `http://liq.localhost/thumb/<id>?v=<created_at>` (только image), `imageUrl` =
+  `http://liq.localhost/media/<id>?v=<created_at>`, `iconUrl` = `http://liq.localhost/icon/<id>?v=<8 hex
+  от exe>` (только если иконка есть) — `?v=` защищает кэш webview после пересоздания базы.
+- `formats`: text-виды — `text` + имеющиеся `html`, `rtf`, `png`; image — `png`; file — `files`, `text`.
+
+### 4.4. Поиск
+
+- Свободный текст режется на термы: пробелы разделяют, `"…"` держит фразу (незакрытая кавычка — до
+  конца); пустые и повторы (без учёта регистра) отбрасываются, не больше 32 термов. **Все** термы
+  должны совпасть (AND), каждый — как подстрока.
+- Терм ≥ 3 символов → `clips_fts MATCH` (title, text, ocr_text — полный текст, а не превью): каждый терм —
+  строка FTS5 в кавычках с удвоением `"` (fts5.html §3.1), так что `AND`, `NEAR`, `*`, `:`, `(`, `-`
+  пользователя — просто символы. trigram регистронезависим и для кириллицы (зонд W0 + тесты).
+- Терм < 3 символов trigram обслужить не может (fts5.html §4.3.5) → `liq_icontains(preview|title, терм)`:
+  своя SQL-функция (rusqlite `functions`), регистронезависимая по Unicode (`LIKE`/`lower()` SQLite
+  сворачивают только ASCII). Ищет по превью (≤ 512 символов) и заголовку.
+- `exclude` — те же правила: длинные одним `NOT IN (… MATCH "a" OR "b")`, короткие — `NOT liq_icontains`.
+- Сниппеты (`snippets_list`) — то же по `snippets_fts` (name, body), короткие термы — по name/body.
+
+### 4.5. Медиа и схема `liq`
+
+`store::serve_uri(app, path)` (`media.rs::serve_path`): `/thumb/<id>` — только живая запись `image`;
+нет файла превью → строится из `media\<id>.png` (≤ 360 px по длинной стороне, аспект сохранён,
+`image::DynamicImage::thumbnail`; картинка меньше — отдаётся как есть; > 64 МП — отказ) и
+записывается; `/media/<id>` — живая запись со строкой `clip_formats` 'png'; `/icon/<appId>` — приложение
+с `icon_path`. Иначе `None` (404). MIME `image/png`. Чтение БД — короткая блокировка, файлы — без неё.
+`set_app_icon(app_id, png)`: проверка сигнатуры PNG и размера (≤ 1 МБ), `icons\<id>.png` атомарно,
+`apps.icon_path`. `InsertOutcome.app_icon_missing` = нет `icon_path` или файла.
+
+### 4.6. Фоновый поток (`maint.rs`, `store::init`)
+
+Поток `liqlip-store`, сигналы по каналу (`Wake::Inserted` — после вставки, `Wake::Settings` — смена
+`storage.*`): каждые 30 с — истёкшие токены, чистка мягко удалённых (> 2 мин), маркер повреждения;
+ретенция — на старте, раз в час, после вставки (≥ 30 с от прошлой), по смене настроек; раз в час —
+`PRAGMA optimize` и `incremental_vacuum` при ≥ 4 МБ свободных страниц; на старте — уборка сирот
+(файлы `media`/`thumbs`/`icons` без строки, `.staging-*` старше часа; каталоги читаются **до** запроса
+к БД, поэтому файл свежей вставки не удаляется).
+
+### 4.7. Индексы и планы запросов
+
+Тест `store::feed::plans::hot_statements_use_indexes` проверяет `EXPLAIN QUERY PLAN` (≤ 300 строк, без
+стенда) и требует отсутствия голого `SCAN clips`:
+
+| Запрос | План |
+|---|---|
+| лента (первая страница / с курсором) | `SCAN c USING INDEX idx_clips_feed` / `SEARCH … idx_clips_feed (copied_at<?)` — без сортировки |
+| `favoritesFirst` + курсор | `SEARCH … idx_clips_favfirst ((favorite,copied_at)<(?,?))` |
+| пилюля «Избранное» | `SEARCH … idx_clips_favfirst (favorite=?)` + сортировка избранных |
+| тип (один / несколько) | `SEARCH … idx_clips_kind (kind=? AND copied_at<?)` (несколько — + сортировка) |
+| папка / приложения | `SEARCH … idx_clips_folder (folder_id=? AND copied_at<?)` / `idx_clips_app (app_id=?…)` |
+| `since`/`until` | `SEARCH … idx_clips_feed (copied_at>? AND copied_at<?)` |
+| поиск FTS | `SCAN clips_fts VIRTUAL TABLE` → `SEARCH c USING INTEGER PRIMARY KEY` + сортировка; с типом — `idx_clips_kind` + bloom-фильтр |
+| короткий терм / исключения | `SCAN c USING INDEX idx_clips_feed` (по порядку ленты до заполнения страницы) |
+| счётчики | `SCAN clips USING COVERING INDEX idx_clips_kind` + `idx_clips_favfirst (favorite=?)`; папки — `idx_clips_folder (folder_id=?)` |
+| ретенция (возраст / старейшие / итоги) | `COVERING INDEX idx_clips_history` (`INDEXED BY`) |
+| чистка / удалить недавнее | `idx_clips_deleted (deleted_at<?)` / `idx_clips_feed (copied_at>?)` ∪ `idx_clips_deleted` |
+| дедупликация | `sqlite_autoindex_clips_1 (hash=?)` |
+
+Известные пределы (по построению, без стенда): поиск с частым термом собирает все совпадения FTS и
+сортирует их (≈ число совпадений); короткий терм без совпадений проходит всю ленту по индексу
+(превью ≤ 512 символов); после реальных данных `PRAGMA optimize` (раз в час) соберёт статистику для
+планировщика.
 
 ## 5. Захват (`capture/`)
 
-> Замер: 2026-11-26 (W1-B: реализовано целиком; `cargo test` — 65 тестов модуля зелёные, включая
+> Замер: 2026-11-26 (W1-B: реализовано целиком; `cargo test` — 67 тестов модуля зелёные, включая
 > стенд 10 копий/с × 10 с: 100/100, задержка копия → запись p50 38 мс, max 47 мс; нативно не
 > запускалось — живая проверка по чек-листу в отчёте W1-B).
 
@@ -318,7 +428,11 @@ worker, `build_clip`, стенд), `formats.rs` (разбор CF_UNICODETEXT/CF_
   PNG»; только если тип image включён, иначе не читается вовсе). Картинка основная, если текста нет
   (пробельный текст = нет) или HTML-фрагмент — один `<img>` без видимого текста (браузерное
   «Копировать изображение»); нераскодируемая картинка при наличии текста → запись-текст.
-- **Self-copy:** `mark_own_write(seq)` кладёт номер в кольцо из 64 последних; проверка — в
+- **Self-copy:** вставка (W1-C, `paste::writer`) зовёт `mark_own_write(GetClipboardSequenceNumber())`
+  сразу после своего `CloseClipboard`, в том числе после частично неудачной записи (после успешного
+  `EmptyClipboard` номер всегда новый); пропускается обновление **ровно с этим номером**, следующее
+  (`seq + 1`, даже в том же окне дебаунса) захватывается — тест `own_write_skips_exactly_its_sequence_number`.
+  `mark_own_write(seq)` кладёт номер в кольцо из 64 последних; проверка — в
   capture-цикле до чтения, внутри снимка и ещё раз в worker (если `mark_own_write` проиграл гонку
   дебаунсу). Плюс страховка: владелец буфера — окно процесса Liqlip → пропуск. Если владельца нет,
   а впереди окно Liqlip (`echo x | clip` при открытых настройках) — это не «свой», источник неизвестен.
@@ -360,9 +474,14 @@ worker, `build_clip`, стенд), `formats.rs` (разбор CF_UNICODETEXT/CF_
   `events::capture_status` + `tray::refresh`.
 - **Иконки:** `SHDefExtractIconW` 64 px → иначе `SHGetFileInfoW(SHGFI_ICON|SHGFI_LARGEICON)` →
   `GetIconInfo`/`GetDIBits` → RGBA (альфа из AND-маски, если её нет в цвете) → 64×64 PNG; COM
-  STA на время вызова; кэш в памяти на exe (и промах тоже, ≤ 512); в Store — при
-  `InsertOutcome.app_icon_missing`. `app_icon_data_url` при промахе кэша **блокирует** на время
-  извлечения (единицы–десятки мс, один раз на exe).
+  STA на время вызова; кэш в памяти на exe (PNG + заранее закодированный data-URL; неудача тоже
+  запоминается — повторно не извлекается; ≤ 512); в Store — при `InsertOutcome.app_icon_missing`
+  (worker, блокирующе, один раз на приложение). **`app_icon_data_url` не блокирует никогда** — его
+  зовёт вставка на пути summon шелфа (`paste::focus`, путь exe в нижнем регистре): попадание —
+  поиск в карте + копия готовой строки; промах — сразу `None`, извлечение уходит в фоновый поток
+  `liqlip-clip-icons` (запросы дедуплицируются маркером «в работе»), следующий summon получает иконку.
+  Worker прогревает кэш для каждого приложения, из которого копируют. Блокирующие варианты
+  (`icons::png_for`/`data_url`) — только worker и `apps_running`.
 - **Имя приложения** — `FileDescription` (`GetFileVersionInfoW`/`VerQueryValueW`, языки из
   `\VarFileInfo\Translation` + запасные 0409/04B0, 0409/04E4), иначе имя файла без `.exe`; кэш.
 - **`apps_running`** — `EnumWindows`: видимые, без владельца, не tool-окна (кроме `WS_EX_APPWINDOW`),
@@ -380,15 +499,16 @@ worker, `build_clip`, стенд), `formats.rs` (разбор CF_UNICODETEXT/CF_
 (команда `apps_running`), `capture::clipboard_sequence()` (номер для `mark_own_write` без своей
 Win32-обвязки). Контракт IPC (§9) не менялся.
 
-**Тесты** (`cargo test capture::`, 65): классификация (цвета/ссылки/контакты/код/края), секреты
+**Тесты** (`cargo test capture::`, 67): классификация (цвета/ссылки/контакты/код/края), секреты
 (карты/ключи/PEM/ложные), CF_HTML и заголовки, состояние (пауза, таймер, пропуск, свои номера),
 снимок на фейковом буфере (один OpenClipboard, только нужные форматы, приоритеты, маркеры — 7 случаев
 вкл. Bitwarden и битый DWORD, игнор-лист, свой процесс, занятый буфер, лимиты, зависший формат и
 зависший маркер), worker (`build_clip`: поля, секреты, тумблеры, усечение, Excel текст+PNG, «Копировать
 изображение», дедуп PNG≡DIB, файлы), конвейер (старт, дубли событий, self-copy, пауза, пропуск,
 режим сбора, повторы при занятом буфере и неотвечающем владельце, игнор/маркеры, зависший рендер,
-поток событий), Win32-обёртки (зарегистрированные форматы, свой exe, FileDescription, иконка
-explorer.exe 64×64, listener — `WM_CLIPBOARDUPDATE`, отправленное самому себе, и остановка,
+поток событий, self-copy ровно по номеру), Win32-обёртки (зарегистрированные форматы, свой exe,
+FileDescription, иконка explorer.exe 64×64, неблокирующий `app_icon_data_url` < 5 мс на промахе и
+фоновое извлечение, listener — `WM_CLIPBOARDUPDATE`, отправленное самому себе, и остановка,
 `apps_running`), **стенд** `bench_10_copies_per_second_for_10_seconds`: 100 записей за 10 с из
 другого потока → 100/100 по порядку, все хэши разные, задержка p50 38 мс / max 47 мс (норма SPEC §7 —
 ≤ 300 мс).
@@ -399,30 +519,198 @@ explorer.exe 64×64, listener — `WM_CLIPBOARDUPDATE`, отправленное
 
 ## 6. Вставка (`paste/`)
 
-- **Цель** (`focus.rs`): при вызове шелфа (до показа) — `GetForegroundWindow()`; отбрасываем
-  свои окна (по HWND всех окон Liqlip, включая трей-меню), рабочий стол (`Progman`/`WorkerW`),
-  shell-трей (`Shell_TrayWnd`). Если отброшено — цель `None` (а **не** перезапись нулём
-  предыдущей). Для цели вычисляем `TargetInfo` (exe, имя, иконка, `elevated`).
-- **UIPI** (`uipi.rs`): `elevated = integrity(target process) > integrity(self)`
-  (`OpenProcessToken` + `GetTokenInformation(TokenIntegrityLevel)`); при отказе доступа к токену
-  — считать `elevated = true`.
-- **Запись в буфер** (`writer.rs`): одна транзакция `OpenClipboard/EmptyClipboard/SetClipboardData…`
-  с ретраями; текст+HTML(+RTF) / только текст (plain) / PNG + CF_DIB / CF_HDROP + `Preferred
-  DropEffect = DROPEFFECT_COPY` + текстовый fallback путей. Перенос писателей Liquid Tools
-  `clipboard/paste.rs` с исправлением утечки HGLOBAL при неудаче `OpenClipboard`.
-- **Ввод** (`input.rs`): `SendInput`. Перед `Ctrl+V` — отпустить все физически зажатые
-  модификаторы (`GetAsyncKeyState` для Shift/Ctrl/Alt/Win, синтетический keyup), затем chord
-  из `settings.picker.pasteKeys` для exe цели (по умолчанию Ctrl+V). `{cursor}` у сниппетов —
-  N нажатий ← после вставки.
-- **Поток вставки:** `picker::hide_now()` (без анимации ожидания) → `SetForegroundWindow(target)`
-  → опрос `GetForegroundWindow()` до совпадения (≤ 500 мс, шаг 10 мс) → запись в буфер → 30 мс →
-  `SendInput`. Если цель не стала активной → **ввод не посылаем**, данные уже в буфере,
-  `hud::show(Copied)`; `PasteOutcome { result: "copied", reason: "focus_lost" }`.
-  Без `SPI_SETFOREGROUNDLOCKTIMEOUT` (меняет системную настройку — запрещено).
-- **Очередь вставки** (`stack.rs`): в памяти, `Vec<StackItem>`; `paste_next` вставляет верхний
-  элемент в **текущее** активное окно (шелф не участвует), снимает его; события `stack:changed`.
-- **Drag-out** (`dragout.rs`): перенос Liquid Tools `src-tauri/src/dragout.rs` (OLE DoDragDrop);
-  текст тянется как текст, картинка — как PNG-файл из `media\`, файлы — CF_HDROP.
+> Замер: 2026-11-26 (W1-C, ветка `w1/paste`): модуль реализован целиком; `cargo test` — 49 тестов
+> чистой логики модуля (73 в крейте); нативно не запускалось (PQ-02) — фокус и ввод проверяются по
+> чек-листу из отчёта W1-C на INT-1.
+
+Файлы: `focus.rs` (цель) · `uipi.rs` (уровни целостности) · `writer.rs` (транзакция буфера + байтовые
+форматы) · `input.rs` (`SendInput`) · `compose.rs` (записи → содержимое буфера) · `flow.rs` (шаги
+вставки) · `stack.rs` (очередь) · `open.rs` (открыть / открыть с помощью / показать) · `dragout.rs`
+(OLE drag) · `commands.rs` (§9.6; всё блокирующее — в `spawn_blocking`).
+
+### 6.1. Цель (`focus.rs`)
+
+`capture_target()` (зовёт `picker::summon` **до** показа): `GetForegroundWindow()` → решение
+`classify()` (покрыто тестом):
+- **сам шелф** на переднем плане (повторный summon во время анимации закрытия, возврат после
+  `keepOpen`) → **прежняя цель сохраняется** — никогда не затирается «ничем» (баг Liquid Tools);
+- любое другое своё окно (по PID окна и PID его корневого владельца — настройки, трей-меню,
+  всплывашки WebView2), рабочий стол (`Progman`/`WorkerW`), панели задач (`Shell_TrayWnd`,
+  `Shell_SecondaryTrayWnd`, переполнение трея), невидимое/свёрнутое окно → цели нет (`None`,
+  Enter копирует — SPEC §3.1);
+- иначе — новая цель `Target { hwnd, pid, info: TargetInfo }`.
+
+`TargetInfo`: `exe` — полный путь в нижнем регистре (`QueryFullProcessImageNameW`); `name` —
+`FileDescription` из ресурса версии (`VerQueryValueW`, кэш на exe; иначе имя файла); `title` —
+`GetWindowTextW` (чужому окну не шлёт `WM_GETTEXT` — зависшая цель не блокирует); `iconUrl` —
+`capture::app_icon_data_url(exe)` (§15); `elevated` — §6.2. UWP-окна (`ApplicationFrameHost.exe`)
+описываются по процессу дочернего CoreWindow. `current_target()` — та же цель, если окно живо,
+видимо, не свёрнуто и принадлежит тому же PID (защита от переиспользованного HWND).
+
+### 6.2. UIPI (`uipi.rs`)
+
+`SendInput` «is subject to UIPI», а заблокированный вызов ничего не сообщает
+([SendInput](https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-sendinput)) — поэтому
+уровни сравниваются заранее: `OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)` →
+`OpenProcessToken(TOKEN_QUERY)` → `GetTokenInformation(TokenIntegrityLevel)` → последний
+sub-authority SID метки (low 0x1000 · medium 0x2000 · high 0x3000 · system 0x4000).
+`elevated = target > self`; цель, которую нельзя опросить, — `elevated = true` (copy-only — безопасная
+сторона). Если `SendInput` всё же вставил 0 событий — исход `copied/elevated` + HUD `elevated`.
+
+### 6.3. Запись в буфер (`writer.rs`)
+
+- **Владелец буфера** — скрытое message-only окно (`HWND_MESSAGE`) на своём потоке с циклом
+  сообщений: при `OpenClipboard(NULL)` «EmptyClipboard sets the clipboard owner to NULL; this causes
+  SetClipboardData to fail» ([OpenClipboard](https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-openclipboard)),
+  а не качающий сообщения владелец задержал бы чужой `EmptyClipboard` (`WM_DESTROYCLIPBOARD`).
+  Создаётся в `paste::init`.
+- **Одна транзакция**: все HGLOBAL выделяются и форматы регистрируются **до** открытия; `OpenClipboard`
+  — 11 попыток с бэкоффом 0/5/10/20/30/40/50/60/80/100/100 мс (≈ 0,5 с); `EmptyClipboard`;
+  `SetClipboardData` по порядку; `CloseClipboard`. Блок, не принятый системой, освобождается
+  (`OwnedGlobal::drop`) на любом пути ошибки — утечки Liquid Tools нет. Сразу после `CloseClipboard`
+  — `capture::mark_own_write(GetClipboardSequenceNumber())` (и при частичной неудаче: буфер уже
+  изменён). Успех = принят обязательный формат; необязательные — по возможности.
+- **Порядок форматов — от самого описательного** ([Clipboard Formats](https://learn.microsoft.com/windows/win32/dataxchg/clipboard-formats#multiple-clipboard-formats)):
+  текст — `HTML Format` → `Rich Text Format` → `CF_UNICODETEXT` (обяз.); картинка — `PNG` (файл
+  `media\<id>.png` как есть) → `CF_DIB` (обяз.; **одно** декодирование PNG, полупрозрачность
+  сведена на белый — CF_DIB альфу не несёт, альфу берут из PNG); файлы — `CF_HDROP` (обяз.;
+  DROPFILES `pFiles=20, fWide=1`, пути UTF-16 с двойным NUL) → `Preferred DropEffect = DROPEFFECT_COPY`
+  (вставка из истории никогда не перемещает оригиналы) → `CF_UNICODETEXT` со списком путей (CRLF).
+- **CF_HTML**: заголовок `Version:0.9` + `StartHTML/EndHTML/StartFragment/EndFragment` — байтовые
+  смещения от начала данных, 10 цифр с ведущими нулями (фиксированная длина заголовка);
+  `StartFragment` — сразу после `<!--StartFragment-->`, `EndFragment` — на `<!--EndFragment-->`;
+  UTF-8, NUL вне `EndHTML` ([HTML Clipboard Format](https://learn.microsoft.com/windows/win32/dataxchg/html-clipboard-format)).
+  Маркеры из хранилища сохраняются (терпимы к пробелам `<!-- StartFragment -->`); нет маркеров —
+  вставляются внутрь `<body>` или документ оборачивается; если в данных остался заголовок CF_HTML —
+  берётся только контекст. `SourceURL` не пишется (в `PastePayload` его нет).
+
+### 6.4. Что кладём (`compose.rs`)
+
+| Режим | Одна запись | Несколько записей |
+|---|---|---|
+| `auto` | текстовые виды: текст + HTML + RTF (`picker.alwaysPlain` → только текст); картинка: PNG + DIB; файлы: CF_HDROP | все не-картинки — файлы → **один** CF_HDROP (объединение путей без дублей); иначе текст через разделитель (файлы — путями); картинки пропускаются → `reason: 'partial'`; только картинки → первая картинка + `partial` |
+| `plain` | только `CF_UNICODETEXT` (файлы — путями); у картинки текста нет → вставляется картинка | текст через разделитель, картинки пропускаются (`partial`) |
+| `{format}` | ровно этот вид (+ текст как fallback для HTML/RTF); нет формата → `invalid` | `text` = plain; `files` — объединение файловых записей (`partial`, если были другие); `html/rtf/png` → `invalid` |
+
+Разделитель: из запроса (одиночный LF → CRLF), иначе `picker.mergeSeparator` (`\r\n` / пробел / таб /
+ничего). Удалённые записи пропускаются; все удалены → `failed/not_found`; PNG пропал из `media\` →
+`failed/not_found`. Использование (`store.mark_used(ids, picker.bumpOnPaste)` + `clips:changed
+{origin:'user', change:'updated'}`) отмечается для реально вставленных/скопированных записей.
+
+### 6.5. Ввод (`input.rs`)
+
+Один `SendInput` на вставку (события «are not interspersed» с пользовательскими):
+1. если физически зажат Alt или Win — нажатие неназначенной клавиши VK `0xE8` («Unassigned» в
+   [Virtual-Key Codes](https://learn.microsoft.com/windows/win32/inputdev/virtual-key-codes)): иначе
+   отпускание Alt было бы «голым» → меню цели (Win → «Пуск»); приём AutoHotkey «menu mask key», как
+   `dictation::mask_bare_modifier` в Liquid Tools;
+2. keyup всех физически зажатых L/R Shift/Ctrl/Alt/Win (`GetAsyncKeyState`);
+3. chord: `Ctrl+V` | `Shift+Insert` | `Ctrl+Shift+V`;
+4. keydown тех же модификаторов обратно + ещё одна маска, если среди них Alt/Win: логическое
+   состояние снова равно физическому, поэтому, удерживая `Alt+Shift` и нажимая `V`, пользователь
+   вставляет элемент за элементом, а не печатает «v»; финальное физическое отпускание не «голое»
+   (нет меню, «Пуска», переключения раскладки `Alt+Shift`).
+
+Клавиши — **VK + скан-код** без `KEYEVENTF_SCANCODE`: приложения ловят Ctrl+V по VK (`'V'` и в
+русской раскладке), скан-код — `MapVirtualKeyExW(vk, MAPVK_VK_TO_VSC_EX, <раскладка потока цели>)`,
+старший байт `0xE0` → `KEYEVENTF_EXTENDEDKEY` (Insert, стрелки, правые Ctrl/Alt, Win; запасная
+таблица, если перевода нет). `dwExtraInfo = 0x4C514C50` («LQLP») — LL-хук хоткеев (W1-D) может
+игнорировать наш ввод. Частичная вставка батча → keyup модификаторов chord'а.
+
+**Chord по приложению**: `settings.picker.pasteKeys` (запись с `\`/`/` сравнивается с полным путём,
+иначе с именем файла, без учёта регистра) → встроенные: `mintty.exe` и `putty.exe` → `Shift+Insert`
+(сверено: [mintty(1)](https://mintty.github.io/mintty.1.html) — «Shift+Ins: Paste», Ctrl+V только
+с `CtrlExchangeShift`; [PuTTY §3.1.1](https://the.earth.li/~sgtatham/putty/0.83/htmldoc/Chapter3.html)
+— Shift-Ins) → `Ctrl+V`. Для Windows Terminal правило не нужно: по умолчанию `ctrl+v`, `ctrl+shift+v`,
+`shift+insert` ([WT actions](https://learn.microsoft.com/windows/terminal/customize-settings/actions));
+консоль Windows 10/11 — «Enable Ctrl key shortcuts» включено по умолчанию.
+
+После вставки (`After`, через 40 мс, только во всё ещё активную цель): `caretBack` → `←` × n (≤ 5000)
+для `{cursor}`; `stack.newlineAfterPaste` → `Enter`.
+
+### 6.6. Поток (`flow.rs`)
+
+Чистый планировщик `plan(origin, route, closeOnCopy) → [Step]` (порядок закреплён тестами) +
+исполнитель; вставки сериализованы (вторая ждёт первую).
+
+| Откуда / цель | Шаги |
+|---|---|
+| шелф, цель вставляемая | `Write → WaitKeys → FocusTarget → HideShelf → Settle(30 мс) → Inject → After → HudIfNotPasted` |
+| шелф + `keepOpen` | `Write → WaitKeys → BeginHandoff → FocusTarget → Settle → Inject → After → ReturnToShelf → EndHandoff` |
+| шелф, цель elevated | `Write → WaitKeys → FocusTarget → HideShelf → Hud(elevated)` → `copied/elevated` (фокус возвращён окну админа — Ctrl+V одним нажатием; `SetForegroundWindow` UIPI не блокирует, ввод — блокирует) |
+| шелф, цели нет | `closeOnCopy` → `Write → HideShelf → Hud(copied)`; иначе `Write` → `copied/no_target` |
+| `keepOpen` + elevated / нет цели | `Write` (шелф виден — тост показывает фронт) |
+| без шелфа (хоткей очереди), цель = текущее активное окно | `Write → WaitKeys → FocusTarget (сразу ок) → Settle → Inject → After → HudIfNotPasted`; elevated → `Write → Hud(elevated)`; нет цели → `Write → Hud(copied)` |
+
+Почему так (отклонения от первоначального эскиза «hide → focus → запись»):
+- **Write первым**, пока шелф виден: занятый буфер (`failed/clipboard_busy`) обнаруживается до
+  того, как что-то сдвинулось, и шелф может показать ошибку. От записи до ввода всё равно ≥ 30 мс.
+- **WaitKeys**: ждём (≤ 1 с), пока отпущены Enter, 1–9 (и NumPad 1–9), главная клавиша хоткея
+  очереди — иначе автоповтор после смены фокуса попал бы в цель («двойной Enter», «вставилась v»).
+  Не отпущены за 1 с → ввод не посылаем (`copied/focus_lost`).
+- **FocusTarget до HideShelf**: `SetForegroundWindow(target)`, пока процесс Liqlip — foreground
+  (шелф активен), разрешён («The calling process is the foreground process»; плюс «received the last
+  input event» — Enter/клик в шелфе) —
+  [SetForegroundWindow](https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-setforegroundwindow).
+  Шелф прячется уже неактивным — система не активирует «следующее» постороннее окно. Ожидание
+  `GetForegroundWindow() == target` шагом 10 мс ≤ 500 мс; на половине — **одна** повторная
+  `SetForegroundWindow`. Сознательно **не** используются `AttachThreadInput` к чужому потоку
+  (сливает состояние ввода двух процессов), `SPI_SETFOREGROUNDLOCKTIMEOUT` (системная настройка —
+  CLAUDE.md, правило 6), инжект Alt для «разблокировки». Свёрнутую цель не разворачиваем.
+- **Inject** перепроверяет foreground прямо перед `SendInput`; не совпало → ввода нет, данные в
+  буфере, HUD `copied`, `copied/focus_lost`.
+- `keepOpen`: шелф не прячется; на время передачи фокуса `focus::handoff_active() == true` —
+  выход шелфа по `Focused(false)` (W1-D) обязан его игнорировать; после вставки
+  `SetForegroundWindow(шелф)`. Если Windows не вернёт активацию (наш процесс уже не foreground),
+  шелф остаётся видимым, но пассивным — клик в него активирует.
+- Исход: `pasted`; `copied` + `no_target | elevated | focus_lost`; `failed` + `clipboard_busy |
+  not_found | stack_empty`; `partial` (аддитивно в контракт, W1-C) — к `pasted/copied`, если часть
+  записей пропущена.
+
+### 6.7. Очередь вставки (`stack.rs`)
+
+`StackState` в памяти процесса (`Vec<StackItem>`, ключи `s1, s2…` уникальны — одна запись может стоять
+дважды). `snapshot`/`len` не трогают БД (трей зовёт их из любого потока). Каждая операция сначала
+**чистит** элементы, чьи записи удалены (`store.get_for_paste` → `not_found`), и после любой мутации
+шлёт `stack:changed` + `tray::refresh`. `stack_add` — все id должны существовать (как в моке),
+`stack_move(key, null)` — в конец, неизвестный ключ → `not_found`. `push(id)` — для режима сбора
+захвата. `stack_paste_next` / хоткей: верхний элемент → если активен сам шелф (поповер очереди) —
+поток шелфа к запомненной цели, иначе — **текущее активное окно** без шелфа (те же проверки
+UIPI/фокуса); снимается, если оказался в буфере (`pasted` или `copied`); `stack.newlineAfterPaste` →
+Enter после вставки; пустая очередь → `failed/stack_empty` (+ HUD `stack_empty` только на пути
+хоткея). `stack_paste_all(separator)` — вся очередь одной мультивставкой (очередь не очищается — для
+этого «Очистить»). Вставки из очереди сериализованы: два быстрых нажатия вставят два разных элемента.
+
+### 6.8. Открыть, показать, drag-out (`open.rs`, `dragout.rs`)
+
+- `clip_open`: ссылка → `tauri-plugin-opener` `open_url` (только `http/https/ftp/mailto`; `www.` →
+  `https://`; `file:` → локальный путь; `javascript:` и прочие протоколы → `invalid`); файл — первый
+  путь, картинка — `media\<id>.png` → `open_path` (нет файла → `not_found`).
+- `clip_open_with`: `SHOpenWithDialog` + `OAIF_EXEC` на отдельном STA-потоке (диалог — только для
+  одного файла; без `OAIF_EXEC` пользователь получил бы подсказку о настройках) —
+  [SHOpenWithDialog](https://learn.microsoft.com/windows/win32/api/shlobj_core/nf-shlobj_core-shopenwithdialog);
+  отмена диалога — не ошибка.
+- `clip_reveal`: `opener::reveal_items_in_dir` = `SHOpenFolderAndSelectItems` (+ запасной
+  `ShellExecuteEx` плагина) для существующих путей / PNG картинки.
+- `clip_drag_out`: перенос Liquid Tools `dragout.rs` без `screenshot::wait_file_ready`. Файлы и
+  картинки (их PNG) важнее текста: файлы — shell data object путей (CF_HDROP…) + пути текстом +
+  `Preferred DropEffect = COPY`; **одна** картинка — дополнительно `FileGroupDescriptorW`/`FileContents`
+  (их читают цели на Chromium/Electron), `PNG`, `CF_DIB`, превью ≤ 192 px как drag-image
+  (`IDragSourceHelper::InitializeFromBitmap`); только текст — `CF_UNICODETEXT` + `CF_TEXT` (ANSI через
+  `WideCharToMultiByte(CP_ACP)`). Модальный цикл `SHDoDragDrop` на главном потоке (без своего
+  изображения Shell рисует общее —
+  [SHDoDragDrop](https://learn.microsoft.com/windows/win32/api/shlobj_core/nf-shlobj_core-shdodragdrop));
+  `dropped` = цель приняла `DROPEFFECT_COPY`, иначе `cancelled`. Пока идёт перетаскивание,
+  `dragout::active() == true` — шелф не должен закрываться по потере фокуса.
+
+### 6.9. Ограничения
+
+- Нативно не проверено (PQ-02): фокус, UIPI, `SendInput`, drag-out — по чек-листу W1-C на INT-1.
+- Приложения, которые сами уводят фокус после активации (редко), дадут `focus_lost` — данные в
+  буфере, HUD подсказывает Ctrl+V.
+- `keepOpen`: возврат активации шелфу зависит от правил foreground Windows (см. 6.6).
+- Внутри окна-цели фокус возвращается в тот элемент, который приложение само восстанавливает при
+  активации (как при Alt+Tab).
 
 ## 7. Окно шелфа (`picker/`)
 
@@ -586,7 +874,7 @@ export interface TargetInfo { exe: string; name: string; title: string; iconUrl:
 export interface PasteRequest { ids: number[]; mode: PasteMode; separator?: string; keepOpen?: boolean }
 export interface TextPasteRequest { text: string; plain: boolean; caretBack?: number; keepOpen?: boolean }
 export interface PasteOutcome { result: 'pasted' | 'copied' | 'failed';
-  reason?: 'no_target' | 'elevated' | 'focus_lost' | 'clipboard_busy' | 'not_found' | 'stack_empty' }
+  reason?: 'no_target' | 'elevated' | 'focus_lost' | 'clipboard_busy' | 'not_found' | 'stack_empty' | 'partial' }
 export interface CaptureStatus { pausedUntil: number | null; /* -1 = до возобновления */ ignoreNext: boolean; collectToStack: boolean }
 export interface StackItem { key: string; clipId: number; kind: Kind; preview: string }
 export interface Stack { items: StackItem[] }
@@ -706,6 +994,7 @@ export interface ImportReport { imported: number; skipped: number; folders: numb
   `PickerOpen`/`PickerMode`, `PickerClose` (`{}`), `PickerLayout` (ширина/высота панели **без** bleed и
   bleed — логические px), `SettingsNavigate`, `HotkeysCaptured` (**`combo: ""` = запись отменена**, Esc),
   `HudShow`/`HudKind`, `OcrProgress`, `ImportProgress`, `ResolvedTheme`.
+- **`PasteReason` + `partial`** (W1-C): часть записей пропущена — картинки при склейке текста, не-файлы при вставке файлов; вставлено остальное.
 - **`PasteReason` + `stack_empty`** (координатор, приёмка W0): `stack_paste_next`/`stack_paste_all` при пустой очереди → `{ result: 'failed', reason: 'stack_empty' }` (хоткей дополнительно показывает `hud::show(StackEmpty)`).
 - **Безопасные заглушки** (до W1 возвращают `Ok`): `capture_status` (запись идёт), `stack_get`
   (пусто), `picker_target` (`null`). **Реализованы в W0:** `settings_get`, `settings_set`, `app_info`,
@@ -925,6 +1214,28 @@ pub struct PastePayload { id: i64, kind: Kind, text: Option<String>, html: Optio
 Метрики и хэш считает **захват** (и store — для `clip_update_text`/`clip_create_text`) одними и теми
 же функциями `content.rs`; классификацию для `clip_create_text` store берёт у `capture::classify`.
 
+**Реализовано W1-A (2026-11-26)** — сигнатуры выше не менялись; поведение (подробно — §4.2–4.6):
+- `insert_clip` нормализует `NewClip`: текст > 2 МБ и список > 2 000 путей режет и **перехэширует**
+  функциями `content.rs`; html/rtf > 2 МБ отбрасывает; ширину/высоту картинки берёт из заголовка PNG;
+  пустое превью строит сам; метрики, если захват их не дал, — `content::text_metrics`. **`size`
+  пересчитывается** из реально сохранённого (text + все `clip_formats`, включая полный PNG) — поле
+  `NewClip.size` справочное. Ошибки: `invalid: …` (пустой текст, картинка без PNG / > 64 МП, файлы без
+  путей, пустой хэш), `busy`/`failed` (БД, диск). Подъём существующей: `copied_at = max(…)`,
+  `copy_count + 1`, воскрешение, источник и `kind` — новые, `meta` — слияние. После — сигнал ретенции.
+- `set_app_icon`: PNG (сигнатура) ≤ 1 МБ → `icons\<id>.png`; нет приложения → `not_found`.
+- `get_for_paste`: несуществующая, мягко или жёстко удалённая → `not_found: clip <id>` (как и все
+  обращения по id: `clip_detail`, `clip_rename`, `clip_update_text`, `clips_delete`, избранное, папка;
+  на этом префиксе вставка чистит очередь); html — UTF-8 `String`, rtf — байты, files — из
+  `clip_formats` (или из `text`); `png_path` — **абсолютный** путь (`Paths` приводит каталог данных к
+  абсолютному) и только если файл на месте (иначе и `formats` без `png`).
+- `mark_used`: неизвестные/удалённые id пропускаются; `bump` → `copied_at = max(copied_at, now)`.
+- `delete_recent`: число удалённых; мягко удалённые в окне тоже; вызывающий эмитит `deleted` (трей —
+  без `ids`, команда — с `ids`).
+- `init`: фоновый поток `liqlip-store` + `settings::subscribe` (только сигнал на смену `storage.*`).
+- Команды store эмитят `clips:changed {origin:'user'}` сами, после успеха; правки папок и сниппетов —
+  `{change:'updated'}` без `ids` (единственный межоконный сигнал: пилюли папок и счётчик сниппетов
+  должны обновиться, если правка была в другом окне).
+
 **capture (W1-B)** — `src-tauri/src/capture/{mod,classify}.rs`
 
 ```rust
@@ -957,9 +1268,12 @@ pub mod stack {
     pub fn paste_next(app: &AppHandle) -> Result<PasteOutcome, String>; // ← хоткей StackNext (на worker'е)
 }
 ```
-Поток вставки: `picker::hide_now` → фокус цели → `store.get_for_paste` → запись в буфер →
-`capture::mark_own_write(seq)` → ввод → `store.mark_used` → `clips:changed {origin:'user'}`; нет
-фокуса/elevated → `picker::hud::show(…)`.
+Поток вставки (реализация W1-C, подробно — §6.6): `store.get_for_paste` → запись в буфер (+
+`capture::mark_own_write(seq)`) → ждать отпускания клавиш → `SetForegroundWindow(цель)` →
+`picker::hide_now` → перепроверка foreground → ввод → `store.mark_used` → `clips:changed
+{origin:'user'}`; нет фокуса/elevated → копирование + `picker::hud::show(…)`. Дополнительно для W1-D:
+`paste::focus::handoff_active()` и `paste::dragout::active()` — пока `true`, выход шелфа по потере
+фокуса не срабатывает.
 
 **picker + hud (W1-D)** — `src-tauri/src/picker/{mod,hud}.rs`
 
