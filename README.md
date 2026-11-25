@@ -9,10 +9,10 @@ images. Password-manager copies are never stored.
 Built with Tauri 2 (Rust) and Svelte 5. Extracted from [Liquid Tools](https://github.com/prodbyEDDY/liquid-tools)
 as a standalone, clipboard-only app.
 
-**Status:** in development. The foundation is in place — project skeleton, design system,
-the full IPC contract with a stub for every command, settings, tray, the three windows and an
-in-browser mock backend. Capture, storage, paste, the shelf and the settings UI are the next
-wave. See [`docs/ROADMAP.md`](docs/ROADMAP.md) (Russian).
+**Status:** 1.0.0 — feature-complete (capture, shelf, paste, Quick Look, actions and text
+transforms, folders, snippets, paste stack, OCR, Liquid Tools import, backups, settings,
+installer); awaiting the owner's live check. See [`docs/ROADMAP.md`](docs/ROADMAP.md) and the
+final report [`docs/progress/2026-11-26-FINAL.md`](docs/progress/2026-11-26-FINAL.md) (Russian).
 
 ## Install
 
