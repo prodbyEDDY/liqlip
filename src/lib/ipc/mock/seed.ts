@@ -237,6 +237,14 @@ function hostOf(url: string): string {
   }
 }
 
+/** Parent folder of a Windows path ("C:\a\b.txt" → "C:\a"; "C:\b.txt" → "C:\"). */
+function dirOf(path: string): string {
+  const cut = path.lastIndexOf("\\");
+  if (cut < 0) return "";
+  const dir = path.slice(0, cut);
+  return /^[A-Za-z]:$/.test(dir) ? `${dir}\\` : dir;
+}
+
 function extOf(path: string): string | undefined {
   const name = path.split("\\").pop() ?? "";
   const dot = name.lastIndexOf(".");
@@ -364,7 +372,8 @@ export function makeClip(id: number, kind: Kind, r: () => number, copiedAt: numb
       base.formats = ["files", "text"];
       base.size = utf8Len(text);
       const ext = extOf(paths[0]);
-      base.meta = ext ? { ext } : {};
+      // `meta.dir` (W3, FIX-08): the first file's folder, as the store fills it.
+      base.meta = { ...(ext ? { ext } : {}), dir: dirOf(paths[0]) };
       break;
     }
   }

@@ -368,7 +368,8 @@ function snippetMenu(): MenuNode[] {
       { id: "snippetNew", cmd: "snippetNew", label: "picker.menu.snippetNew", icon: "plus" },
       { id: "snippetSettings", cmd: "snippetSettings", label: "picker.menu.snippetSettings", icon: "settings" },
     ],
-    [{ id: "snippetDelete", cmd: "snippetDelete", label: "picker.menu.snippetDelete", icon: "trash", danger: true }],
+    // Delete asks first (no undo for snippets) — the same as Delete on a snippet card.
+    [{ id: "snippetDelete", cmd: "snippetDelete", label: "picker.menu.snippetDelete", icon: "trash", keys: "Del", chord: C.del, danger: true }],
   );
 }
 

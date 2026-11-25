@@ -2,7 +2,8 @@
   // Empty / error states of the grid (SPEC §3.13): load error + "Try again"; no results +
   // "Clear search" / "Search all types"; first run (teaches the hotkey and three keys); and a
   // dedicated text for every pill. Each state has a small icon composition (the kind's icon
-  // with two quieter neighbours) instead of a lone glyph floating in the middle.
+  // with two quieter neighbours) instead of a lone glyph floating in the middle. A button
+  // that changes the feed hands the keyboard back to the search (it unmounts with the state).
   import EmptyState from "$lib/components/EmptyState.svelte";
   import Button from "$lib/components/Button.svelte";
   import Kbd from "$lib/components/Kbd.svelte";
@@ -37,20 +38,26 @@
       : (PILL_EMPTY[shelf.pill] ?? PILL_EMPTY.text),
   );
   const hotkey = $derived(shelf.settings?.hotkeys.summon ?? "Alt + V");
+
+  /** Run a button's action, then give the keyboard back to the search field. */
+  function andSearch(run: () => void) {
+    run();
+    shelf.focusSearch(false);
+  }
 </script>
 
 <div class="empty-wrap" class:empty-wrap--strip={shelf.horizontal}>
   {#if kind === "error"}
     <EmptyState icon="warning" title={t("picker.error.title")} desc={errorMessage(feed.error)} compact={shelf.horizontal}>
-      <Button variant="secondary" size="sm" icon="refresh" onclick={() => shelf.retry()}>{t("common.retry")}</Button>
+      <Button variant="secondary" size="sm" icon="refresh" onclick={() => andSearch(() => shelf.retry())}>{t("common.retry")}</Button>
     </EmptyState>
   {:else if kind === "noResults"}
     <EmptyState icon="search" companions={["text", "image"]} title={t("picker.noResults.title")} desc={t("picker.noResults.desc")} compact={shelf.horizontal}>
       {#if !shelf.searchEmpty}
-        <Button variant="secondary" size="sm" icon="x" onclick={() => shelf.clearSearch()}>{t("picker.noResults.clear")}</Button>
+        <Button variant="secondary" size="sm" icon="x" onclick={() => andSearch(() => shelf.clearSearch())}>{t("picker.noResults.clear")}</Button>
       {/if}
       {#if shelf.pill !== "all"}
-        <Button variant="ghost" size="sm" icon="grid" onclick={() => shelf.setPill("all")}>{t("picker.noResults.allTypes")}</Button>
+        <Button variant="ghost" size="sm" icon="grid" onclick={() => andSearch(() => shelf.setPill("all"))}>{t("picker.noResults.allTypes")}</Button>
       {/if}
     </EmptyState>
   {:else if kind === "firstRun"}

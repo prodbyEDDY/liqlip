@@ -7,8 +7,9 @@
 import { feed } from "./feed.svelte";
 import { selection } from "./selection.svelte";
 import { shelf } from "./shelf.svelte";
-import { activate, moveFavorite, runAction } from "./actions.svelte";
+import { activate, clickPastes, moveFavorite, runAction } from "./actions.svelte";
 import { folderIdOf, type PillId } from "./pills";
+import { clickIntent } from "./keymap";
 
 const THRESHOLD_SQ = 36;
 
@@ -52,12 +53,12 @@ class CardDrag {
       return;
     }
     selection.focus(id);
-    if (e.detail >= 2) {
-      // Double click = Enter (useful when a click only copies and keeps the shelf open).
-      if (shelf.open) void runAction("paste", [id]);
-      return;
-    }
-    void activate(id, true);
+    // Double click = Enter (useful when a click only copies and keeps the shelf open); when a
+    // click already pastes, the pair's first click did it — never twice (`clickIntent`).
+    const intent = clickIntent(e.detail, clickPastes());
+    if (intent === null || (e.detail >= 2 && !shelf.open)) return;
+    if (e.detail >= 2) void runAction("paste", [id]);
+    else void activate(id, true);
   }
 
   #onPressMove = (e: PointerEvent): void => {
