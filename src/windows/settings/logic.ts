@@ -1,6 +1,7 @@
 // Pure logic of the settings window (no Svelte, no IPC, no i18n runtime) — covered by
 // tests/settingsLogic.test.mjs. Components turn the returned i18n keys into text.
 import type { CaptureStatus, HotkeySettings, SettingsError } from "$lib/ipc/types";
+import type { TranslationKey } from "$lib/i18n/en";
 
 // ── dotted paths ─────────────────────────────────────────────────────────────
 
@@ -241,4 +242,24 @@ export function moveBefore<T>(ids: T[], id: T, beforeId: T | null): T[] {
   if (at < 0) return ids;
   rest.splice(at, 0, id);
   return rest;
+}
+
+/**
+ * Message key for an import / backup error (W2-B `Err("<code>: …")`), or `null` → the generic
+ * `errorMessage`. A cancelled file dialog (`invalid: cancelled`) is `"cancelled"`: say nothing.
+ */
+export function importErrorKey(err: unknown): TranslationKey | "cancelled" | null {
+  const raw = String(err ?? "");
+  const m = raw.match(/^\s*(?:Error:\s*)?([a-z_]+):\s*(.*)$/s);
+  if (!m) return null;
+  const [, code, detail] = m;
+  const d = detail.toLowerCase();
+  if (code === "busy") return "settings.import.error.busy";
+  if (code !== "invalid") return null;
+  if (d === "cancelled") return "cancelled";
+  if (d.includes("newer")) return "settings.import.error.newer";
+  if (d.includes("not a liqlip backup")) return "settings.import.error.notBackup";
+  if (d.includes("liquid tools")) return "settings.import.error.lt";
+  if (d.includes("backup")) return "settings.import.error.backupDamaged";
+  return null;
 }

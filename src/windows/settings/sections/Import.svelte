@@ -1,8 +1,9 @@
 <script lang="ts">
-  // Import and export (SPEC §4) — skeleton with real controls; the commands are W2-B.
-  // Liquid Tools import: probe (found / not found / error), run with progress, report.
-  // Backup: export a `.liqlip`, restore with merge or replace (replace confirmed twice).
-  // While the commands answer `unimplemented`, buttons are disabled with a hint — no error.
+  // Import and export (SPEC §4; commands W2-B). Liquid Tools import: probe (found / not
+  // found / error), run with progress, report. Backup: export a `.liqlip`, restore with merge
+  // or replace (replace confirmed twice). Errors get their own words (`importErrorKey`); a
+  // cancelled file dialog (`invalid: cancelled`) says nothing. `unimplemented` (only
+  // `?mock-unimpl=import` now) disables the buttons with a hint — no error.
   import Button from "$lib/components/Button.svelte";
   import Ico from "$lib/components/Ico.svelte";
   import Skeleton from "$lib/components/Skeleton.svelte";
@@ -11,7 +12,7 @@
   import type { BackupMode } from "$lib/ipc/types";
   import { getLocale, t } from "$lib/i18n/index.svelte";
   import { importer } from "../importer.svelte";
-  import { formatCount } from "../logic";
+  import { formatCount, importErrorKey } from "../logic";
   import { dialogs, toasts } from "../ui.svelte";
   import Group from "../ui/Group.svelte";
   import ImportProgressBar from "../ui/ImportProgressBar.svelte";
@@ -22,6 +23,11 @@
   });
 
   const n = (v: number) => formatCount(v, getLocale());
+  /** The words for an import / backup failure (falls back to the generic code message). */
+  function failure(e: unknown): string {
+    const key = importErrorKey(e);
+    return key && key !== "cancelled" ? t(key) : errorMessage(e);
+  }
   const ps = $derived(importer.probeState);
   const unavailable = $derived(ps === "unavailable");
 
@@ -37,7 +43,7 @@
       if (path) toasts.show({ message: t("settings.import.exported", { path }), icon: "check", duration: 6000 });
     } catch (e) {
       if (errorCode(e) === "unimplemented") backupUnavailable = true;
-      else toasts.show({ message: errorMessage(e), icon: "warning" });
+      else if (importErrorKey(e) !== "cancelled") toasts.show({ message: failure(e), icon: "warning" });
     } finally {
       backupBusy = null;
     }
@@ -67,8 +73,10 @@
       const r = await backupImport(choice as BackupMode);
       toasts.show({ message: t("settings.import.restored", { imported: n(r.imported), skipped: n(r.skipped) }), icon: "check", duration: 6000 });
     } catch (e) {
+      // The restore file dialog was cancelled: nothing happened, nothing to say.
+      if (importErrorKey(e) === "cancelled") return;
       if (errorCode(e) === "unimplemented") backupUnavailable = true;
-      else toasts.show({ message: errorMessage(e), icon: "warning" });
+      else toasts.show({ message: failure(e), icon: "warning" });
     } finally {
       backupBusy = null;
     }
@@ -116,7 +124,7 @@
             </span>
           </div>
         {:else if importer.runError}
-          <div class="card__line card__line--report" role="alert"><Ico name="warning" size={16} /><span>{errorMessage(importer.runError)}</span></div>
+          <div class="card__line card__line--report" role="alert"><Ico name="warning" size={16} /><span>{failure(importer.runError)}</span></div>
         {/if}
 
         <div class="card__actions">

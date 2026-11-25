@@ -2,16 +2,15 @@
   // Snippets (SPEC §3.10, §4): searchable list (create, delete, reorder) + editor with the
   // placeholder reference and a live preview of the expansion.
   //
-  // Reordering commits through `snippet_move(id, beforeId)` — a command the §9.6 contract
-  // does not have yet (proposed to the coordinator, same shape as `folder_move`). Until it
-  // exists the first attempt reverts and the list explains that reordering comes later.
+  // Reordering commits through `snippetMove(id, beforeId)` (W2-B, same shape as `folder_move`);
+  // a failed move reverts and says why.
   import Button from "$lib/components/Button.svelte";
   import EmptyState from "$lib/components/EmptyState.svelte";
   import Ico from "$lib/components/Ico.svelte";
   import SearchField from "$lib/components/SearchField.svelte";
   import Skeleton from "$lib/components/Skeleton.svelte";
-  import { call, clipsList, snippetDelete, snippetSave, snippetsList } from "$lib/ipc/commands";
-  import { errorCode, errorMessage } from "$lib/ipc/errors";
+  import { clipsList, snippetDelete, snippetMove, snippetSave, snippetsList } from "$lib/ipc/commands";
+  import { errorMessage } from "$lib/ipc/errors";
   import { onClipsChanged } from "$lib/ipc/events";
   import type { Snippet } from "$lib/ipc/types";
   import { t } from "$lib/i18n/index.svelte";
@@ -19,16 +18,12 @@
   import { dialogs, toasts } from "../ui.svelte";
   import SnippetEditor from "../snippets/SnippetEditor.svelte";
 
-  /** Proposed contract addition (store, W1-A): reorder snippets like folders. */
-  const snippetMove = (id: number, beforeId: number | null) => call<void>("snippet_move", { id, beforeId });
-
   let list = $state<Snippet[]>([]);
   let status = $state<"loading" | "ready" | "error">("loading");
   let query = $state("");
   let selectedId = $state<number | null>(null);
   let focusNew = $state<number | null>(null);
   let total = $state(0);
-  let reorderAvailable = $state(true);
   let creating = $state(false);
 
   let seq = 0;
@@ -125,16 +120,8 @@
     get: () => list,
     set: (items) => (list = items),
     commit: (id, beforeId) => snippetMove(id, beforeId),
-    enabled: () => reorderAvailable && !query.trim(),
-    onError: (e) => {
-      const raw = String(e ?? "");
-      if (errorCode(e) === "unimplemented" || raw.includes("snippet_move")) {
-        reorderAvailable = false;
-        toasts.show({ message: t("settings.snippets.reorderUnavailable"), icon: "info" });
-      } else {
-        toasts.show({ message: errorMessage(e), icon: "warning" });
-      }
-    },
+    enabled: () => !query.trim(),
+    onError: (e) => toasts.show({ message: errorMessage(e), icon: "warning" }),
   });
 
   function onItemKey(s: Snippet, e: KeyboardEvent) {
@@ -181,7 +168,7 @@
             <li
               class="item-wrap"
               class:item-wrap--drag={reorder.dragId === s.id}
-              draggable={reorderAvailable && !query.trim()}
+              draggable={!query.trim()}
               ondragstart={(e) => reorder.start(s.id, e)}
               ondragover={(e) => reorder.over(s.id, e)}
               ondrop={(e) => reorder.drop(e)}
@@ -202,7 +189,7 @@
           {/each}
         </ul>
         <p class="pane__hint">
-          {reorderAvailable ? (query.trim() ? "" : t("settings.list.reorderHint")) : t("settings.snippets.reorderUnavailable")}
+          {query.trim() ? "" : t("settings.list.reorderHint")}
         </p>
       {/if}
     </aside>

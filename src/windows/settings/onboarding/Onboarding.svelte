@@ -13,12 +13,13 @@
   import { isTauri } from "$lib/ipc/runtime";
   import type { IconName } from "$lib/icons";
   import { importer } from "../importer.svelte";
-  import { comboKeys, formatCount, HOTKEY_ACTIONS, sameExe } from "../logic";
+  import { comboKeys, formatCount, HOTKEY_ACTIONS, importErrorKey, sameExe } from "../logic";
   import { settings } from "../settings.svelte";
   import { toasts } from "../ui.svelte";
   import ExeList from "../ui/ExeList.svelte";
   import HotkeyRow from "../ui/HotkeyRow.svelte";
   import ImportProgressBar from "../ui/ImportProgressBar.svelte";
+  import BrandMark from "../ui/BrandMark.svelte";
 
   let { onFinish }: { onFinish: () => void } = $props();
 
@@ -118,7 +119,11 @@
           <p class="ob__count">{t("onboarding.progress", { n: index + 1, total: steps.length })}</p>
           <span class="ob__bar" aria-hidden="true"><span style:width="{((index + 1) / steps.length) * 100}%"></span></span>
         </div>
-        <div class="ob__icon squircle"><Ico name={ICONS[current]} size={22} /></div>
+        {#if current === "welcome"}
+          <div class="ob__icon ob__icon--brand squircle"><BrandMark size={32} /></div>
+        {:else}
+          <div class="ob__icon squircle"><Ico name={ICONS[current]} size={22} /></div>
+        {/if}
 
         {#if current === "welcome"}
           <h1 class="ob__title" id={titleId}>{t("onboarding.welcome.title")}</h1>
@@ -189,7 +194,10 @@
             {:else if importer.report}
               <p class="ob__found" role="status"><Ico name="check" size={16} />{t("onboarding.import.done", { imported: n(importer.report.imported) })}</p>
             {:else}
-              {#if importer.runError}<p class="ob__err" role="alert"><Ico name="warning" size={14} />{t("settings.import.lt.error")}</p>{/if}
+              {#if importer.runError}
+                {@const key = importErrorKey(importer.runError)}
+                <p class="ob__err" role="alert"><Ico name="warning" size={14} />{t(key && key !== "cancelled" ? key : "settings.import.lt.error")}</p>
+              {/if}
               <Button variant="primary" icon="download" disabled={importer.probeState !== "found"} onclick={() => importer.run()}>
                 {t("onboarding.import.run")}
               </Button>
@@ -364,6 +372,10 @@
     border-radius: var(--radius-lg);
     background: var(--color-ink);
     color: var(--color-paper);
+  }
+  .ob__icon--brand {
+    background: var(--color-raised);
+    box-shadow: var(--shadow-card);
   }
   .ob__title {
     margin: 0;
