@@ -639,7 +639,7 @@ export interface TargetInfo { exe: string; name: string; title: string; iconUrl:
 export interface PasteRequest { ids: number[]; mode: PasteMode; separator?: string; keepOpen?: boolean }
 export interface TextPasteRequest { text: string; plain: boolean; caretBack?: number; keepOpen?: boolean }
 export interface PasteOutcome { result: 'pasted' | 'copied' | 'failed';
-  reason?: 'no_target' | 'elevated' | 'focus_lost' | 'clipboard_busy' | 'not_found' | 'stack_empty' }
+  reason?: 'no_target' | 'elevated' | 'focus_lost' | 'clipboard_busy' | 'not_found' | 'stack_empty' | 'partial' }
 export interface CaptureStatus { pausedUntil: number | null; /* -1 = до возобновления */ ignoreNext: boolean; collectToStack: boolean }
 export interface StackItem { key: string; clipId: number; kind: Kind; preview: string }
 export interface Stack { items: StackItem[] }
@@ -759,6 +759,7 @@ export interface ImportReport { imported: number; skipped: number; folders: numb
   `PickerOpen`/`PickerMode`, `PickerClose` (`{}`), `PickerLayout` (ширина/высота панели **без** bleed и
   bleed — логические px), `SettingsNavigate`, `HotkeysCaptured` (**`combo: ""` = запись отменена**, Esc),
   `HudShow`/`HudKind`, `OcrProgress`, `ImportProgress`, `ResolvedTheme`.
+- **`PasteReason` + `partial`** (W1-C): часть записей пропущена — картинки при склейке текста, не-файлы при вставке файлов; вставлено остальное.
 - **`PasteReason` + `stack_empty`** (координатор, приёмка W0): `stack_paste_next`/`stack_paste_all` при пустой очереди → `{ result: 'failed', reason: 'stack_empty' }` (хоткей дополнительно показывает `hud::show(StackEmpty)`).
 - **Безопасные заглушки** (до W1 возвращают `Ok`): `capture_status` (запись идёт), `stack_get`
   (пусто), `picker_target` (`null`). **Реализованы в W0:** `settings_get`, `settings_set`, `app_info`,
@@ -1010,9 +1011,12 @@ pub mod stack {
     pub fn paste_next(app: &AppHandle) -> Result<PasteOutcome, String>; // ← хоткей StackNext (на worker'е)
 }
 ```
-Поток вставки: `picker::hide_now` → фокус цели → `store.get_for_paste` → запись в буфер →
-`capture::mark_own_write(seq)` → ввод → `store.mark_used` → `clips:changed {origin:'user'}`; нет
-фокуса/elevated → `picker::hud::show(…)`.
+Поток вставки (реализация W1-C, подробно — §6.6): `store.get_for_paste` → запись в буфер (+
+`capture::mark_own_write(seq)`) → ждать отпускания клавиш → `SetForegroundWindow(цель)` →
+`picker::hide_now` → перепроверка foreground → ввод → `store.mark_used` → `clips:changed
+{origin:'user'}`; нет фокуса/elevated → копирование + `picker::hud::show(…)`. Дополнительно для W1-D:
+`paste::focus::handoff_active()` и `paste::dragout::active()` — пока `true`, выход шелфа по потере
+фокуса не срабатывает.
 
 **picker + hud (W1-D)** — `src-tauri/src/picker/{mod,hud}.rs`
 
