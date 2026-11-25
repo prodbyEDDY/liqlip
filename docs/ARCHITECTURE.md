@@ -126,6 +126,14 @@ Alt+Tab, а tao пересчитывает `GWL_EXSTYLE` из своих фла�
 открытие устойчивым: битая база отодвигается и создаётся заново). На `RunEvent::Exit` сохраняется
 геометрия окна настроек.
 
+**Главный поток не ждёт замок настроек** (W3-A). `settings_set` держит `SettingsStore.write`, пока
+работают подписчики, а часть из них ждёт главный поток (геттеры окон Tauri — круговой рейс без
+таймаута). Поэтому `lib.rs::save_settings_bounds` читает геометрию на главном потоке, а
+`patch_window_bounds` зовёт на коротком потоке: при закрытии окна — не ждёт, на `RunEvent::Exit` —
+ждёт ≤ 1 с. Раньше смена языка/темы одновременно с закрытием окна настроек могла намертво повесить
+приложение. Восстановление геометрии — позиция → размер → позиция (как докинг шелфа §7.4): размер,
+выставленный до переезда на монитор с другим масштабом, tao пересчитал бы по `WM_DPICHANGED`.
+
 ## 4. Данные
 
 > Замер §4: 2026-11-26 (W1-A: хранилище реализовано целиком — `src-tauri/src/store/`;
@@ -403,6 +411,9 @@ JSON `meta`, без миграции; при изменениях — `clips:cha
 > запускалось — живая проверка по чек-листу в отчёте W1-B). W2-F (FIX-04): тесты модуля не
 > зависят от скорости машины (см. «Тесты» ниже); 12 параллельных прогонов `capture::` (и ещё 12 —
 > вместе с `paste::`) на 28 потоках — все зелёные, стенд p50 ≈ 38 мс, max < 200 мс.
+> W3-A (2026-11-26): `clipboard_text` (FIX-09, `textread.rs`, 8 тестов на фейковом буфере); `cargo test`
+> 313/313 дважды, 6 параллельных прогонов `capture::`+`paste::flow`+`tray`+`hotkeys`+`picker::geometry`
+> (125 тестов) — зелёные. Ревью — `docs/review/W3-A.md`.
 
 ```
 listener-поток `liqlip-clip-listener` — message-only окно (HWND_MESSAGE) + AddClipboardFormatListener
@@ -440,7 +451,8 @@ worker-поток `liqlip-clip-worker` (буфер уже закрыт)
 
 **Файлы:** `mod.rs` (API §15, потоки + супервизор, `AppSink`), `listener.rs` (окно),
 `snapshot.rs` (алгоритм снимка против шва `ClipboardApi`, reader-поток с дедлайнами, фейковый
-буфер для тестов), `win32.rs` (реализация шва, владелец, FileDescription), `pipeline.rs` (capture-цикл,
+буфер для тестов), `textread.rs` (текущий текст буфера по запросу — `clipboard_text`, FIX-09),
+`win32.rs` (реализация шва, владелец, FileDescription), `pipeline.rs` (capture-цикл,
 worker, `build_clip`, стенд), `formats.rs` (разбор CF_UNICODETEXT/CF_HTML/DWORD/заголовков PNG и DIB),
 `imaging.rs` (декод PNG/DIB крейтом `image`, нормализация, PNG, миниатюра), `classify.rs`,
 `secrets.rs`, `state.rs` (пауза/пропуск/сбор/свои номера), `icons.rs`, `apps.rs`, `commands.rs`.
@@ -538,7 +550,24 @@ worker, `build_clip`, стенд), `formats.rs` (разбор CF_UNICODETEXT/CF_
 **API модуля сверх §15 (аддитивно, для координатора):** `capture::stop()` (выход),
 `capture::set_collect(app, bool)` (команда `capture_set_collect`), `capture::running_apps()`
 (команда `apps_running`), `capture::clipboard_sequence()` (номер для `mark_own_write` без своей
-Win32-обвязки). Контракт IPC (§9) не менялся.
+Win32-обвязки), `capture::clipboard_text()` (W3-A, FIX-09 — ниже). Контракт IPC (§9) не менялся.
+
+**Текущий текст буфера — `clipboard_text`** (W3-A, FIX-09; `textread.rs`, команда в `paste/commands.rs`
+на blocking-пуле). `{clipboard}` в сниппетах — то, что в буфере **сейчас**, а не свежая запись истории
+(та не видит приватных копий KeePass и того, что только что вставил хоткей очереди). Те же правила,
+что у снимка, против того же шва `ClipboardApi` (тесты — на фейковом буфере):
+- сначала проба владельца `WM_NULL` + `SMTO_ABORTIFHUNG` (250 мс): зависшего не просим рендерить →
+  `busy: …not responding`;
+- **одно** `OpenClipboard` (10 × 25 мс), читается только `CF_UNICODETEXT` (`IsClipboardFormatAvailable`
+  покрывает конвертируемые `CF_TEXT`/`CF_OEMTEXT`), закрытие guard'ом на любом пути;
+- чтение — на своём коротком потоке `liqlip-clip-text`, вызывающий ждёт ≤ попытки открытия + 1 с:
+  владелец, повисший посреди рендера, стоит одного таймаута (`busy: …in time`), брошенный поток
+  закроет буфер, когда владелец ответит (почему не убиваем — см. «Зависший источник» выше);
+- текст до первого NUL, ≤ 2 МБ (`content::truncate_text`, по границе символа); нет текстового
+  формата (картинка, файлы) → `null`; занятый буфер → `busy: …held`;
+- **маркеры приватности не применяются**: это явное действие пользователя (вставка сниппета), текст
+  не сохраняется и не логируется.
+Фронт (W3-C) при `null` или ошибке берёт прежний запасной путь — свежую запись истории.
 
 **Тесты** (`cargo test capture::`, 67): классификация (цвета/ссылки/контакты/код/края), секреты
 (карты/ключи/PEM/ложные), CF_HTML и заголовки, состояние (пауза, таймер, пропуск, свои номера),
@@ -733,6 +762,9 @@ PNG (media\<id>.png) → image: декод → наложение на белы�
 > чистой логики модуля (73 в крейте); нативно не запускалось (PQ-02) — фокус и ввод проверяются по
 > чек-листу из отчёта W1-C на INT-1. W2-F: HUD называет сочетание вставки цели (FIX-07, §6.6);
 > тесты модуля по-прежнему без привязки к таймингам (проверено параллельными прогонами).
+> W3-A: главная клавиша хоткея очереди — разбором движка хоткеев (§6.5); копия без цели закрывает шелф с
+> возвратом фокуса; зажатый > 1 с триггер не отдаёт фокус и окну администратора; флаг передачи
+> keepOpen снимается guard'ом; «Открыть с помощью…» прячет шелф (§6.8); команда `clipboard_text` (§5).
 
 Файлы: `focus.rs` (цель) · `uipi.rs` (уровни целостности) · `writer.rs` (транзакция буфера + байтовые
 форматы) · `input.rs` (`SendInput`) · `compose.rs` (записи → содержимое буфера) · `flow.rs` (шаги
@@ -839,6 +871,12 @@ sub-authority SID метки (low 0x1000 · medium 0x2000 · high 0x3000 · syst
 После вставки (`After`, через 40 мс, только во всё ещё активную цель): `caretBack` → `←` × n (≤ 5000)
 для `{cursor}`; `stack.newlineAfterPaste` → `Enter`.
 
+**Главная клавиша хоткея очереди** (её ждёт `WaitKeys`) — `hotkeys::main_vk`, тем же разбором, что
+регистрирует сочетание (W3-A). Прежний разбор в `input.rs` знал только буквы, цифры, F1–F24 и пару
+имён: при `Ctrl + Num5`, стрелках, `-` и т. п. ожидания не было, и автоповтор клавиши после снятия
+модификаторов печатал её в цель. `paste::mask_modifier_release()` (W3-A) — одно нажатие маски `0xE8`
+для движка хоткеев (§8).
+
 ### 6.6. Поток (`flow.rs`)
 
 Чистый планировщик `plan(origin, route, closeOnCopy) → [Step]` (порядок закреплён тестами) +
@@ -849,7 +887,7 @@ sub-authority SID метки (low 0x1000 · medium 0x2000 · high 0x3000 · syst
 | шелф, цель вставляемая | `Write → WaitKeys → FocusTarget → HideShelf → Settle(30 мс) → Inject → After → HudIfNotPasted` |
 | шелф + `keepOpen` | `Write → WaitKeys → BeginHandoff → FocusTarget → Settle → Inject → After → ReturnToShelf → EndHandoff` |
 | шелф, цель elevated | `Write → WaitKeys → FocusTarget → HideShelf → Hud(elevated)` → `copied/elevated` (фокус возвращён окну админа — Ctrl+V одним нажатием; `SetForegroundWindow` UIPI не блокирует, ввод — блокирует) |
-| шелф, цели нет | `closeOnCopy` → `Write → HideShelf → Hud(copied)`; иначе `Write` → `copied/no_target` |
+| шелф, цели нет | `closeOnCopy` → `Write → CloseShelf → Hud(copied)` (закрытие как по Esc, с возвратом фокуса — W3-A, SPEC §3.3; так же, как `Ctrl+Enter`); иначе `Write` → `copied/no_target` |
 | `keepOpen` + elevated / нет цели | `Write` (шелф виден — тост показывает фронт) |
 | без шелфа (хоткей очереди), цель = текущее активное окно | `Write → WaitKeys → FocusTarget (сразу ок) → Settle → Inject → After → HudIfNotPasted`; elevated → `Write → Hud(elevated)`; нет цели → `Write → Hud(copied)` |
 
@@ -858,7 +896,9 @@ sub-authority SID метки (low 0x1000 · medium 0x2000 · high 0x3000 · syst
   того, как что-то сдвинулось, и шелф может показать ошибку. От записи до ввода всё равно ≥ 30 мс.
 - **WaitKeys**: ждём (≤ 1 с), пока отпущены Enter, 1–9 (и NumPad 1–9), главная клавиша хоткея
   очереди — иначе автоповтор после смены фокуса попал бы в цель («двойной Enter», «вставилась v»).
-  Не отпущены за 1 с → ввод не посылаем (`copied/focus_lost`).
+  Не отпущены за 1 с → фокус не переводим и ввод не посылаем (`copied/focus_lost`; у окна
+  администратора — `copied/elevated`): W3-A распространил это на elevated-маршрут — раньше он отдавал
+  фокус окну администратора и с зажатым Enter, и автоповтор доходил, например, до админ-консоли.
 - **FocusTarget до HideShelf**: `SetForegroundWindow(target)`, пока процесс Liqlip — foreground
   (шелф активен), разрешён («The calling process is the foreground process»; плюс «received the last
   input event» — Enter/клик в шелфе) —
@@ -872,7 +912,8 @@ sub-authority SID метки (low 0x1000 · medium 0x2000 · high 0x3000 · syst
   буфере, HUD `copied`, `copied/focus_lost`.
 - `keepOpen`: шелф не прячется; на время передачи фокуса `focus::handoff_active() == true` —
   выход шелфа по `Focused(false)` (W1-D) обязан его игнорировать; после вставки
-  `SetForegroundWindow(шелф)`. Если Windows не вернёт активацию (наш процесс уже не foreground),
+  `SetForegroundWindow(шелф)`. Флаг снимается на любом выходе из `run`, в т. ч. при панике шага
+  (guard, W3-A): иначе шелф навсегда перестал бы закрываться по клику мимо. Если Windows не вернёт активацию (наш процесс уже не foreground),
   шелф остаётся видимым, но пассивным — клик в него активирует.
 - Исход: `pasted`; `copied` + `no_target | elevated | focus_lost`; `failed` + `clipboard_busy |
   not_found | stack_empty`; `partial` (аддитивно в контракт, W1-C) — к `pasted/copied`, если часть
@@ -904,7 +945,9 @@ Enter после вставки; пустая очередь → `failed/stack_e
 - `clip_open_with`: `SHOpenWithDialog` + `OAIF_EXEC` на отдельном STA-потоке (диалог — только для
   одного файла; без `OAIF_EXEC` пользователь получил бы подсказку о настройках) —
   [SHOpenWithDialog](https://learn.microsoft.com/windows/win32/api/shlobj_core/nf-shlobj_core-shopenwithdialog);
-  отмена диалога — не ошибка.
+  отмена диалога — не ошибка. **Перед диалогом шелф прячется** (`picker::hide_now`, W3-A): диалог —
+  окно нашего процесса, выход шелфа по потере фокуса его пропускает, а always-on-top шелф закрывал
+  центрированный диалог целиком — пользователь не видел ничего.
 - `clip_reveal`: `opener::reveal_items_in_dir` = `SHOpenFolderAndSelectItems` (+ запасной
   `ShellExecuteEx` плагина) для существующих путей / PNG картинки.
 - `clip_drag_out`: перенос Liquid Tools `dragout.rs` без `screenshot::wait_file_ready`. Файлы и
@@ -930,7 +973,8 @@ Enter после вставки; пустая очередь → `failed/stack_e
 ## 7. Окно шелфа (`picker/`)
 
 > Замер: 2026-11-26 (W1-D: реализовано целиком; `cargo test` — 47 тестов чистой логики модулей
-> `picker`/`hotkeys`; нативно не запускалось — чек-лист живой проверки в отчёте W1-D).
+> `picker`/`hotkeys`; нативно не запускалось — чек-лист живой проверки в отчёте W1-D). W3-A: `picker::close`
+> (копия без цели), HUD не паникует на пустой рабочей области; нативно не запускалось.
 
 Перенос логики Liquid Tools `src-tauri/src/screenshot/shotlib.rs` (докинг по физическому `rcWork`,
 строгий hover-триггер, `BLEED = 72`, отложенный `hide` 260 мс, двухскоростной опрос) с новой
@@ -1007,6 +1051,7 @@ Enter после вставки; пустая очередь → `failed/stack_e
 | Клик вне панели | опрос кнопок мыши (30 мс): нажатие вне физического rect панели (в т. ч. по прозрачному bleed); закрытие через 100 мс после отпускания (кликнутое окно успевает активироваться, клик по трею первым отрабатывает свой toggle) или через 400 мс удержания; клик по диалогу своего процесса (не Tauri-окно) игнорируется; во время drag-out/передачи фокуса не отслеживается | да, если фокус ещё у шелфа |
 | Потеря фокуса | `WindowEvent::Focused(false)` для interactive → поток-сторож: ждёт конца передачи фокуса / drag-out / удержания кнопки (≤ 15 с) + 100 мс; foreground снова шелф или окно своего процесса (диалог, настройки) — не закрывает; после передачи/drag-out — `Deactivated` вместо закрытия | нет |
 | Вставка | `hide_now()` | нет (возвращает W1-C) |
+| Копирование без цели (Enter/клик, `closeOnCopy`) | `picker::close(app, true)` из потока вставки (W3-A) | да, как Esc |
 | Уход курсора | только `Open{Hover, passive}`: курсор вне окна, продлённого до истинного края экрана | нет |
 | Alt+F4 | `CloseRequested` | да, если foreground пуст/шелф |
 | Открытие настроек | `show_settings` закрывает шелф до показа окна настроек | нет |
@@ -1093,7 +1138,8 @@ SWP_NOACTIVATE)` и прячется `ShowWindow(SW_HIDE)`; tao `show()` не в
 
 ## 8. Хоткеи (`hotkeys/`)
 
-> Замер: 2026-11-26 (W1-D: реализовано; нативно не запускалось).
+> Замер: 2026-11-26 (W1-D: реализовано; нативно не запускалось). W3-A: маска после проглоченной
+> клавиши при Alt/Win, `main_vk`; нативно не запускалось.
 
 Перенос движка Liquid Tools `src-tauri/src/hotkeys.rs` **без** диктовки, PrintScreen-спецслучая,
 Esc-перехвата, кнопок мыши, «голых» модификаторов и `crate::Feature`. Файлы: `combo.rs` (нотация +
@@ -1142,6 +1188,16 @@ enum HotkeyAction { Summon, StackNext, PauseToggle, IgnoreNext }   // слоты
 - **Действия**: `Summon → picker::summon`; `StackNext → paste::stack::paste_next` (HUD пустой
   очереди / `copied` / `elevated` показывает сама вставка); `PauseToggle → capture::toggle_pause`
   (HUD `paused`/`resumed`); `IgnoreNext → capture::ignore_next` (HUD `skip_next`).
+- **Маска после проглоченной клавиши** (W3-A). Хук глотает главную клавишу (`Alt + F12`,
+  `Super + Menu`) или записанную (`Super + X` в записи) — тогда зажатые Alt/Win отпустились бы
+  «голыми»: у Alt — режим меню окна, у Win — «Пуск». Если среди удерживаемых модификаторов есть
+  Alt/Win (`combo::masks_release`), коллбек кладёт в очередь диспетчера `Job::Mask` перед действием, и
+  диспетчер за доли миллисекунды нажимает неназначенную `0xE8` (`paste::mask_modifier_release`, тег
+  `LQLP` — хук её пропускает) — задолго до того, как пользователь отпустит модификатор. Коллбек
+  по-прежнему ничего не делает сам (правило 3). Главная клавиша — сам модификатор (`Ctrl + LWin`) —
+  маски не требует: её нажатие и отпускание проглочены оба.
+- **`hotkeys::main_vk(combo)`** (W3-A, аддитивно) — главная клавиша сочетания тем же разбором; её ждёт
+  вставка из очереди (§6.5).
 
 ## 9. IPC-контракт
 
@@ -1656,6 +1712,8 @@ pub fn stop();                                                     // ← lib.rs
 pub fn set_collect(app: &AppHandle, on: bool) -> Result<CaptureStatus, String>; // режим сбора в очередь
 pub fn running_apps() -> Vec<RunningApp>;                          // ← apps_running (blocking-пул)
 pub fn clipboard_sequence() -> u32;                                // GetClipboardSequenceNumber для mark_own_write
+// добавлено W3-A (аддитивно):
+pub fn clipboard_text() -> Result<Option<String>, String>;         // ← clipboard_text (FIX-09), блокирует ≤ ≈1.5 с
 ```
 Захват после `insert_clip` эмитит `clips:changed { origin: 'capture', change: created ? 'added' :
 'updated', ids }`, в режиме сбора зовёт `paste::stack::push`, при смене состояния —
@@ -1692,7 +1750,10 @@ pub fn hide_now(app: &AppHandle);                      // ← paste: мгнов�
 pub fn show_settings(app: &AppHandle, section: Option<&str>); // ← settings_open, трей, онбординг (setup шаг 10)
 pub mod hud { pub fn show(app: &AppHandle, kind: HudKind, text: Option<String>); } // ← paste, хоткеи
 pub fn on_page_load(app: &AppHandle, label: &str);     // W1-D, аддитивно: ← lib.rs Builder::on_page_load (повтор layout/open)
+pub fn close(app: &AppHandle, restore_focus: bool);    // W3-A, аддитивно: ← paste (копия без цели), picker_hide — закрытие как Esc
 ```
+**W3-A, аддитивно:** `hotkeys::main_vk(combo) -> Option<u16>` (← `paste::stack`), `paste::mask_modifier_release()`
+(← диспетчер хоткеев, §8).
 Выход по потере фокуса читает `paste::focus::handoff_active()` / `paste::dragout::active()` (W1-C) —
 после них шелф становится пассивным, а не закрывается (§7.2).
 
@@ -1723,7 +1784,8 @@ pub fn apply_settings(app: &AppHandle, prev: &HotkeySettings, next: &HotkeySetti
 
 > Замер: 2026-11-26 (W2-D: знак, иконки, трей, NSIS 1.0.0, CSP, release-профиль, лицензии;
 > установщик собран, не запускался — PQ-02). W2-F: в трее отмечается взведённое «Пропустить
-> следующее» (FIX-05, §16.3) — проверено тестами подсказки, меню нативно не открывалось.
+> следующее» (FIX-05, §16.3) — проверено тестами подсказки, меню нативно не открывалось. W3-A:
+> `tray::refresh` не ждёт главный поток (§16.3, взаимоблокировка с `settings_set`).
 
 ### 16.1. Знак
 
@@ -1790,6 +1852,16 @@ UTF-16 (предел `szTip`, тест).
 **Обновление.** `refresh` вызывается при смене паузы, пропуска, очереди, языка, хоткея и темы. На смену
 масштаба на лету отдельного вызова нет (сниппет для `lib.rs` — в отчёте W2-D); иначе иконка
 обновится при ближайшем `refresh`.
+
+**`refresh` никогда не ждёт** (W3-A). Каждый вызов трея/меню Tauri (`set_menu`, `set_icon`,
+`MenuItem::with_id`…) делает круговой рейс на главный поток и ждёт ответа без таймаута
+(`run_main_thread!`). Из потока, держащего замок, который нужен главному, это взаимоблокировка:
+`settings_set` зовёт подписчиков под замком настроек (смена языка/хоткея → `refresh`). Поэтому
+перестройка всегда идёт **на главном потоке**: там — сразу, из других потоков — задачей
+`run_on_main_thread`, вызывающий возвращается немедленно. В очереди не больше одной перестройки
+(флаг снимается в начале задачи, до чтения состояния): поток изменений (режим сбора, 10 копий/с)
+перестраивает меню один раз и ничего не теряет. Заодно захват, вставка и команды больше не стоят,
+пока главный поток занят (модальный цикл drag-out).
 
 ### 16.4. Установщик (NSIS, `tauri.conf.json`)
 

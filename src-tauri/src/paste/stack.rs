@@ -9,7 +9,7 @@
 
 use super::compose::file_paths;
 use super::flow::{AfterPaste, Origin};
-use super::{focus, input, Delivery};
+use super::{focus, Delivery};
 use crate::model::{HudKind, Kind, PasteMode, PasteOutcome, PasteReason, PasteResult, Stack, StackItem};
 use crate::store::{PastePayload, Store};
 use parking_lot::Mutex;
@@ -222,8 +222,9 @@ fn origin_and_target(app: &AppHandle) -> (Origin, Option<focus::Target>) {
     }
 }
 
+/// The stack hotkey's main key (any key the hotkey grammar binds), waited for before typing.
 fn hotkey_wait_keys(app: &AppHandle) -> Vec<u16> {
-    input::hotkey_main_vk(&crate::settings::get(app).hotkeys.stack_next).into_iter().collect()
+    crate::hotkeys::main_vk(&crate::settings::get(app).hotkeys.stack_next).into_iter().collect()
 }
 
 /// Paste the top item into the CURRENT foreground window (no shelf) and pop it; empty

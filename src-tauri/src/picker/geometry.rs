@@ -298,8 +298,10 @@ pub fn hud_rect(cursor: (i32, i32), work: Rect, scale: f64) -> Rect {
         y = cy - gap + pad - h;
     }
     // The capsule stays inside the work area; the transparent margin may overhang it.
-    x = x.clamp(work.left, work.right - w);
-    y = y.clamp(work.top - pad, work.bottom - h + pad);
+    // `min` then `max`, not `clamp`: `clamp` panics on an empty range, and an empty work area
+    // reported mid-reconfiguration must not take down the main thread (W3-A).
+    x = x.min(work.right - w).max(work.left);
+    y = y.min(work.bottom - h + pad).max(work.top - pad);
     Rect::new(x, y, w, h)
 }
 
@@ -506,5 +508,16 @@ mod tests {
         assert_eq!((r.width(), r.height()), (660, 168));
         assert_eq!(r.right, 1920 + 3840);
         assert_eq!(r.top, 100 + 27 - 54);
+    }
+
+    /// W3-A: a degenerate work area (reported mid display change) used to panic in `clamp`
+    /// on the main thread; now the toast just lands at the area's corner.
+    #[test]
+    fn hud_survives_an_empty_or_tiny_work_area() {
+        let r = hud_rect((50, 50), Rect::new(100, 200, 0, 0), 1.0);
+        assert_eq!((r.left, r.width(), r.height()), (100, 1, 1));
+        let r = hud_rect((0, 0), Rect::new(0, 0, 300, 60), 2.0);
+        assert!(r.width() <= 300 && r.height() <= 60, "{r:?}");
+        assert_eq!(r.left, 0);
     }
 }

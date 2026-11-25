@@ -133,8 +133,14 @@ pub fn reveal(app: &AppHandle, p: &PastePayload) -> Result<(), String> {
 
 /// "Open with…" for the first existing file. Blocks until the dialog closes (call from a
 /// worker): the dialog runs on its own thread with COM initialized as STA.
+///
+/// The shelf is hidden first (W3-A): the dialog is a window of THIS process, so it keeps the
+/// foreground and the shelf's focus-loss exit stays put (focus went to an own window), while
+/// the always-on-top shelf covered the centred, non-topmost dialog — the user saw nothing.
+/// After the dialog the chosen app takes the foreground, as after "Open".
 pub fn open_with(app: &AppHandle, p: &PastePayload) -> Result<(), String> {
     let file = local_files(app, p)?.remove(0);
+    crate::picker::hide_now(app);
     #[cfg(windows)]
     {
         let (tx, rx) = std::sync::mpsc::channel();

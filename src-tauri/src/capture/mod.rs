@@ -27,6 +27,7 @@ mod pipeline;
 pub(crate) mod secrets; // pub(crate): the import applies the same filter (FIX-01)
 mod snapshot;
 mod state;
+mod textread;
 #[cfg(windows)]
 mod win32;
 
@@ -286,6 +287,23 @@ pub fn clipboard_sequence() -> u32 {
     return win32::sequence_number();
     #[cfg(not(windows))]
     0
+}
+
+/// The clipboard's current `CF_UNICODETEXT` (`None` = no text on it) for `{clipboard}` in
+/// snippets — command `clipboard_text` (FIX-09, W3-A; additive §15 API). One short, retried
+/// `OpenClipboard` behind an owner probe, the read on its own thread with a deadline
+/// ([`textread`]); privacy markers are not applied (an explicit user action, nothing is
+/// stored or logged). `Err("busy: …")` when the clipboard is held, the owner hangs or the
+/// read times out. Blocking (≤ ≈ 1.5 s) — call from the blocking pool.
+pub fn clipboard_text() -> Result<Option<String>, String> {
+    #[cfg(windows)]
+    {
+        static API: OnceLock<Arc<win32::Win32Clipboard>> = OnceLock::new();
+        let api = API.get_or_init(|| Arc::new(win32::Win32Clipboard::new()));
+        textread::current_text(api, &snapshot::Timing::default()).map_err(textread::TextError::to_command_error)
+    }
+    #[cfg(not(windows))]
+    Ok(None)
 }
 
 /// Current recording state.
