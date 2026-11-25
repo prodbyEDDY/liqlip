@@ -71,7 +71,8 @@
     <p class="exe__empty">{empty}</p>
   {:else}
     <ul class="exe__list" aria-label={label}>
-      {#each items as exe (exe)}
+      <!-- Keyed by position too: a hand-edited settings.json may repeat a name. -->
+      {#each items as exe, i (i + ":" + exe)}
         {@const look = appDirectory.look(exe)}
         <li class="exe__item squircle" title={look.path ?? exe}>
           <AppIcon name={look.name} url={look.iconUrl} />

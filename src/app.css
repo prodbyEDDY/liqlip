@@ -375,6 +375,24 @@
 }
 
 /*
+  Scroll edges (design-system §7): `use:scrollFade` (src/lib/scrollFade.ts) marks the edges
+  of a vertical scroller behind which content continues; they fade instead of cutting a row
+  at an invisible line. The scrollbar fades with them (same as the shelf grid).
+*/
+[data-fade] {
+  --fade: 16px;
+}
+[data-fade="start"] {
+  mask-image: linear-gradient(to bottom, transparent 0, #000 var(--fade), #000 100%);
+}
+[data-fade="end"] {
+  mask-image: linear-gradient(to bottom, #000 0, #000 calc(100% - var(--fade)), transparent 100%);
+}
+[data-fade="both"] {
+  mask-image: linear-gradient(to bottom, transparent 0, #000 var(--fade), #000 calc(100% - var(--fade)), transparent 100%);
+}
+
+/*
   Selection micro-feedback: ONE fast scale pop when an element becomes the chosen one.
   ≤ 180 ms, ease-out, no loop. The reduced-motion guard below collapses it.
 */

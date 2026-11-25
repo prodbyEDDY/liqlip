@@ -177,3 +177,41 @@ test("seeded snippet bodies expand", () => {
   assert.equal(r.caretBack, 0);
   assert.equal(r.caretIndex, r.text.length);
 });
+
+// W3-D: an offset past what Date can hold made Intl throw ("Invalid time value") — the
+// settings preview and the shelf paste crashed. Now it is an "offset" problem, pasted as written.
+test("huge offsets are a problem, never a crash", () => {
+  for (const body of [
+    '{date offset="+999999y"}',
+    '{weekday offset="-999999y"}',
+    '{datetime offset="+999999M"}',
+    '{date offset="+999y+999y"}',
+    '{date offset="+999999w" format="yyyy"}',
+  ]) {
+    for (const locale of ["en", "ru"]) {
+      const r = x(body, { locale });
+      assert.equal(r.text, body, `${body} (${locale}) pasted as written`);
+    }
+    assert.equal(parseSnippet(body)[0].issue, "offset", body);
+  }
+  assert.equal(parseOffset("+999999y"), null);
+  assert.equal(parseOffset("+1001y"), null, "just over the cap");
+  assert.ok(parseOffset("+999y"), "a long but sane shift stays valid");
+  assert.ok(parseOffset("+999999m"), "minutes add up to under two years");
+  assert.equal(applyOffset(new Date(NaN), "+1d"), null);
+  assert.equal(formatDate(new Date(NaN), "yyyy-MM-dd"), "yyyy-MM-dd", "an invalid date renders the format as written");
+});
+
+test("an empty format is a problem (it would paste nothing)", () => {
+  assert.equal(parseSnippet('{date format=""}')[0].issue, "format");
+  assert.equal(x('{date format=""}').text, '{date format=""}');
+});
+
+test("Russian month names: genitive next to a day, nominative alone", () => {
+  const ru = { locale: "ru" };
+  assert.equal(x('{date format="d MMMM yyyy"}', ru).text, "26 ноября 2026");
+  assert.equal(x('{date format="MMMM yyyy"}', ru).text, "ноябрь 2026");
+  assert.equal(x('{date format="dddd"}', ru).text, "четверг");
+  assert.equal(x('{date format="dd.MM.yy"}', ru).text, "26.11.26");
+  assert.equal(x('{date format="d MMMM"}').text, "26 November");
+});

@@ -10,6 +10,7 @@
   import { appsRunning } from "$lib/ipc/commands";
   import type { RunningApp } from "$lib/ipc/types";
   import { t } from "$lib/i18n/index.svelte";
+  import { scrollFade } from "$lib/scrollFade";
   import { appDirectory } from "../apps.svelte";
   import { exeFileName } from "../logic";
   import AppIcon from "./AppIcon.svelte";
@@ -81,7 +82,7 @@
   <div class="dlg__search">
     <SearchField bind:value={query} placeholder={t("settings.apps.dialog.search")} />
   </div>
-  <div class="dlg__list">
+  <div class="dlg__list" use:scrollFade>
     {#if status === "loading"}
       {#each [0, 1, 2, 3, 4] as i (i)}
         <div class="sk"><Skeleton width="28px" height="28px" radius={8} /><Skeleton width={`${40 + ((i * 13) % 30)}%`} height="12px" /></div>

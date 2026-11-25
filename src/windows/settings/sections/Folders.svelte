@@ -2,6 +2,7 @@
   // Folders (SPEC §3.9: "create … in settings"): list with counts, create, rename (inline,
   // F2), reorder (drag or Alt+↑/↓ → `folder_move`), delete with a choice (keep items /
   // delete with items) and an Undo toast (`clips_undo`). Counts refresh on clips:changed.
+  import { tick } from "svelte";
   import Badge from "$lib/components/Badge.svelte";
   import Button from "$lib/components/Button.svelte";
   import Ico from "$lib/components/Ico.svelte";
@@ -82,6 +83,11 @@
     editing = f.id;
     editDraft = f.name;
     editError = null;
+  }
+
+  /** Back to the folder's name after the inline field closes (keyboard users keep their place). */
+  function refocus(id: number) {
+    void tick().then(() => document.querySelector<HTMLButtonElement>(`.folder__name[data-folder="${id}"]`)?.focus());
   }
 
   async function rename(f: Folder) {
@@ -202,10 +208,11 @@
                   describedby={editError ? `${createId}-ee` : undefined}
                   oninput={() => (editError = null)}
                   onkeydown={(e) => {
-                    if (e.key === "Enter") void rename(f);
+                    if (e.key === "Enter") void rename(f).then(() => editing === null && refocus(f.id));
                     if (e.key === "Escape") {
                       e.stopPropagation();
                       editing = null;
+                      refocus(f.id);
                     }
                   }}
                   onblur={() => void rename(f)}
@@ -218,12 +225,12 @@
                 class="folder__name"
                 title={t("settings.picker.folders.rename")}
                 aria-describedby="{createId}-hint"
+                data-folder={f.id}
                 onclick={() => startRename(f)}
                 onkeydown={(e) => onRowKey(f, e)}>{f.name}</button
               >
-              <span title={t("settings.picker.folders.count", { n: formatCount(f.count, getLocale()) })}>
-                <Badge mono>{formatCount(f.count, getLocale())}</Badge>
-              </span>
+              <!-- Tools appear left of the count, so the count keeps the row's end (never
+                   floating mid-row over the space the hidden tools reserve). -->
               <span class="folder__tools">
                 <button type="button" class="tool" aria-label={t("settings.list.moveUp")} title={t("settings.list.moveUp")} onclick={() => reorder.step(f.id, -1)}>
                   <Ico name="chevronUp" size={15} />
@@ -237,6 +244,9 @@
                 <button type="button" class="tool" aria-label={t("settings.picker.folders.delete")} title={t("settings.picker.folders.delete")} onclick={() => remove(f)}>
                   <Ico name="trash" size={15} />
                 </button>
+              </span>
+              <span class="folder__count" title={t("settings.picker.folders.count", { n: formatCount(f.count, getLocale()) })}>
+                <Badge mono>{formatCount(f.count, getLocale())}</Badge>
               </span>
             {/if}
           </li>

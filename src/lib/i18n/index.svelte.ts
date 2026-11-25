@@ -3,6 +3,7 @@
 // "system" resolves to the Windows UI language as the webview reports it
 // (`navigator.language`). A localStorage mirror paints the first frame correctly.
 import { en, type TranslationKey } from "./en";
+import { interpolate, type Vars } from "./format";
 import { ru } from "./ru";
 import type { Language } from "$lib/ipc/types";
 
@@ -66,17 +67,9 @@ export function applyLanguage(language: Language): void {
   if (next !== current) setLocale(next);
 }
 
-type Vars = Record<string, string | number>;
-
 /** Translate a key for the current locale, with optional `{name}` interpolation. */
 export function t(key: TranslationKey, vars?: Vars): string {
-  let str: string = dictionaries[current][key] ?? en[key] ?? key;
-  if (vars) {
-    for (const [k, v] of Object.entries(vars)) {
-      str = str.replaceAll(`{${k}}`, String(v));
-    }
-  }
-  return str;
+  return interpolate(dictionaries[current][key] ?? en[key] ?? key, vars);
 }
 
 /** Reactive accessor for places that need the raw locale value. */

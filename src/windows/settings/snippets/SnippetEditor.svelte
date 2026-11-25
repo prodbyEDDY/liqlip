@@ -10,7 +10,8 @@
   import type { Snippet } from "$lib/ipc/types";
   import { getLocale, t, type TranslationKey } from "$lib/i18n/index.svelte";
   import { expandSnippet, parseSnippet } from "$lib/snippets/expand";
-  import { formatCount, SNIPPET_NAME_MAX, validateSnippetBody, validateSnippetName } from "../logic";
+  import { scrollFade } from "$lib/scrollFade";
+  import { formatCount, SNIPPET_NAME_MAX, snippetSaveName, validateSnippetBody, validateSnippetName } from "../logic";
   import BodyEditor from "./BodyEditor.svelte";
   import Reference from "./Reference.svelte";
 
@@ -62,21 +63,49 @@
     timer = setTimeout(() => void save(), 500);
   }
 
-  async function save() {
+  // The name last saved: an invalid draft (emptied, too long) saves the body under it, so
+  // leaving the snippet never drops text.
+  // svelte-ignore state_referenced_locally
+  let savedName = snippet.name;
+  // svelte-ignore state_referenced_locally
+  let savedBody = snippet.body;
+  /** One save at a time: an edit made while a save is in flight is saved right after it
+   *  (two parallel `snippet_save` calls could land out of order). */
+  let inflight: Promise<void> | null = null;
+
+  async function save(): Promise<void> {
     clearTimeout(timer);
-    if (!dirty || nameIssue || bodyIssue) return;
-    dirty = false;
-    saveState = "saving";
-    try {
-      const saved = await snippetSave({ id: snippet.id, name: name.trim(), body, keyword: snippet.keyword });
-      onSaved(saved);
-      saveState = dirty ? "idle" : "saved";
-      saveError = null;
-    } catch (e) {
-      dirty = true;
-      saveState = "error";
-      saveError = errorMessage(e);
+    if (inflight) {
+      await inflight;
+      return save();
     }
+    if (!dirty || bodyIssue) return;
+    dirty = false;
+    const saveName = snippetSaveName(name, savedName);
+    // Only the name changed and it is not valid: nothing to save (the field shows why).
+    if (saveName === savedName && body === savedBody) {
+      saveState = "idle";
+      return;
+    }
+    saveState = "saving";
+    const run = (async () => {
+      const sentBody = body;
+      try {
+        const saved = await snippetSave({ id: snippet.id, name: saveName, body: sentBody, keyword: snippet.keyword });
+        savedName = saved.name;
+        savedBody = sentBody;
+        onSaved(saved);
+        saveState = dirty ? "idle" : "saved";
+        saveError = null;
+      } catch (e) {
+        dirty = true;
+        saveState = "error";
+        saveError = errorMessage(e);
+      }
+    })();
+    inflight = run;
+    await run;
+    inflight = null;
   }
 
   onDestroy(() => {
@@ -152,7 +181,7 @@
   <div class="field">
     <span class="field__label" id="{ids}-pl">{t("settings.snippets.preview")}</span>
     <p class="field__desc">{t("settings.snippets.preview.desc")}</p>
-    <div class="preview squircle selectable" role="region" aria-labelledby="{ids}-pl" aria-live="polite">
+    <div class="preview squircle selectable" role="region" aria-labelledby="{ids}-pl" aria-live="polite" use:scrollFade>
       {#if preview.text}
         {#if preview.caretIndex === null}{preview.text}{:else}{preview.text.slice(0, preview.caretIndex)}<span class="caret" aria-hidden="true"
           ></span>{preview.text.slice(preview.caretIndex)}{/if}

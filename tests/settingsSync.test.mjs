@@ -162,3 +162,35 @@ test("each answer's errors replace earlier taken/invalid ones; failed errors sta
   assert.equal(last().errors["hotkeys.summon"], undefined);
   assert.equal(last().errors["general.theme"].code, "failed");
 });
+
+// W3-D: the refresh on "window shown" must not roll back an edit made while it was in flight.
+test("a background refresh is dropped once anything happened after it started", async () => {
+  const { sync, last } = harness(mockSend);
+  const initial = await mockInvoke("settings_get", {});
+  sync.receive(initial);
+
+  // Nothing happened meanwhile → applied.
+  let rev = sync.revision;
+  assert.equal(sync.receiveIfCurrent({ ...initial, stack: { newlineAfterPaste: true } }, rev), true);
+  assert.equal(last().view.stack.newlineAfterPaste, true);
+  sync.receive(initial);
+
+  // An edit after the refresh started → its stale answer is ignored.
+  rev = sync.revision;
+  const stale = structuredClone(initial);
+  sync.update("picker.favoritesFirst", !initial.picker.favoritesFirst);
+  await sync.idle();
+  assert.equal(sync.receiveIfCurrent(stale, rev), false);
+  assert.equal(last().view.picker.favoritesFirst, !initial.picker.favoritesFirst, "the edit survives");
+
+  // settings:changed after the refresh started → ignored too.
+  rev = sync.revision;
+  const pushed = await mockInvoke("settings_get", {});
+  sync.receive(pushed);
+  assert.equal(sync.receiveIfCurrent(stale, rev), false);
+
+  // While a request is in flight → ignored (its answer is newer).
+  sync.update("picker.favoritesFirst", initial.picker.favoritesFirst);
+  assert.equal(sync.receiveIfCurrent(stale, sync.revision), false);
+  await sync.idle();
+});

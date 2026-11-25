@@ -9,7 +9,7 @@
 //       format="yyyy-MM-dd"             custom format (tokens below; 'quoted' text is literal)
 //       offset="+2d"                    shift: [+-]N with m h d w M y (minutes … years);
 //                                       parts chain: "+1d-2h", "-1w 3d" (unsigned part
-//                                       inherits the previous sign)
+//                                       inherits the previous sign); ~1000 years at most
 //   {uuid}                              random UUID (from the caller's generator)
 //   {cursor}                            caret position after the paste (first one only;
 //                                       extra ones are dropped and reported)
@@ -276,7 +276,9 @@ function valueOf(tok: PlaceholderToken, now: Date, ctx: ExpandContext, locale: s
     case "time":
     case "datetime":
     case "weekday": {
-      const at = tok.attrs.offset !== undefined ? (applyOffset(now, tok.attrs.offset) ?? now) : now;
+      const at = tok.attrs.offset !== undefined ? applyOffset(now, tok.attrs.offset) : now;
+      // Never format an invalid date (Intl throws): paste the placeholder as written.
+      if (!at || Number.isNaN(at.getTime())) return tok.raw;
       return tok.attrs.format !== undefined
         ? formatDate(at, tok.attrs.format, locale)
         : defaultFormat(tok.name as "date" | "time" | "datetime" | "weekday", at, locale);
@@ -313,7 +315,14 @@ export interface OffsetPart {
   unit: OffsetUnit;
 }
 
-/** Parse "+2d", "-1w", "+1d-2h", "1M 2d" → signed parts, or `null` when invalid. */
+/** Longest shift an offset may describe, in days (~1000 years). A larger one ("+999999y")
+ *  would push the date past what `Date` can hold (±275 760 years), and `Intl` throws on an
+ *  invalid date — the editor preview and the shelf paste would crash. */
+export const OFFSET_MAX_DAYS = 366_000;
+const UNIT_DAYS: Record<OffsetUnit, number> = { m: 1 / 1440, h: 1 / 24, d: 1, w: 7, M: 31, y: 366 };
+
+/** Parse "+2d", "-1w", "+1d-2h", "1M 2d" → signed parts, or `null` when invalid (bad syntax,
+ *  or more than `OFFSET_MAX_DAYS` in total). */
 export function parseOffset(raw: string): OffsetPart[] | null {
   const s = raw.trim();
   if (!s) return null;
@@ -321,22 +330,26 @@ export function parseOffset(raw: string): OffsetPart[] | null {
   const parts: OffsetPart[] = [];
   let sign = 1;
   let at = 0;
+  let days = 0;
   while (at < s.length) {
     re.lastIndex = at;
     const m = re.exec(s);
     if (!m) return null;
     if (m[1]) sign = m[1] === "-" ? -1 : 1;
-    parts.push({ amount: sign * Number(m[2]), unit: m[3] as OffsetUnit });
+    const part = { amount: sign * Number(m[2]), unit: m[3] as OffsetUnit };
+    days += Math.abs(part.amount) * UNIT_DAYS[part.unit];
+    parts.push(part);
     at = re.lastIndex;
   }
-  return parts;
+  return days > OFFSET_MAX_DAYS ? null : parts;
 }
 
 /** Shift a date by an offset string (local calendar arithmetic; month ends clamp:
- *  Jan 31 + 1M = Feb 28/29). `null` when the offset is invalid. */
+ *  Jan 31 + 1M = Feb 28/29). `null` when the offset is invalid or the result is not a
+ *  valid date. */
 export function applyOffset(date: Date, raw: string): Date | null {
   const parts = parseOffset(raw);
-  if (!parts) return null;
+  if (!parts || Number.isNaN(date.getTime())) return null;
   let d = new Date(date.getTime());
   for (const { amount, unit } of parts) {
     switch (unit) {
@@ -360,7 +373,7 @@ export function applyOffset(date: Date, raw: string): Date | null {
         break;
     }
   }
-  return d;
+  return Number.isNaN(d.getTime()) ? null : d;
 }
 
 function addMonths(d: Date, n: number): Date {
@@ -409,8 +422,9 @@ function lexFormat(format: string): FormatPiece[] | null {
   return out;
 }
 
+/** A usable format: not empty (`format=""` would paste nothing) and no unclosed quote. */
 function formatIsValid(format: string): boolean {
-  return lexFormat(format) !== null;
+  return format.length > 0 && lexFormat(format) !== null;
 }
 
 const pad = (n: number, w = 2) => String(n).padStart(w, "0");
@@ -422,7 +436,7 @@ function part(d: Date, locale: string, opts: Intl.DateTimeFormatOptions, type: I
 /** Format a date with the custom tokens (see the header). Invalid formats render as written. */
 export function formatDate(d: Date, format: string, locale = "en"): string {
   const pieces = lexFormat(format);
-  if (!pieces) return format;
+  if (!pieces || Number.isNaN(d.getTime())) return format;
   // Month names next to a day number take the genitive form where the language has one.
   const withDay = pieces.some((p) => "tok" in p && (p.tok === "d" || p.tok === "dd"));
   let out = "";

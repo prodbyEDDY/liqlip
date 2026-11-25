@@ -34,8 +34,10 @@ class SettingsStore {
     if (typeof document !== "undefined") {
       document.addEventListener("visibilitychange", () => {
         if (document.visibilityState === "visible" && this.status === "ready" && !this.sync.busy) {
+          // A stale answer (an edit or settings:changed came first) must not roll it back.
+          const rev = this.sync.revision;
           void settingsGet()
-            .then((s) => this.sync.receive(s))
+            .then((s) => this.sync.receiveIfCurrent(s, rev))
             .catch(() => {});
         }
       });

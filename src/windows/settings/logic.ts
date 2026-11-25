@@ -43,6 +43,8 @@ export type FieldErrorCode = SettingsError["code"] | "failed";
  *  `failed` (the command itself rejected) is rendered from the command error instead. */
 export function fieldErrorKey(field: string, code: SettingsError["code"]): string {
   if (field.startsWith("hotkeys.")) return code === "taken" ? "settings.error.hotkeyTaken" : "settings.error.hotkeyInvalid";
+  // settings.rs: the autostart plugin failed → the previous value stays, `invalid`.
+  if (field === "general.autostart") return "settings.error.autostart";
   if (field === "picker.pasteKeys") return "settings.error.pasteKeys";
   if (field === "privacy.ignoredApps") return "settings.error.ignoredApps";
   if (field === "picker.monitor") return "settings.error.monitor";
@@ -129,6 +131,13 @@ export function validateSnippetBody(body: string): "tooLong" | null {
   return new TextEncoder().encode(body).length > SNIPPET_BODY_MAX_BYTES ? "tooLong" : null;
 }
 
+/** The name to save with an autosave: the draft when it is valid, otherwise the last saved
+ *  name — so body edits are never held back (and lost on leaving) by a half-typed or empty
+ *  name; the name field keeps showing its own error until it is fixed. */
+export function snippetSaveName(draft: string, saved: string): string {
+  return validateSnippetName(draft) === null ? draft.trim() : saved;
+}
+
 // ── executables (ignored apps, paste keys) ───────────────────────────────────
 
 /** "C:\\Program Files\\KeePass\\KeePass.exe" → "keepass.exe" (what the lists store:
@@ -191,6 +200,29 @@ export function comboKeys(combo: string): string[] {
     .split(" + ")
     .map((k) => k.trim())
     .filter(Boolean);
+}
+
+/** A chord as Windows users read it ("Super" is the Win key). */
+export function comboLabel(combo: string): string {
+  return comboKeys(combo)
+    .map((k) => (k === "Super" ? "Win" : k))
+    .join(" + ");
+}
+
+/** Free alternatives offered when a chord is taken by another app (SPEC §4: "a clear error
+ *  and a suggestion"). Ordered by preference; chords used by another Liqlip action or just
+ *  rejected are left out. Actions that are unset by default get none. */
+const HOTKEY_SUGGESTIONS: Readonly<Record<HotkeyAction, readonly string[]>> = {
+  summon: ["Ctrl + Alt + V", "Alt + Shift + C", "Ctrl + Shift + Space"],
+  stackNext: ["Ctrl + Alt + Shift + V", "Alt + Shift + B", "Ctrl + Alt + B"],
+  pauseToggle: [],
+  ignoreNext: [],
+};
+
+export function hotkeySuggestions(action: HotkeyAction, current: HotkeySettings, rejected: readonly string[] = [], max = 2): string[] {
+  return HOTKEY_SUGGESTIONS[action]
+    .filter((c) => !rejected.includes(c) && hotkeyIssue(c, action, current) === null && current[action] !== c)
+    .slice(0, max);
 }
 
 // ── capture pause ────────────────────────────────────────────────────────────

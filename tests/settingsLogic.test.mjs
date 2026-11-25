@@ -97,6 +97,7 @@ test("field errors map to i18n keys", () => {
   assert.equal(L.fieldErrorKey("picker.monitor", "invalid"), "settings.error.monitor");
   assert.equal(L.fieldErrorKey("ocr.language", "invalid"), "settings.error.ocrLanguage");
   assert.equal(L.fieldErrorKey("storage.maxEntries", "invalid"), "settings.error.invalid");
+  assert.equal(L.fieldErrorKey("general.autostart", "invalid"), "settings.error.autostart", "W3-D: its own words");
   assert.deepEqual(
     L.errorsByField([
       { field: "hotkeys.summon", code: "taken" },
@@ -115,6 +116,7 @@ test("every key fieldErrorKey can return exists in en.ts", async () => {
     ["privacy.ignoredApps", "invalid"],
     ["picker.monitor", "invalid"],
     ["ocr.language", "invalid"],
+    ["general.autostart", "invalid"],
     ["x.y", "invalid"],
   ]) {
     assert.ok(en.includes(`"${L.fieldErrorKey(f, c)}":`), L.fieldErrorKey(f, c));
@@ -181,4 +183,34 @@ test("import / backup errors map to their own messages; a cancelled dialog says 
   assert.equal(L.importErrorKey("busy: an import or a backup is already running"), "settings.import.error.busy");
   assert.equal(L.importErrorKey("failed: disk full"), null);
   assert.equal(L.importErrorKey("invalid: empty text"), null);
+});
+
+// W3-D
+test("snippet autosave name: the draft when valid, else the last saved name", () => {
+  assert.equal(L.snippetSaveName("  Signature ", "Old"), "Signature");
+  assert.equal(L.snippetSaveName("", "Old"), "Old", "an emptied name never blocks the body");
+  assert.equal(L.snippetSaveName("   ", "Old"), "Old");
+  assert.equal(L.snippetSaveName("x".repeat(101), "Old"), "Old");
+  assert.equal(L.snippetSaveName("a\u0001b", "Old"), "Old");
+});
+
+test("chord labels say Win, not Super", () => {
+  assert.equal(L.comboLabel("Super + Shift + V"), "Win + Shift + V");
+  assert.equal(L.comboLabel("Alt + V"), "Alt + V");
+  assert.equal(L.comboLabel(""), "");
+});
+
+test("hotkey suggestions skip chords in use, the rejected one and the current value", () => {
+  const hk = { summon: "Alt + V", stackNext: "Alt + Shift + V", pauseToggle: "", ignoreNext: "" };
+  assert.deepEqual(L.hotkeySuggestions("summon", hk), ["Ctrl + Alt + V", "Alt + Shift + C"]);
+  assert.deepEqual(L.hotkeySuggestions("summon", hk, ["Ctrl + Alt + V"]), ["Alt + Shift + C", "Ctrl + Shift + Space"]);
+  assert.deepEqual(
+    L.hotkeySuggestions("summon", { ...hk, pauseToggle: "Ctrl + Alt + V" }),
+    ["Alt + Shift + C", "Ctrl + Shift + Space"],
+    "a chord another Liqlip action uses is not offered",
+  );
+  assert.deepEqual(L.hotkeySuggestions("summon", { ...hk, summon: "Ctrl + Alt + V" }), ["Alt + Shift + C", "Ctrl + Shift + Space"]);
+  assert.equal(L.hotkeySuggestions("stackNext", hk).length, 2);
+  assert.deepEqual(L.hotkeySuggestions("pauseToggle", hk), [], "unset-by-default actions get none");
+  for (const a of L.HOTKEY_ACTIONS) for (const c of L.hotkeySuggestions(a, hk, [], 9)) assert.equal(L.hotkeyIssue(c, a, hk), null, c);
 });

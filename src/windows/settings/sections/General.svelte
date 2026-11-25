@@ -5,12 +5,18 @@
   import SegmentedControl from "$lib/components/SegmentedControl.svelte";
   import Toggle from "$lib/components/Toggle.svelte";
   import { t } from "$lib/i18n/index.svelte";
+  import { comboLabel } from "../logic";
   import { settings } from "../settings.svelte";
   import Group from "../ui/Group.svelte";
   import Row from "../ui/Row.svelte";
 
   const s = $derived(settings.value!);
-  const hotkey = $derived(s.hotkeys.summon || "Alt + V");
+  // No shortcut set → don't promise one.
+  const autostartDesc = $derived(
+    s.hotkeys.summon
+      ? t("settings.general.autostart.desc", { hotkey: comboLabel(s.hotkeys.summon) })
+      : t("settings.general.autostart.descNoHotkey"),
+  );
 
   // Language names are written in their own language (never translated).
   const languages = $derived([
@@ -28,7 +34,7 @@
 <Group title={t("settings.general.startup")}>
   <Row
     label={t("settings.general.autostart")}
-    desc={t("settings.general.autostart.desc", { hotkey })}
+    desc={autostartDesc}
     icon="power"
     error={settings.message("general.autostart")}
   >

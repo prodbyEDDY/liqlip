@@ -41,6 +41,7 @@ export class SettingsSync {
   private inflight: Patch[] | null = null;
   private errors: Record<string, FieldError> = {};
   private waiters: (() => void)[] = [];
+  private rev = 0;
 
   constructor(
     private readonly send: (s: Settings) => Promise<SettingsResult>,
@@ -58,13 +59,30 @@ export class SettingsSync {
 
   /** New authoritative state (settings_get / settings:changed). */
   receive(settings: Settings): void {
+    this.rev++;
     this.confirmed = settings;
     this.emit();
+  }
+
+  /** Bumped by every state change, edit and re-check. A background `settings_get` started at
+   *  one revision is stale once it moved on. */
+  get revision(): number {
+    return this.rev;
+  }
+
+  /** `receive` for a background refresh started at `revision` (the window became visible):
+   *  dropped when anything happened since — an edit, its answer or a `settings:changed` is
+   *  newer than what that `settings_get` read. Returns whether it was applied. */
+  receiveIfCurrent(settings: Settings, revision: number): boolean {
+    if (revision !== this.rev || this.busy) return false;
+    this.receive(settings);
+    return true;
   }
 
   /** Optimistic edit; clears errors of the same field. Ignored before the first `receive`. */
   update(path: string, value: unknown): void {
     if (!this.confirmed) return;
+    this.rev++;
     this.clear(path);
     this.queued.push({ path, value });
     this.emit();
@@ -94,6 +112,7 @@ export class SettingsSync {
   async recheck(): Promise<SettingsError[]> {
     await this.idle();
     if (!this.confirmed || this.inflight) return [];
+    this.rev++;
     this.inflight = [];
     try {
       const res = await this.send(this.confirmed);
