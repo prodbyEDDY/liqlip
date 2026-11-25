@@ -1058,7 +1058,8 @@
   }
   .file__icon {
     display: inline-flex;
-    grid-row: span 2;
+    grid-row: 1 / span 2;
+    grid-column: 1;
     justify-content: center;
     color: var(--color-ink-2);
   }
@@ -1074,12 +1075,15 @@
     white-space: nowrap;
   }
   .file__meta {
+    grid-row: 1;
+    grid-column: 3;
     color: var(--color-ink-3);
     font-family: var(--font-mono);
     font-size: var(--text-meta);
     white-space: nowrap;
   }
   .file__path {
+    grid-row: 2;
     grid-column: 2 / span 2;
     overflow: hidden;
     color: var(--color-ink-3);

@@ -226,7 +226,7 @@ export const en = {
   "picker.menu.reveal": "Show in Explorer",
   "picker.menu.transform": "Transform",
   "picker.menu.ocr": "Copy text from image",
-  "picker.menu.ocrOff": "Turn on text recognition in Settings",
+  "picker.menu.ocrOff": "Text recognition is off in Settings",
   "picker.menu.saveSnippet": "Save as snippet…",
   "picker.menu.favorite": "Add to favorites",
   "picker.menu.unfavorite": "Remove from favorites",

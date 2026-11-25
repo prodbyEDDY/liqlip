@@ -524,7 +524,7 @@
             checked={row.node.checked}
             role={row.node.checked !== undefined ? "menuitemradio" : "menuitem"}
             submenu={!!row.node.children}
-            active={i === active}
+            active={i === active && !rowDisabled(row)}
             onpointermove={() => {
               if (!rowDisabled(row) && active !== i) active = i;
             }}

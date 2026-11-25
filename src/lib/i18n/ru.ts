@@ -227,7 +227,7 @@ export const ru: Record<TranslationKey, string> = {
   "picker.menu.reveal": "Показать в Проводнике",
   "picker.menu.transform": "Преобразовать",
   "picker.menu.ocr": "Скопировать текст с картинки",
-  "picker.menu.ocrOff": "Включите распознавание текста в настройках",
+  "picker.menu.ocrOff": "Распознавание выключено в настройках",
   "picker.menu.saveSnippet": "Сохранить как сниппет…",
   "picker.menu.favorite": "В избранное",
   "picker.menu.unfavorite": "Убрать из избранного",

@@ -62,6 +62,7 @@
   class:item--danger={danger}
   class:item--tall={!!hint}
   aria-checked={toggle ?? checked}
+  title={hint ? `${label} — ${hint}` : undefined}
   aria-haspopup={submenu ? "menu" : undefined}
   disabled={plain ? undefined : disabled}
   onmousedown={(e: MouseEvent) => e.preventDefault()}
