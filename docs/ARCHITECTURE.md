@@ -284,30 +284,198 @@ worker-поток:
 
 ## 6. Вставка (`paste/`)
 
-- **Цель** (`focus.rs`): при вызове шелфа (до показа) — `GetForegroundWindow()`; отбрасываем
-  свои окна (по HWND всех окон Liqlip, включая трей-меню), рабочий стол (`Progman`/`WorkerW`),
-  shell-трей (`Shell_TrayWnd`). Если отброшено — цель `None` (а **не** перезапись нулём
-  предыдущей). Для цели вычисляем `TargetInfo` (exe, имя, иконка, `elevated`).
-- **UIPI** (`uipi.rs`): `elevated = integrity(target process) > integrity(self)`
-  (`OpenProcessToken` + `GetTokenInformation(TokenIntegrityLevel)`); при отказе доступа к токену
-  — считать `elevated = true`.
-- **Запись в буфер** (`writer.rs`): одна транзакция `OpenClipboard/EmptyClipboard/SetClipboardData…`
-  с ретраями; текст+HTML(+RTF) / только текст (plain) / PNG + CF_DIB / CF_HDROP + `Preferred
-  DropEffect = DROPEFFECT_COPY` + текстовый fallback путей. Перенос писателей Liquid Tools
-  `clipboard/paste.rs` с исправлением утечки HGLOBAL при неудаче `OpenClipboard`.
-- **Ввод** (`input.rs`): `SendInput`. Перед `Ctrl+V` — отпустить все физически зажатые
-  модификаторы (`GetAsyncKeyState` для Shift/Ctrl/Alt/Win, синтетический keyup), затем chord
-  из `settings.picker.pasteKeys` для exe цели (по умолчанию Ctrl+V). `{cursor}` у сниппетов —
-  N нажатий ← после вставки.
-- **Поток вставки:** `picker::hide_now()` (без анимации ожидания) → `SetForegroundWindow(target)`
-  → опрос `GetForegroundWindow()` до совпадения (≤ 500 мс, шаг 10 мс) → запись в буфер → 30 мс →
-  `SendInput`. Если цель не стала активной → **ввод не посылаем**, данные уже в буфере,
-  `hud::show(Copied)`; `PasteOutcome { result: "copied", reason: "focus_lost" }`.
-  Без `SPI_SETFOREGROUNDLOCKTIMEOUT` (меняет системную настройку — запрещено).
-- **Очередь вставки** (`stack.rs`): в памяти, `Vec<StackItem>`; `paste_next` вставляет верхний
-  элемент в **текущее** активное окно (шелф не участвует), снимает его; события `stack:changed`.
-- **Drag-out** (`dragout.rs`): перенос Liquid Tools `src-tauri/src/dragout.rs` (OLE DoDragDrop);
-  текст тянется как текст, картинка — как PNG-файл из `media\`, файлы — CF_HDROP.
+> Замер: 2026-11-26 (W1-C, ветка `w1/paste`): модуль реализован целиком; `cargo test` — 49 тестов
+> чистой логики модуля (73 в крейте); нативно не запускалось (PQ-02) — фокус и ввод проверяются по
+> чек-листу из отчёта W1-C на INT-1.
+
+Файлы: `focus.rs` (цель) · `uipi.rs` (уровни целостности) · `writer.rs` (транзакция буфера + байтовые
+форматы) · `input.rs` (`SendInput`) · `compose.rs` (записи → содержимое буфера) · `flow.rs` (шаги
+вставки) · `stack.rs` (очередь) · `open.rs` (открыть / открыть с помощью / показать) · `dragout.rs`
+(OLE drag) · `commands.rs` (§9.6; всё блокирующее — в `spawn_blocking`).
+
+### 6.1. Цель (`focus.rs`)
+
+`capture_target()` (зовёт `picker::summon` **до** показа): `GetForegroundWindow()` → решение
+`classify()` (покрыто тестом):
+- **сам шелф** на переднем плане (повторный summon во время анимации закрытия, возврат после
+  `keepOpen`) → **прежняя цель сохраняется** — никогда не затирается «ничем» (баг Liquid Tools);
+- любое другое своё окно (по PID окна и PID его корневого владельца — настройки, трей-меню,
+  всплывашки WebView2), рабочий стол (`Progman`/`WorkerW`), панели задач (`Shell_TrayWnd`,
+  `Shell_SecondaryTrayWnd`, переполнение трея), невидимое/свёрнутое окно → цели нет (`None`,
+  Enter копирует — SPEC §3.1);
+- иначе — новая цель `Target { hwnd, pid, info: TargetInfo }`.
+
+`TargetInfo`: `exe` — полный путь в нижнем регистре (`QueryFullProcessImageNameW`); `name` —
+`FileDescription` из ресурса версии (`VerQueryValueW`, кэш на exe; иначе имя файла); `title` —
+`GetWindowTextW` (чужому окну не шлёт `WM_GETTEXT` — зависшая цель не блокирует); `iconUrl` —
+`capture::app_icon_data_url(exe)` (§15); `elevated` — §6.2. UWP-окна (`ApplicationFrameHost.exe`)
+описываются по процессу дочернего CoreWindow. `current_target()` — та же цель, если окно живо,
+видимо, не свёрнуто и принадлежит тому же PID (защита от переиспользованного HWND).
+
+### 6.2. UIPI (`uipi.rs`)
+
+`SendInput` «is subject to UIPI», а заблокированный вызов ничего не сообщает
+([SendInput](https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-sendinput)) — поэтому
+уровни сравниваются заранее: `OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)` →
+`OpenProcessToken(TOKEN_QUERY)` → `GetTokenInformation(TokenIntegrityLevel)` → последний
+sub-authority SID метки (low 0x1000 · medium 0x2000 · high 0x3000 · system 0x4000).
+`elevated = target > self`; цель, которую нельзя опросить, — `elevated = true` (copy-only — безопасная
+сторона). Если `SendInput` всё же вставил 0 событий — исход `copied/elevated` + HUD `elevated`.
+
+### 6.3. Запись в буфер (`writer.rs`)
+
+- **Владелец буфера** — скрытое message-only окно (`HWND_MESSAGE`) на своём потоке с циклом
+  сообщений: при `OpenClipboard(NULL)` «EmptyClipboard sets the clipboard owner to NULL; this causes
+  SetClipboardData to fail» ([OpenClipboard](https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-openclipboard)),
+  а не качающий сообщения владелец задержал бы чужой `EmptyClipboard` (`WM_DESTROYCLIPBOARD`).
+  Создаётся в `paste::init`.
+- **Одна транзакция**: все HGLOBAL выделяются и форматы регистрируются **до** открытия; `OpenClipboard`
+  — 11 попыток с бэкоффом 0/5/10/20/30/40/50/60/80/100/100 мс (≈ 0,5 с); `EmptyClipboard`;
+  `SetClipboardData` по порядку; `CloseClipboard`. Блок, не принятый системой, освобождается
+  (`OwnedGlobal::drop`) на любом пути ошибки — утечки Liquid Tools нет. Сразу после `CloseClipboard`
+  — `capture::mark_own_write(GetClipboardSequenceNumber())` (и при частичной неудаче: буфер уже
+  изменён). Успех = принят обязательный формат; необязательные — по возможности.
+- **Порядок форматов — от самого описательного** ([Clipboard Formats](https://learn.microsoft.com/windows/win32/dataxchg/clipboard-formats#multiple-clipboard-formats)):
+  текст — `HTML Format` → `Rich Text Format` → `CF_UNICODETEXT` (обяз.); картинка — `PNG` (файл
+  `media\<id>.png` как есть) → `CF_DIB` (обяз.; **одно** декодирование PNG, полупрозрачность
+  сведена на белый — CF_DIB альфу не несёт, альфу берут из PNG); файлы — `CF_HDROP` (обяз.;
+  DROPFILES `pFiles=20, fWide=1`, пути UTF-16 с двойным NUL) → `Preferred DropEffect = DROPEFFECT_COPY`
+  (вставка из истории никогда не перемещает оригиналы) → `CF_UNICODETEXT` со списком путей (CRLF).
+- **CF_HTML**: заголовок `Version:0.9` + `StartHTML/EndHTML/StartFragment/EndFragment` — байтовые
+  смещения от начала данных, 10 цифр с ведущими нулями (фиксированная длина заголовка);
+  `StartFragment` — сразу после `<!--StartFragment-->`, `EndFragment` — на `<!--EndFragment-->`;
+  UTF-8, NUL вне `EndHTML` ([HTML Clipboard Format](https://learn.microsoft.com/windows/win32/dataxchg/html-clipboard-format)).
+  Маркеры из хранилища сохраняются (терпимы к пробелам `<!-- StartFragment -->`); нет маркеров —
+  вставляются внутрь `<body>` или документ оборачивается; если в данных остался заголовок CF_HTML —
+  берётся только контекст. `SourceURL` не пишется (в `PastePayload` его нет).
+
+### 6.4. Что кладём (`compose.rs`)
+
+| Режим | Одна запись | Несколько записей |
+|---|---|---|
+| `auto` | текстовые виды: текст + HTML + RTF (`picker.alwaysPlain` → только текст); картинка: PNG + DIB; файлы: CF_HDROP | все не-картинки — файлы → **один** CF_HDROP (объединение путей без дублей); иначе текст через разделитель (файлы — путями); картинки пропускаются → `reason: 'partial'`; только картинки → первая картинка + `partial` |
+| `plain` | только `CF_UNICODETEXT` (файлы — путями); у картинки текста нет → вставляется картинка | текст через разделитель, картинки пропускаются (`partial`) |
+| `{format}` | ровно этот вид (+ текст как fallback для HTML/RTF); нет формата → `invalid` | `text` = plain; `files` — объединение файловых записей (`partial`, если были другие); `html/rtf/png` → `invalid` |
+
+Разделитель: из запроса (одиночный LF → CRLF), иначе `picker.mergeSeparator` (`\r\n` / пробел / таб /
+ничего). Удалённые записи пропускаются; все удалены → `failed/not_found`; PNG пропал из `media\` →
+`failed/not_found`. Использование (`store.mark_used(ids, picker.bumpOnPaste)` + `clips:changed
+{origin:'user', change:'updated'}`) отмечается для реально вставленных/скопированных записей.
+
+### 6.5. Ввод (`input.rs`)
+
+Один `SendInput` на вставку (события «are not interspersed» с пользовательскими):
+1. если физически зажат Alt или Win — нажатие неназначенной клавиши VK `0xE8` («Unassigned» в
+   [Virtual-Key Codes](https://learn.microsoft.com/windows/win32/inputdev/virtual-key-codes)): иначе
+   отпускание Alt было бы «голым» → меню цели (Win → «Пуск»); приём AutoHotkey «menu mask key», как
+   `dictation::mask_bare_modifier` в Liquid Tools;
+2. keyup всех физически зажатых L/R Shift/Ctrl/Alt/Win (`GetAsyncKeyState`);
+3. chord: `Ctrl+V` | `Shift+Insert` | `Ctrl+Shift+V`;
+4. keydown тех же модификаторов обратно + ещё одна маска, если среди них Alt/Win: логическое
+   состояние снова равно физическому, поэтому, удерживая `Alt+Shift` и нажимая `V`, пользователь
+   вставляет элемент за элементом, а не печатает «v»; финальное физическое отпускание не «голое»
+   (нет меню, «Пуска», переключения раскладки `Alt+Shift`).
+
+Клавиши — **VK + скан-код** без `KEYEVENTF_SCANCODE`: приложения ловят Ctrl+V по VK (`'V'` и в
+русской раскладке), скан-код — `MapVirtualKeyExW(vk, MAPVK_VK_TO_VSC_EX, <раскладка потока цели>)`,
+старший байт `0xE0` → `KEYEVENTF_EXTENDEDKEY` (Insert, стрелки, правые Ctrl/Alt, Win; запасная
+таблица, если перевода нет). `dwExtraInfo = 0x4C514C50` («LQLP») — LL-хук хоткеев (W1-D) может
+игнорировать наш ввод. Частичная вставка батча → keyup модификаторов chord'а.
+
+**Chord по приложению**: `settings.picker.pasteKeys` (запись с `\`/`/` сравнивается с полным путём,
+иначе с именем файла, без учёта регистра) → встроенные: `mintty.exe` и `putty.exe` → `Shift+Insert`
+(сверено: [mintty(1)](https://mintty.github.io/mintty.1.html) — «Shift+Ins: Paste», Ctrl+V только
+с `CtrlExchangeShift`; [PuTTY §3.1.1](https://the.earth.li/~sgtatham/putty/0.83/htmldoc/Chapter3.html)
+— Shift-Ins) → `Ctrl+V`. Для Windows Terminal правило не нужно: по умолчанию `ctrl+v`, `ctrl+shift+v`,
+`shift+insert` ([WT actions](https://learn.microsoft.com/windows/terminal/customize-settings/actions));
+консоль Windows 10/11 — «Enable Ctrl key shortcuts» включено по умолчанию.
+
+После вставки (`After`, через 40 мс, только во всё ещё активную цель): `caretBack` → `←` × n (≤ 5000)
+для `{cursor}`; `stack.newlineAfterPaste` → `Enter`.
+
+### 6.6. Поток (`flow.rs`)
+
+Чистый планировщик `plan(origin, route, closeOnCopy) → [Step]` (порядок закреплён тестами) +
+исполнитель; вставки сериализованы (вторая ждёт первую).
+
+| Откуда / цель | Шаги |
+|---|---|
+| шелф, цель вставляемая | `Write → WaitKeys → FocusTarget → HideShelf → Settle(30 мс) → Inject → After → HudIfNotPasted` |
+| шелф + `keepOpen` | `Write → WaitKeys → BeginHandoff → FocusTarget → Settle → Inject → After → ReturnToShelf → EndHandoff` |
+| шелф, цель elevated | `Write → WaitKeys → FocusTarget → HideShelf → Hud(elevated)` → `copied/elevated` (фокус возвращён окну админа — Ctrl+V одним нажатием; `SetForegroundWindow` UIPI не блокирует, ввод — блокирует) |
+| шелф, цели нет | `closeOnCopy` → `Write → HideShelf → Hud(copied)`; иначе `Write` → `copied/no_target` |
+| `keepOpen` + elevated / нет цели | `Write` (шелф виден — тост показывает фронт) |
+| без шелфа (хоткей очереди), цель = текущее активное окно | `Write → WaitKeys → FocusTarget (сразу ок) → Settle → Inject → After → HudIfNotPasted`; elevated → `Write → Hud(elevated)`; нет цели → `Write → Hud(copied)` |
+
+Почему так (отклонения от первоначального эскиза «hide → focus → запись»):
+- **Write первым**, пока шелф виден: занятый буфер (`failed/clipboard_busy`) обнаруживается до
+  того, как что-то сдвинулось, и шелф может показать ошибку. От записи до ввода всё равно ≥ 30 мс.
+- **WaitKeys**: ждём (≤ 1 с), пока отпущены Enter, 1–9 (и NumPad 1–9), главная клавиша хоткея
+  очереди — иначе автоповтор после смены фокуса попал бы в цель («двойной Enter», «вставилась v»).
+  Не отпущены за 1 с → ввод не посылаем (`copied/focus_lost`).
+- **FocusTarget до HideShelf**: `SetForegroundWindow(target)`, пока процесс Liqlip — foreground
+  (шелф активен), разрешён («The calling process is the foreground process»; плюс «received the last
+  input event» — Enter/клик в шелфе) —
+  [SetForegroundWindow](https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-setforegroundwindow).
+  Шелф прячется уже неактивным — система не активирует «следующее» постороннее окно. Ожидание
+  `GetForegroundWindow() == target` шагом 10 мс ≤ 500 мс; на половине — **одна** повторная
+  `SetForegroundWindow`. Сознательно **не** используются `AttachThreadInput` к чужому потоку
+  (сливает состояние ввода двух процессов), `SPI_SETFOREGROUNDLOCKTIMEOUT` (системная настройка —
+  CLAUDE.md, правило 6), инжект Alt для «разблокировки». Свёрнутую цель не разворачиваем.
+- **Inject** перепроверяет foreground прямо перед `SendInput`; не совпало → ввода нет, данные в
+  буфере, HUD `copied`, `copied/focus_lost`.
+- `keepOpen`: шелф не прячется; на время передачи фокуса `focus::handoff_active() == true` —
+  выход шелфа по `Focused(false)` (W1-D) обязан его игнорировать; после вставки
+  `SetForegroundWindow(шелф)`. Если Windows не вернёт активацию (наш процесс уже не foreground),
+  шелф остаётся видимым, но пассивным — клик в него активирует.
+- Исход: `pasted`; `copied` + `no_target | elevated | focus_lost`; `failed` + `clipboard_busy |
+  not_found | stack_empty`; `partial` (аддитивно в контракт, W1-C) — к `pasted/copied`, если часть
+  записей пропущена.
+
+### 6.7. Очередь вставки (`stack.rs`)
+
+`StackState` в памяти процесса (`Vec<StackItem>`, ключи `s1, s2…` уникальны — одна запись может стоять
+дважды). `snapshot`/`len` не трогают БД (трей зовёт их из любого потока). Каждая операция сначала
+**чистит** элементы, чьи записи удалены (`store.get_for_paste` → `not_found`), и после любой мутации
+шлёт `stack:changed` + `tray::refresh`. `stack_add` — все id должны существовать (как в моке),
+`stack_move(key, null)` — в конец, неизвестный ключ → `not_found`. `push(id)` — для режима сбора
+захвата. `stack_paste_next` / хоткей: верхний элемент → если активен сам шелф (поповер очереди) —
+поток шелфа к запомненной цели, иначе — **текущее активное окно** без шелфа (те же проверки
+UIPI/фокуса); снимается, если оказался в буфере (`pasted` или `copied`); `stack.newlineAfterPaste` →
+Enter после вставки; пустая очередь → `failed/stack_empty` (+ HUD `stack_empty` только на пути
+хоткея). `stack_paste_all(separator)` — вся очередь одной мультивставкой (очередь не очищается — для
+этого «Очистить»). Вставки из очереди сериализованы: два быстрых нажатия вставят два разных элемента.
+
+### 6.8. Открыть, показать, drag-out (`open.rs`, `dragout.rs`)
+
+- `clip_open`: ссылка → `tauri-plugin-opener` `open_url` (только `http/https/ftp/mailto`; `www.` →
+  `https://`; `file:` → локальный путь; `javascript:` и прочие протоколы → `invalid`); файл — первый
+  путь, картинка — `media\<id>.png` → `open_path` (нет файла → `not_found`).
+- `clip_open_with`: `SHOpenWithDialog` + `OAIF_EXEC` на отдельном STA-потоке (диалог — только для
+  одного файла; без `OAIF_EXEC` пользователь получил бы подсказку о настройках) —
+  [SHOpenWithDialog](https://learn.microsoft.com/windows/win32/api/shlobj_core/nf-shlobj_core-shopenwithdialog);
+  отмена диалога — не ошибка.
+- `clip_reveal`: `opener::reveal_items_in_dir` = `SHOpenFolderAndSelectItems` (+ запасной
+  `ShellExecuteEx` плагина) для существующих путей / PNG картинки.
+- `clip_drag_out`: перенос Liquid Tools `dragout.rs` без `screenshot::wait_file_ready`. Файлы и
+  картинки (их PNG) важнее текста: файлы — shell data object путей (CF_HDROP…) + пути текстом +
+  `Preferred DropEffect = COPY`; **одна** картинка — дополнительно `FileGroupDescriptorW`/`FileContents`
+  (их читают цели на Chromium/Electron), `PNG`, `CF_DIB`, превью ≤ 192 px как drag-image
+  (`IDragSourceHelper::InitializeFromBitmap`); только текст — `CF_UNICODETEXT` + `CF_TEXT` (ANSI через
+  `WideCharToMultiByte(CP_ACP)`). Модальный цикл `SHDoDragDrop` на главном потоке (без своего
+  изображения Shell рисует общее —
+  [SHDoDragDrop](https://learn.microsoft.com/windows/win32/api/shlobj_core/nf-shlobj_core-shdodragdrop));
+  `dropped` = цель приняла `DROPEFFECT_COPY`, иначе `cancelled`. Пока идёт перетаскивание,
+  `dragout::active() == true` — шелф не должен закрываться по потере фокуса.
+
+### 6.9. Ограничения
+
+- Нативно не проверено (PQ-02): фокус, UIPI, `SendInput`, drag-out — по чек-листу W1-C на INT-1.
+- Приложения, которые сами уводят фокус после активации (редко), дадут `focus_lost` — данные в
+  буфере, HUD подсказывает Ctrl+V.
+- `keepOpen`: возврат активации шелфу зависит от правил foreground Windows (см. 6.6).
+- Внутри окна-цели фокус возвращается в тот элемент, который приложение само восстанавливает при
+  активации (как при Alt+Tab).
 
 ## 7. Окно шелфа (`picker/`)
 
@@ -471,7 +639,7 @@ export interface TargetInfo { exe: string; name: string; title: string; iconUrl:
 export interface PasteRequest { ids: number[]; mode: PasteMode; separator?: string; keepOpen?: boolean }
 export interface TextPasteRequest { text: string; plain: boolean; caretBack?: number; keepOpen?: boolean }
 export interface PasteOutcome { result: 'pasted' | 'copied' | 'failed';
-  reason?: 'no_target' | 'elevated' | 'focus_lost' | 'clipboard_busy' | 'not_found' | 'stack_empty' }
+  reason?: 'no_target' | 'elevated' | 'focus_lost' | 'clipboard_busy' | 'not_found' | 'stack_empty' | 'partial' }
 export interface CaptureStatus { pausedUntil: number | null; /* -1 = до возобновления */ ignoreNext: boolean; collectToStack: boolean }
 export interface StackItem { key: string; clipId: number; kind: Kind; preview: string }
 export interface Stack { items: StackItem[] }
@@ -591,6 +759,7 @@ export interface ImportReport { imported: number; skipped: number; folders: numb
   `PickerOpen`/`PickerMode`, `PickerClose` (`{}`), `PickerLayout` (ширина/высота панели **без** bleed и
   bleed — логические px), `SettingsNavigate`, `HotkeysCaptured` (**`combo: ""` = запись отменена**, Esc),
   `HudShow`/`HudKind`, `OcrProgress`, `ImportProgress`, `ResolvedTheme`.
+- **`PasteReason` + `partial`** (W1-C): часть записей пропущена — картинки при склейке текста, не-файлы при вставке файлов; вставлено остальное.
 - **`PasteReason` + `stack_empty`** (координатор, приёмка W0): `stack_paste_next`/`stack_paste_all` при пустой очереди → `{ result: 'failed', reason: 'stack_empty' }` (хоткей дополнительно показывает `hud::show(StackEmpty)`).
 - **Безопасные заглушки** (до W1 возвращают `Ok`): `capture_status` (запись идёт), `stack_get`
   (пусто), `picker_target` (`null`). **Реализованы в W0:** `settings_get`, `settings_set`, `app_info`,
@@ -842,9 +1011,12 @@ pub mod stack {
     pub fn paste_next(app: &AppHandle) -> Result<PasteOutcome, String>; // ← хоткей StackNext (на worker'е)
 }
 ```
-Поток вставки: `picker::hide_now` → фокус цели → `store.get_for_paste` → запись в буфер →
-`capture::mark_own_write(seq)` → ввод → `store.mark_used` → `clips:changed {origin:'user'}`; нет
-фокуса/elevated → `picker::hud::show(…)`.
+Поток вставки (реализация W1-C, подробно — §6.6): `store.get_for_paste` → запись в буфер (+
+`capture::mark_own_write(seq)`) → ждать отпускания клавиш → `SetForegroundWindow(цель)` →
+`picker::hide_now` → перепроверка foreground → ввод → `store.mark_used` → `clips:changed
+{origin:'user'}`; нет фокуса/elevated → копирование + `picker::hud::show(…)`. Дополнительно для W1-D:
+`paste::focus::handoff_active()` и `paste::dragout::active()` — пока `true`, выход шелфа по потере
+фокуса не срабатывает.
 
 **picker + hud (W1-D)** — `src-tauri/src/picker/{mod,hud}.rs`
 
