@@ -208,16 +208,25 @@ impl Default for Timing {
     }
 }
 
-/// Is `exe` (full path, lower-case) on the ignore list? Entries match the file name
-/// (`keepass.exe`, or the bare stem `keepass`) or the full path, case-insensitively, with
-/// `/` and `\` equivalent.
-pub fn is_ignored(exe: &str, ignored: &[String]) -> bool {
-    let full = exe.replace('/', "\\").to_lowercase();
+/// Is `exe` on the ignore list? Entries match the full path, the file name (`keepass.exe`)
+/// or the bare stem (`keepass`), case-insensitively, with `/` and `\` equivalent. An exe known
+/// only by its file name — an imported Liquid Tools record keeps the stem — also matches a
+/// full-path entry with that file name: privacy first. The capture always passes a full path.
+///
+/// The one ignore-list rule: the import (`import::runner`) uses it too (W4, FIX-16).
+pub(crate) fn is_ignored(exe: &str, ignored: &[String]) -> bool {
+    let full = exe.trim().replace('/', "\\").to_lowercase();
     let name = full.rsplit('\\').next().unwrap_or(&full);
     let stem = name.strip_suffix(".exe").unwrap_or(name);
+    let bare = name.len() == full.len();
     ignored.iter().any(|entry| {
         let e = entry.trim().replace('/', "\\").to_lowercase();
-        !e.is_empty() && (e == full || e == name || (!e.contains('\\') && !e.contains('.') && e == stem))
+        let e_name = e.rsplit('\\').next().unwrap_or(&e);
+        !e.is_empty()
+            && (e == full
+                || e == name
+                || (!e.contains('\\') && !e.contains('.') && e == stem)
+                || (bare && e_name == name))
     })
 }
 
@@ -959,6 +968,11 @@ mod tests {
         assert!(!is_ignored("c:\\apps\\keepassxc.exe", &list));
         assert!(!is_ignored("c:\\apps\\notepad.exe", &[]));
         assert!(!is_ignored("c:\\apps\\notepad.exe", &["  ".to_string()]));
+        // FIX-16 (the import's records): a bare file name matches a full-path entry by name;
+        // a full path in another folder still does not.
+        assert!(is_ignored("Vault.exe", &list));
+        assert!(is_ignored(" keepass.exe ", &list));
+        assert!(!is_ignored("notepad.exe", &list));
     }
 
     #[test]

@@ -31,6 +31,9 @@ mod textread;
 #[cfg(windows)]
 mod win32;
 
+/// The ignore-list rule — the import skips records of ignored apps by the same rule (FIX-16).
+pub(crate) use snapshot::is_ignored;
+
 use crate::model::{CaptureStatus, PerKind, RunningApp, Settings};
 use crate::{events, logx, tray};
 use state::CaptureState;

@@ -6,9 +6,9 @@
 //! capture rule, `capture::secrets`) is not imported and counts as `skipped` (FIX-01) —
 //! otherwise an import would bring in what the capture had refused. For the same reason a
 //! record whose source app is on `settings.privacy.ignoredApps` (KeePass, Bitwarden, …) is
-//! skipped too (W3).
+//! skipped too (W3), by the capture's own rule (`capture::is_ignored`, FIX-16).
 
-use crate::capture::secrets;
+use crate::capture::{is_ignored, secrets};
 use crate::logx;
 use crate::model::{ImportReport, Kind};
 use crate::store::bulk::{BatchStats, ImportItem, ImportSession};
@@ -29,26 +29,6 @@ pub(crate) type Page = Vec<Result<ImportItem, String>>;
 /// Images and file lists are never secrets (as in the capture worker).
 fn looks_like_secret(clip: &NewClip) -> bool {
     !matches!(clip.kind, Kind::Image | Kind::File) && clip.text.as_deref().is_some_and(secrets::looks_like_secret)
-}
-
-/// The capture's ignore-list rule (`capture::snapshot::is_ignored`, private to the capture
-/// module — keep the two in step): an entry matches the exe's full path, its file name, or
-/// its bare stem, case-insensitively, `/` ≡ `\`. An exe known only by its file name (Liquid
-/// Tools kept the stem) also matches a full-path entry with that file name: privacy first.
-pub(crate) fn is_ignored(exe: &str, ignored: &[String]) -> bool {
-    let full = exe.trim().replace('/', "\\").to_lowercase();
-    let name = full.rsplit('\\').next().unwrap_or(&full);
-    let stem = name.strip_suffix(".exe").unwrap_or(name);
-    let bare = name.len() == full.len();
-    ignored.iter().any(|entry| {
-        let e = entry.trim().replace('/', "\\").to_lowercase();
-        let e_name = e.rsplit('\\').next().unwrap_or(&e);
-        !e.is_empty()
-            && (e == full
-                || e == name
-                || (!e.contains('\\') && !e.contains('.') && e == stem)
-                || (bare && e_name == name))
-    })
 }
 
 /// `skip_secrets` = `settings.privacy.secretPatterns`; `ignored_apps` =
