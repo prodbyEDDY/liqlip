@@ -837,6 +837,10 @@ pub enum HudKind {
     StackEmpty,
     Paused,
     Elevated,
+    /// W1-D (additive): pause toggled off by the hotkey.
+    Resumed,
+    /// W1-D (additive): "skip next copy" armed by the hotkey.
+    SkipNext,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

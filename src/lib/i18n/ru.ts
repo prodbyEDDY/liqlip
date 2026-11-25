@@ -71,8 +71,11 @@ export const ru: Record<TranslationKey, string> = {
   // --- onboarding.* (W1-F) ---
 
   // --- hud.* (W1-D) ---
-  "hud.copied": "Скопировано — нажмите Ctrl+V",
+  "hud.copied": "Скопировано — нажмите {keys}",
+  "hud.elevated": "Окно администратора — нажмите {keys}",
   "hud.stackEmpty": "Очередь пуста",
   "hud.paused": "Запись на паузе",
-  "hud.elevated": "Окно администратора — нажмите Ctrl+V",
+  "hud.resumed": "Запись возобновлена",
+  "hud.skipNext": "Следующее копирование не сохранится",
+  "hud.pasteKeys": "Ctrl+V",
 };
