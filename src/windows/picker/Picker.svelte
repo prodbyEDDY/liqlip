@@ -61,7 +61,10 @@
 
 <svelte:window onkeydown={keyboard.onKeydown} onkeyup={keyboard.onKeyup} onblur={keyboard.releaseCtrl} />
 
-<div class="stage" class:stage--open={shelf.open} data-edge={shelf.layout.position} style="--bleed:{shelf.layout.bleed}px">
+<!-- Closed (and before the first `picker:open`): nothing is rendered — the armed hover window
+     is visible, transparent and click-through, so any pixel would show at the screen edge. -->
+{#if shelf.rendered}
+<div class="stage" class:stage--open={shelf.shown} data-edge={shelf.layout.position} style="--bleed:{shelf.layout.bleed}px">
   <section
     bind:this={panel}
     class="panel squircle"
@@ -95,6 +98,7 @@
     <DragGhost />
   {/if}
 </div>
+{/if}
 
 <style>
   :global(html),

@@ -22,10 +22,14 @@
   $effect(() => {
     view.el = scroller;
     if (!scroller) return;
+    const el = scroller;
     const ro = new ResizeObserver(() => view.measure());
-    ro.observe(scroller);
+    ro.observe(el);
     view.measure();
-    return () => ro.disconnect();
+    return () => {
+      ro.disconnect();
+      if (view.el === el) view.el = null;
+    };
   });
   // Axis change (layout switch) → re-measure on the next frame.
   $effect(() => {

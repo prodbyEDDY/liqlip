@@ -57,6 +57,15 @@
   }
 
   function onclick(e: MouseEvent) {
+    // A passive (hover-opened) shelf becomes keyboard-interactive first, then acts (W1-D).
+    if (!shelf.interactive) {
+      void shelf.makeInteractive().then(() => handleClick(e));
+      return;
+    }
+    handleClick(e);
+  }
+
+  function handleClick(e: MouseEvent) {
     if (clip) {
       drag.click(id, e);
       return;

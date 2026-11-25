@@ -79,7 +79,13 @@ function toClip(d: ClipDetail): Clip {
 
 class Shelf {
   // ── session ──
+  /** Logical state: between `picker:open` and `picker:close`. */
   open = $state(false);
+  /** The panel is in the DOM (from `picker:open` until the exit animation ends). While closed
+   *  nothing is rendered: the armed hover window is visible and transparent (W1-D). */
+  rendered = $state(false);
+  /** The panel carries its open styles (one frame after mounting, so the entrance plays). */
+  shown = $state(false);
   interactive = $state(true);
   mode = $state<PickerOpen["mode"]>("summon");
   target = $state.raw<TargetInfo | null>(null);
@@ -223,6 +229,15 @@ class Shelf {
   }
 
   #onOpen(p: PickerOpen): void {
+    // A second `picker:open` without a close in between (hover → summon by the hotkey) only
+    // switches the mode and focus — search, selection and scroll stay (W1-D, ARCHITECTURE §7.8).
+    if (this.open) {
+      this.mode = p.mode;
+      this.target = p.target;
+      this.interactive = p.interactive;
+      if (p.interactive) this.#focusAfterOpen();
+      return;
+    }
     clearTimeout(this.#releaseTimer);
     const remember = this.settings?.picker.rememberSearch ?? "60s";
     const closedFor = this.#closedAt ? Date.now() - this.#closedAt : 0;
@@ -242,7 +257,15 @@ class Shelf {
     const keep = feed.status === "ready" && this.sourceKey === this.#lastKey;
     selection.userMoved = false;
     this.open = true;
+    this.rendered = true;
     this.#lastKey = this.sourceKey;
+    // Mount in the closed pose, flush layout, then switch to the open pose: the CSS
+    // transition plays without waiting for an animation frame.
+    void tick().then(() => {
+      void this.panelEl?.getBoundingClientRect();
+      this.shown = this.open;
+      if (this.open && this.interactive) this.#focusAfterOpen();
+    });
     const t0 = performance.now();
     void this.#reload(keep).then(async () => {
       // Cards are in the DOM after the next microtask flush; the browser paints them on the
@@ -259,28 +282,32 @@ class Shelf {
     void stackGet()
       .then((s) => (this.stack = s))
       .catch(() => {});
-    if (p.interactive) {
-      // Now and on the next frame: focusing in the same tick as the OS activation can be
-      // swallowed by that transition (Liquid Tools), and a frame may never come while the
-      // window isn't composited.
-      this.focusSearch(false);
-      requestAnimationFrame(() => this.focusSearch(false));
-    }
+  }
+
+  /** Focus the search now and on the next frame: focusing in the same tick as the OS
+   *  activation can be swallowed by that transition (Liquid Tools), and a frame may never
+   *  come while the window isn't composited. */
+  #focusAfterOpen(): void {
+    this.focusSearch(false);
+    requestAnimationFrame(() => {
+      if (this.open) this.focusSearch(false);
+    });
   }
 
   #onClose(): void {
     if (!this.open) return;
     this.open = false;
+    this.shown = false;
     this.#closedAt = Date.now();
     overlays.closeAll();
     this.renamingId = null;
     clearTimeout(this.#releaseTimer);
     this.#releaseTimer = setTimeout(() => {
+      this.rendered = false;
       feed.release();
       selection.reset();
       this.pendingNew = false;
       this.#lastKey = "";
-      view.scrollToStart();
     }, motionDuration(RELEASE_MS));
   }
 
