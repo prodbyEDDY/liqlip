@@ -333,9 +333,23 @@ fn parse_lenient(raw: &[u8]) -> (Settings, bool) {
             }
         }
     }
-    let parsed: Settings = serde_json::from_value(acc).unwrap_or_else(|_| defaults.clone());
+    let mut parsed: Settings = serde_json::from_value(acc).unwrap_or_else(|_| defaults.clone());
+    // A hand-edited duplicate must not send the whole list back to the defaults (`validate`
+    // refuses lists with duplicates): keep the first entry (W4, FIX-17). The file was not taken
+    // as is, so it counts as not clean — the original is kept as `settings.json.invalid`.
+    let apps_dup = dedup_case_insensitive(&mut parsed.privacy.ignored_apps, |a| a.as_str());
+    let keys_dup = dedup_case_insensitive(&mut parsed.picker.paste_keys, |k| k.exe.as_str());
     let (s, errors) = validate(&defaults, parsed);
-    (s, clean && errors.is_empty())
+    (s, clean && !apps_dup && !keys_dup && errors.is_empty())
+}
+
+/// Drop every entry whose key equals an earlier one, ignoring case and surrounding spaces
+/// (the same comparison as `validate`'s duplicate check). `true` if anything was dropped.
+fn dedup_case_insensitive<T>(items: &mut Vec<T>, key: impl Fn(&T) -> &str) -> bool {
+    let before = items.len();
+    let mut seen = std::collections::HashSet::new();
+    items.retain(|it| seen.insert(key(it).trim().to_lowercase()));
+    items.len() != before
 }
 
 // ── Validation ──────────────────────────────────────────────────────────────
@@ -600,6 +614,36 @@ mod tests {
         assert!(s.picker.favorites_first);
         assert_eq!(s.storage.max_entries, 20_000);
         assert_eq!(s, parse_lenient(raw).0);
+    }
+
+    /// W4, FIX-17: a duplicate in a hand-edited list keeps the list — the first entry stays
+    /// (case and surrounding spaces ignored); the user's own entries are not lost to the defaults.
+    #[test]
+    fn lenient_load_collapses_duplicates_instead_of_dropping_the_list() {
+        let raw = br#"{
+            "privacy": { "ignoredApps": ["KeePass.exe", "C:\\Tools\\Vault.exe", "keepass.exe", " c:\\tools\\VAULT.exe ", "mine.exe"] },
+            "picker": { "pasteKeys": [
+                { "exe": "WT.exe", "chord": "ctrl+shift+v" },
+                { "exe": "putty.exe", "chord": "shift+insert" },
+                { "exe": " wt.exe", "chord": "ctrl+v" }
+            ] }
+        }"#;
+        let (s, clean) = parse_lenient(raw);
+        assert_eq!(s.privacy.ignored_apps, vec!["KeePass.exe", "C:\\Tools\\Vault.exe", "mine.exe"]);
+        let keys: Vec<(&str, PasteChord)> = s.picker.paste_keys.iter().map(|k| (k.exe.as_str(), k.chord)).collect();
+        assert_eq!(keys, vec![("WT.exe", PasteChord::CtrlShiftV), ("putty.exe", PasteChord::ShiftInsert)], "the first entry wins");
+        assert!(!clean, "the file was not taken as is: the original is kept");
+        // Without duplicates the lists load untouched and the file is clean.
+        let raw = br#"{ "privacy": { "ignoredApps": ["a.exe", "b.exe"] } }"#;
+        let (s, clean) = parse_lenient(raw);
+        assert_eq!(s.privacy.ignored_apps, vec!["a.exe", "b.exe"]);
+        assert!(clean);
+        // settings_set still refuses a list with duplicates (the UI never sends one).
+        let mut next = Settings::default();
+        next.privacy.ignored_apps = vec!["x.exe".into(), "X.EXE".into()];
+        let (out, errors) = validate(&Settings::default(), next);
+        assert_eq!(out.privacy.ignored_apps, Settings::default().privacy.ignored_apps);
+        assert_eq!(errors[0].field, "privacy.ignoredApps");
     }
 
     #[test]

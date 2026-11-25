@@ -1456,6 +1456,10 @@ export interface ImportReport { imported: number; skipped: number; folders: numb
   изменение: атомарная (W3: и надёжная — `sync_all` перед переименованием) запись `settings.json` →
   замок записи отпускается (W3, §15 правило 7) → подписчики → `settings:changed` ⚑ → при смене темы
   `theme://changed` ⚑ (разрешённая тема). Загрузка `settings.json` — по полям: неверное поле → дефолт.
+  Дубль в `privacy.ignoredApps` / `picker.pasteKeys` (ручная правка файла) при загрузке схлопывается —
+  остаётся первое вхождение без учёта регистра и пробелов по краям, список не откатывается к умолчаниям
+  (W4, FIX-17); такой файл считается «не чистым» — оригинал сохраняется в `settings.json.invalid`.
+  `settings_set` список с дублями по-прежнему отвергает (`invalid`).
 - **Тема.** `theme://changed` несёт разрешённую тему (`'light'|'dark'`); шлётся при смене
   `general.theme` и при смене темы Windows, если выбрано `system`.
 
