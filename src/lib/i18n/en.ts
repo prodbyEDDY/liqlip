@@ -168,7 +168,7 @@ export const en = {
   "picker.toast.moved": "Moved to “{name}”",
   "picker.toast.removedFromFolder": "Removed from the folder",
   "picker.toast.folderDeleted": "Folder “{name}” deleted",
-  "picker.toast.stacked": "Added to the paste stack · {n} in queue",
+  "picker.toast.stacked": "Added to the stack · {n} in all",
   "picker.toast.cannotOpen": "This item can't be opened",
   "picker.outcome.pasted": "Pasted",
   "picker.outcome.copied": "Copied",

@@ -13,6 +13,7 @@
   import type { Kind } from "$lib/ipc/types";
   import { shelf } from "./shelf.svelte";
   import { selection } from "./selection.svelte";
+  import { feed } from "./feed.svelte";
   import { toasts } from "./toasts.svelte";
   import { chipToken, completeToken, suggest, wordAt, type Suggestion } from "./query";
 
@@ -157,7 +158,7 @@
   }
 
   const activeDescendant = $derived(
-    open ? `sug-${active}` : selection.current !== null ? `card-${selection.current}` : undefined,
+    open ? `sug-${active}` : selection.current !== null && feed.status === "ready" ? `card-${selection.current}` : undefined,
   );
 </script>
 
@@ -191,7 +192,7 @@
       aria-label={t("picker.search.label")}
       aria-autocomplete="list"
       aria-expanded={open}
-      aria-controls={open ? "picker-suggest" : "picker-grid"}
+      aria-controls={open ? "picker-suggest" : feed.status === "ready" && feed.count > 0 ? "picker-grid" : undefined}
       aria-activedescendant={activeDescendant}
       autocomplete="off"
       spellcheck="false"

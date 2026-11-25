@@ -169,7 +169,7 @@ export const ru: Record<TranslationKey, string> = {
   "picker.toast.moved": "Перенесено в «{name}»",
   "picker.toast.removedFromFolder": "Убрано из папки",
   "picker.toast.folderDeleted": "Папка «{name}» удалена",
-  "picker.toast.stacked": "Добавлено в очередь · всего {n}",
+  "picker.toast.stacked": "Добавлено · в очереди {n}",
   "picker.toast.cannotOpen": "Эту запись нельзя открыть",
   "picker.outcome.pasted": "Вставлено",
   "picker.outcome.copied": "Скопировано",
