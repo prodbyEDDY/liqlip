@@ -56,7 +56,8 @@ liqlip/
         mock/                   браузерный адаптер: index (роутер) · bus (события, флаги URL, задержка) ·
                                 seed · clips (store+paste+stack+симулятор захвата) · settings · system
       motion/ · theme.svelte.ts · appearance.ts · hotkey.ts · hotkeyCapture.ts · scrollFade.ts (затухание краёв
-                                прокрутки, W3-D) · snippets/expand.ts (развёртка плейсхолдеров)
+                                прокрутки, W3-D) · snippets/expand.ts (развёртка плейсхолдеров) ·
+                                browserKeys.ts (клавиши браузера WebView2, которые глотает каждое окно, W4)
     windows/
       picker/                   шелф (Picker.svelte + компоненты, cards/, layout.ts, query.ts, transforms.ts …)
       settings/                 окно настроек + онбординг
@@ -1610,7 +1611,7 @@ stroke 1.5, `1em`), реестр `src/lib/icons.ts`, лицензия `public/li
   `src/lib/i18n/{en,ru}.ts` (агенты дописывают только свой префикс), `src/app.css`.
   С W0 к ним относятся и общие модули: `src-tauri/src/{settings,content,events,tray,theme,
   i18n_native,logx,fsx,autostart}.rs`, `src/lib/ipc/{commands,events,runtime,errors}.ts`,
-  `src/lib/ipc/mock/bus.ts`, `src/lib/{appearance,theme.svelte,hotkey,hotkeyCapture,scrollFade}.ts`,
+  `src/lib/ipc/mock/bus.ts`, `src/lib/{appearance,theme.svelte,hotkey,hotkeyCapture,scrollFade,browserKeys}.ts`,
   `src/lib/components/**`, `tests/{contract,settingsDefaults,ipcMock}.test.mjs`,
   `tests/helpers/`, `tests/fixtures/`. Нужна правка — сниппет в отчёте.
 - Контракт: агент может **аддитивно** добавить поле/команду, если без этого задача не решается,

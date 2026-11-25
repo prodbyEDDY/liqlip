@@ -6,6 +6,7 @@
   // Navigation: sidebar (↑/↓/Enter), Ctrl+Tab / Ctrl+Shift+Tab (also Ctrl+PgDn/PgUp),
   // `settings:navigate { section }` (from `settings_open`) and `?section=` in the URL
   // (browser checks; kept in sync with replaceState). `?onboarding=1` forces the onboarding.
+  import { isBrowserShortcut } from "$lib/browserKeys";
   import Button from "$lib/components/Button.svelte";
   import EmptyState from "$lib/components/EmptyState.svelte";
   import { applyLanguage, t, type TranslationKey } from "$lib/i18n/index.svelte";
@@ -94,6 +95,13 @@
   });
 
   function onKeydown(e: KeyboardEvent) {
+    // WebView2 browser accelerators (F5 / Ctrl+R reload the window and lose an unsaved edit,
+    // Ctrl+P prints, Ctrl+F opens a find bar…) — everywhere, onboarding and dialogs included
+    // (W4, FIX-15). The hotkey recorder sees keys first (capture phase) and stops them.
+    if (isBrowserShortcut(e, { find: true })) {
+      e.preventDefault();
+      return;
+    }
     if (onboarding || dialogs.current || document.querySelector("dialog[open]")) return;
     const next = (e.ctrlKey && e.code === "Tab") || (e.ctrlKey && (e.code === "PageDown" || e.code === "PageUp"));
     if (!next || e.altKey || e.metaKey) return;

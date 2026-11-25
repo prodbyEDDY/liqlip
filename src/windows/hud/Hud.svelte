@@ -6,6 +6,7 @@
   // chip says Ctrl+V. Browser preview on the mock: /hud.html?kind=copied (static) ·
   // &text=Shift%2BInsert · ?demo=1.
   import { onMount } from "svelte";
+  import { isBrowserShortcut } from "$lib/browserKeys";
   import Ico from "$lib/components/Ico.svelte";
   import Kbd from "$lib/components/Kbd.svelte";
   import { t } from "$lib/i18n/index.svelte";
@@ -47,7 +48,14 @@
 
   const parts = $derived(toast ? segments(t(KIND_KEY[toast.kind])) : []);
   const keys = $derived(toast ? keysLabel(toast, t("hud.pasteKeys")) : "");
+
+  /** The HUD is never focused; should it ever get a key, no browser feature runs (FIX-15). */
+  function onKeydown(e: KeyboardEvent): void {
+    if (isBrowserShortcut(e, { find: true })) e.preventDefault();
+  }
 </script>
+
+<svelte:window onkeydown={onKeydown} />
 
 <div class="stage">
   {#if toast}
