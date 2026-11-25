@@ -124,6 +124,29 @@ pub fn text_metrics(text: &str) -> TextMetrics {
     }
 }
 
+/// `ClipMeta.dir` of a file record (FIX-08, W3): the parent directory of its first path, as
+/// written (`C:\Users\me\Docs\a.txt` → `C:\Users\me\Docs`; a drive root keeps its separator,
+/// `C:\a.txt` → `C:\`; `\\server\share\a.txt` → `\\server\share`). The card shows its tail.
+/// Pure string work — no file-system access (an offline network path must not block).
+/// `None` when the path has no parent directory (a bare name, a drive or share root).
+pub fn file_dir(path: &str) -> Option<String> {
+    let p = path.trim().trim_end_matches(['\\', '/']);
+    let cut = p.rfind(['\\', '/'])?;
+    let dir = &p[..cut];
+    if dir.is_empty() {
+        return None; // `\a.txt`: no drive to name
+    }
+    if dir.len() == 2 && dir.ends_with(':') {
+        return Some(format!("{dir}\\")); // `C:` → `C:\`
+    }
+    // `\\server` (the parent of a share root) or `\\?` (a bare long-path prefix) is not a folder.
+    let unc_head = dir.strip_prefix("\\\\").or_else(|| dir.strip_prefix("//"));
+    if unc_head.is_some_and(|rest| !rest.contains(['\\', '/'])) {
+        return None;
+    }
+    Some(dir.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -184,6 +207,22 @@ mod tests {
         assert!(t.len() <= TEXT_MAX_BYTES);
         assert!(t.chars().all(|c| c == 'ж'));
         assert_eq!(truncate_text("short"), ("short", false));
+    }
+
+    #[test]
+    fn file_dir_is_the_parent_of_the_first_path() {
+        assert_eq!(file_dir("C:\\Users\\me\\Docs\\report.pdf").as_deref(), Some("C:\\Users\\me\\Docs"));
+        assert_eq!(file_dir("C:\\Users\\me\\Docs\\").as_deref(), Some("C:\\Users\\me"), "a copied folder");
+        assert_eq!(file_dir("C:\\a.txt").as_deref(), Some("C:\\"), "drive root keeps its separator");
+        assert_eq!(file_dir("\\\\server\\share\\a.txt").as_deref(), Some("\\\\server\\share"));
+        assert_eq!(file_dir("\\\\server\\share"), None, "a share root has no parent folder");
+        assert_eq!(file_dir("\\\\?\\C:\\long\\a.txt").as_deref(), Some("\\\\?\\C:\\long"));
+        assert_eq!(file_dir("D:/photos/cat.png").as_deref(), Some("D:/photos"));
+        assert_eq!(file_dir("Папка\\файл.txt").as_deref(), Some("Папка"));
+        assert_eq!(file_dir("a.txt"), None);
+        assert_eq!(file_dir("C:\\"), None);
+        assert_eq!(file_dir("\\a.txt"), None);
+        assert_eq!(file_dir(""), None);
     }
 
     #[test]

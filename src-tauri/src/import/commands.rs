@@ -75,6 +75,34 @@ fn skip_secrets(app: &AppHandle) -> bool {
     settings::get(app).privacy.secret_patterns
 }
 
+/// `privacy.ignoredApps`: imports leave out records copied from those apps (W3).
+fn ignored_apps(app: &AppHandle) -> Vec<String> {
+    settings::get(app).privacy.ignored_apps
+}
+
+/// Retention is suspended from before a `replace` restore swaps the database until the
+/// backup's settings are applied (W3): the current — possibly smaller — limits must not
+/// trim the restored history in between. Released on every path (drop), which runs the
+/// postponed retention pass with the settings then in force.
+struct RetentionHold(AppHandle);
+
+impl RetentionHold {
+    fn new(app: &AppHandle) -> RetentionHold {
+        if let Some(store) = app.try_state::<Store>() {
+            store.hold_retention();
+        }
+        RetentionHold(app.clone())
+    }
+}
+
+impl Drop for RetentionHold {
+    fn drop(&mut self) {
+        if let Some(store) = self.0.try_state::<Store>() {
+            store.release_retention();
+        }
+    }
+}
+
 /// Local date and time (`GetLocalTime`) for the default file name and the zip entries.
 #[cfg(windows)]
 fn local_now() -> (u16, u16, u16, u16, u16, u16) {
@@ -142,7 +170,7 @@ pub async fn import_lt_probe(app: AppHandle) -> Result<ImportProbe, String> {
 pub async fn import_lt_run(app: AppHandle) -> Result<ImportReport, String> {
     let report = blocking(&app, |app, store| {
         let _busy = Busy::take()?;
-        lt::run(store, &lt_db(app)?, cutoff(app, store), skip_secrets(app), &progress(app))
+        lt::run(store, &lt_db(app)?, cutoff(app, store), skip_secrets(app), &ignored_apps(app), &progress(app))
     })
     .await?;
     changed(&app, ClipsChange::Added);
@@ -181,13 +209,14 @@ pub async fn backup_import(app: AppHandle, mode: BackupMode) -> Result<ImportRep
         BackupMode::Merge => {
             let report = blocking(&app, move |app, store| {
                 let _busy = Busy::take()?;
-                backup::restore_merge(store, &src, cutoff(app, store), skip_secrets(app), &progress(app))
+                backup::restore_merge(store, &src, cutoff(app, store), skip_secrets(app), &ignored_apps(app), &progress(app))
             })
             .await?;
             changed(&app, ClipsChange::Added);
             Ok(report)
         }
         BackupMode::Replace => {
+            let _hold = RetentionHold::new(&app); // until the backup's settings are in force
             let (report, settings_json) = blocking(&app, move |app, store| {
                 let _busy = Busy::take()?;
                 let out = backup::restore_replace(store, &src, &progress(app))?;

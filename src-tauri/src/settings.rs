@@ -11,10 +11,11 @@ use crate::model::{
     Retention, Settings, SettingsError, SettingsErrorCode, SettingsResult, StackSettings,
     StorageSettings, ThemePref, WindowSettings,
 };
-use crate::{autostart, events, fsx, i18n_native, logx, theme};
+use crate::{autostart, events, i18n_native, logx, theme};
 use parking_lot::{Mutex, RwLock};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tauri::{AppHandle, Manager};
 
@@ -82,12 +83,27 @@ impl Default for Settings {
 type Subscriber = Arc<dyn Fn(&Settings, &Settings) + Send + Sync>;
 
 /// Managed state (`app.manage`), created in `setup()` step 3 before any window exists.
+///
+/// Locks (W3): `write` serializes read-modify-write + save (`settings_set`, bounds patches)
+/// and is never held while anyone is notified; `announced` serializes the notifications
+/// (subscribers, `settings:changed`, the theme) AFTER `write` is released, in commit order.
+/// Nothing ever takes `write` while holding `announced`.
 pub struct SettingsStore {
     path: PathBuf,
     current: RwLock<Settings>,
     /// Serializes whole read-modify-write operations (`settings_set`, bounds patches).
     write: Mutex<()>,
+    /// Commit counter (incremented under `write`): the order notifications must follow.
+    seq: AtomicU64,
+    /// The last announced change and the settings it announced.
+    announced: Mutex<(u64, Settings)>,
     subscribers: Mutex<Vec<Subscriber>>,
+}
+
+/// A saved change not announced yet (see [`SettingsStore::announce`]).
+struct Pending {
+    seq: u64,
+    next: Settings,
 }
 
 impl SettingsStore {
@@ -96,11 +112,16 @@ impl SettingsStore {
     /// file itself is only rewritten on the next change.
     pub fn load(data_dir: &Path) -> SettingsStore {
         let path = data_dir.join(FILE);
-        let settings = match std::fs::read(&path) {
+        let settings = match read_retrying(&path) {
             Ok(raw) => {
                 let (s, clean) = parse_lenient(&raw);
                 if !clean {
                     logx::warn("settings", "settings.json had invalid fields; defaults used for them");
+                    // The next change rewrites the file from what was understood: keep the
+                    // original for the user (one copy, overwritten next time).
+                    if let Err(e) = std::fs::write(data_dir.join(INVALID_COPY), &raw) {
+                        logx::warn("settings", &format!("keeping a copy of settings.json failed: {e}"));
+                    }
                 }
                 s
             }
@@ -112,10 +133,55 @@ impl SettingsStore {
         };
         SettingsStore {
             path,
-            current: RwLock::new(settings),
+            current: RwLock::new(settings.clone()),
             write: Mutex::new(()),
+            seq: AtomicU64::new(0),
+            announced: Mutex::new((0, settings)),
             subscribers: Mutex::new(Vec::new()),
         }
+    }
+
+    /// Step 1 of `settings_set`, under the write lock: validate, run the synchronous side
+    /// effects (`side(prev, next, errors)` — hotkeys, autostart), save, publish. Returns the
+    /// result and, if anything changed, the change to [`Self::announce`] once the lock is gone.
+    fn commit(
+        &self,
+        settings: Settings,
+        side: impl FnOnce(&Settings, &mut Settings, &mut Vec<SettingsError>),
+    ) -> (SettingsResult, Option<Pending>) {
+        let _guard = self.write.lock();
+        let prev = self.current.read().clone();
+        let (mut next, mut errors) = validate(&prev, settings);
+        side(&prev, &mut next, &mut errors);
+        let pending = (next != prev).then(|| {
+            // A failed write keeps the change for this session (logged) — the side effects
+            // already happened, so refusing now would leave a half-applied state.
+            if let Err(e) = self.save(&next) {
+                logx::warn("settings", &format!("save failed: {e}"));
+            }
+            *self.current.write() = next.clone();
+            Pending { seq: self.seq.fetch_add(1, Ordering::SeqCst) + 1, next: next.clone() }
+        });
+        (SettingsResult { settings: next, errors }, pending)
+    }
+
+    /// Step 2, with the write lock released: `notify(prev, next)` under the announcement lock,
+    /// where `prev` is what was last announced. Two concurrent changes can reach here in either
+    /// order; a change older than the last announced one is not announced again — the later
+    /// announcement went from the state before both to the state after both, so subscribers
+    /// never see settings go backwards and miss no field.
+    fn announce(&self, p: Pending, notify: impl FnOnce(&Settings, &Settings)) {
+        let mut last = self.announced.lock();
+        if p.seq <= last.0 {
+            return;
+        }
+        let prev = std::mem::replace(&mut last.1, p.next.clone());
+        last.0 = p.seq;
+        notify(&prev, &p.next);
+    }
+
+    fn subscribers(&self) -> Vec<Subscriber> {
+        self.subscribers.lock().clone()
     }
 
     fn save(&self, s: &Settings) -> Result<(), String> {
@@ -123,8 +189,40 @@ impl SettingsStore {
             std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
         }
         let json = serde_json::to_vec_pretty(s).map_err(|e| e.to_string())?;
-        fsx::write_atomic(&self.path, &json)
+        write_durable(&self.path, &json)
     }
+}
+
+/// A copy of a `settings.json` that did not fully parse, kept before it is rewritten.
+const INVALID_COPY: &str = "settings.json.invalid";
+
+/// Read the file, retrying a transient failure (an antivirus or a sync tool holding it) a
+/// few times: giving up too early would start on the defaults and the next change would
+/// overwrite the user's real file with them. `NotFound` is final at once.
+fn read_retrying(path: &Path) -> std::io::Result<Vec<u8>> {
+    let mut last = None;
+    for delay in [0u64, 50, 150, 300] {
+        std::thread::sleep(std::time::Duration::from_millis(delay));
+        match std::fs::read(path) {
+            Ok(raw) => return Ok(raw),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Err(e),
+            Err(e) => last = Some(e),
+        }
+    }
+    Err(last.unwrap_or_else(|| std::io::Error::other("read failed")))
+}
+
+/// Atomic AND durable replace (W3): `<file>.tmp` is written and flushed to the disk
+/// (`sync_all` → FlushFileBuffers) before it is renamed over the target. Without the flush, a
+/// power loss right after the rename can leave an empty `settings.json` — every setting,
+/// the user's ignored apps included, would silently fall back to the defaults.
+fn write_durable(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    use std::io::Write;
+    let tmp = path.with_extension("json.tmp");
+    let mut f = std::fs::File::create(&tmp).map_err(|e| e.to_string())?;
+    f.write_all(bytes).and_then(|_| f.sync_all()).map_err(|e| e.to_string())?;
+    drop(f);
+    std::fs::rename(&tmp, path).map_err(|e| e.to_string())
 }
 
 /// Current settings (a clone; cheap — read lock only).
@@ -133,9 +231,11 @@ pub fn get(app: &AppHandle) -> Settings {
 }
 
 /// Register `f(old, new)`, called after every applied change (from the thread that ran
-/// `settings_set`, after the file is saved, before `settings:changed` is emitted).
-/// Subscribers must be quick and must NOT call `settings_set` / [`patch_window_bounds`]
-/// (the write lock is held). Call from a module's `init`/`start` in `setup()`.
+/// `settings_set`, after the file is saved, before `settings:changed` is emitted). The
+/// settings write lock is NOT held (W3): a subscriber may read [`get`], wait for the main
+/// thread or patch the window bounds. It runs under the announcement lock, so it must stay
+/// quick and must NOT call `settings_set` (that would wait for itself). `old` is the
+/// previously announced state. Call from a module's `init`/`start` in `setup()`.
 pub fn subscribe(app: &AppHandle, f: impl Fn(&Settings, &Settings) + Send + Sync + 'static) {
     app.state::<SettingsStore>().subscribers.lock().push(Arc::new(f));
 }
@@ -366,47 +466,40 @@ pub fn settings_get(app: AppHandle) -> Settings {
 #[tauri::command]
 pub async fn settings_set(app: AppHandle, settings: Settings) -> Result<SettingsResult, String> {
     let store = app.state::<SettingsStore>();
-    let _guard = store.write.lock();
-    let prev = store.current.read().clone();
-    let (mut next, mut errors) = validate(&prev, settings);
-
-    // Hotkeys (W1-D): always consult the engine — it rebinds changed chords and also reports a
-    // chord that is still not active (taken at startup), after one retry. A rejected chord
-    // keeps its previous binding.
-    let hk_errors = crate::hotkeys::apply_settings(&app, &prev.hotkeys, &next.hotkeys);
-    for e in &hk_errors {
-        revert_hotkey(&mut next.hotkeys, &prev.hotkeys, &e.field);
+    // Under the write lock: validate, side effects that must report back in this result, save.
+    let (result, pending) = store.commit(settings, |prev, next, errors| {
+        // Hotkeys (W1-D): always consult the engine — it rebinds changed chords and also
+        // reports a chord that is still not active (taken at startup), after one retry. A
+        // rejected chord keeps its previous binding.
+        let hk_errors = crate::hotkeys::apply_settings(&app, &prev.hotkeys, &next.hotkeys);
+        for e in &hk_errors {
+            revert_hotkey(&mut next.hotkeys, &prev.hotkeys, &e.field);
+        }
+        errors.extend(hk_errors);
+        // Launch on login — an explicit user action is applied in every build.
+        if next.general.autostart != prev.general.autostart {
+            if let Err(e) = autostart::set(&app, next.general.autostart) {
+                logx::warn("settings", &format!("autostart: {e}"));
+                next.general.autostart = prev.general.autostart;
+                invalid(errors, "general.autostart");
+            }
+        }
+    });
+    // Lock released (W3): subscribers and the theme may wait for the main thread, which may
+    // itself be waiting for the settings write lock — never both at once.
+    if let Some(p) = pending {
+        store.announce(p, |prev, next| {
+            for s in store.subscribers() {
+                s(prev, next);
+            }
+            events::settings_changed(&app, next);
+            if next.general.theme != prev.general.theme {
+                theme::apply(&app, next.general.theme);
+                theme::emit_changed(&app, next.general.theme);
+            }
+        });
     }
-    errors.extend(hk_errors);
-
-    // Launch on login — an explicit user action is applied in every build.
-    if next.general.autostart != prev.general.autostart {
-        if let Err(e) = autostart::set(&app, next.general.autostart) {
-            logx::warn("settings", &format!("autostart: {e}"));
-            next.general.autostart = prev.general.autostart;
-            invalid(&mut errors, "general.autostart");
-        }
-    }
-
-    if next != prev {
-        // A failed write keeps the change for this session (logged) — the side effects
-        // above already happened, so refusing now would leave a half-applied state.
-        if let Err(e) = store.save(&next) {
-            logx::warn("settings", &format!("save failed: {e}"));
-        }
-        *store.current.write() = next.clone();
-        let subscribers: Vec<Subscriber> = store.subscribers.lock().clone();
-        for s in subscribers {
-            s(&prev, &next);
-        }
-        events::settings_changed(&app, &next);
-        if next.general.theme != prev.general.theme {
-            theme::apply(&app, next.general.theme);
-            theme::emit_changed(&app, next.general.theme);
-        }
-    }
-
-    Ok(SettingsResult { settings: next, errors })
+    Ok(result)
 }
 
 fn data_dir(app: &AppHandle) -> Result<PathBuf, String> {
@@ -536,6 +629,118 @@ mod tests {
         let fields: Vec<_> = errors.iter().map(|e| e.field.as_str()).collect();
         assert_eq!(fields, vec!["storage.maxSizeMb", "privacy.ignoredApps"]);
         assert!(errors.iter().all(|e| e.code == SettingsErrorCode::Invalid));
+    }
+
+    /// W3: the save is atomic and durable (no temp file left), and a file that did not fully
+    /// parse is kept as `settings.json.invalid` before the next change rewrites it.
+    #[test]
+    fn save_is_durable_and_a_broken_file_is_kept() {
+        let dir = std::env::temp_dir().join(format!("liqlip-settings-test-{}-{:?}", std::process::id(), std::thread::current().id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = SettingsStore::load(&dir);
+        assert_eq!(*store.current.read(), Settings::default(), "no file → defaults");
+        assert!(!dir.join(INVALID_COPY).exists());
+        let mut s = Settings::default();
+        s.privacy.ignored_apps.push("vault.exe".into());
+        store.save(&s).unwrap();
+        assert!(!dir.join("settings.json.tmp").exists(), "no temp file left");
+        assert_eq!(SettingsStore::load(&dir).current.read().privacy.ignored_apps, s.privacy.ignored_apps);
+        assert!(!dir.join(INVALID_COPY).exists(), "a clean file is not copied");
+        std::fs::write(dir.join(FILE), br#"{"privacy": {"ignoredApps": "oops"}, "picker": {"hints": false}}"#).unwrap();
+        let loaded = SettingsStore::load(&dir);
+        assert!(!loaded.current.read().picker.hints, "valid fields are kept");
+        assert_eq!(std::fs::read(dir.join(INVALID_COPY)).unwrap(), std::fs::read(dir.join(FILE)).unwrap());
+        assert!(read_retrying(&dir.join("missing.json")).unwrap_err().kind() == std::io::ErrorKind::NotFound);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn temp_store(tag: &str) -> (PathBuf, Arc<SettingsStore>) {
+        let dir = std::env::temp_dir().join(format!("liqlip-settings-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = Arc::new(SettingsStore::load(&dir));
+        (dir, store)
+    }
+
+    /// The `settings_set` path without an `AppHandle`: commit, then announce to subscribers.
+    fn set(store: &SettingsStore, s: Settings) -> SettingsResult {
+        let (result, pending) = store.commit(s, |_, _, _| {});
+        if let Some(p) = pending {
+            store.announce(p, |prev, next| {
+                for sub in store.subscribers() {
+                    sub(prev, next);
+                }
+            });
+        }
+        result
+    }
+
+    /// W3 (W3-A finding): subscribers run with the settings write lock RELEASED. A subscriber
+    /// that waits for another thread which needs that lock (as the theme / tray wait for the
+    /// main thread while the main thread wants the settings) must not hang.
+    #[test]
+    fn subscribers_run_without_the_write_lock() {
+        let (dir, store) = temp_store("unlocked");
+        let s2 = store.clone();
+        store.subscribers.lock().push(Arc::new(move |_old: &Settings, new: &Settings| {
+            let s3 = s2.clone();
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let _w = s3.write.lock(); // what patch_window_bounds / another settings_set takes
+                let seen = s3.current.read().clone(); // what settings::get reads
+                let _ = tx.send(seen);
+            });
+            let seen = rx.recv_timeout(std::time::Duration::from_secs(5)).expect("subscriber ran under the write lock");
+            assert_eq!(&seen, new, "the new settings are already published");
+        }));
+        let mut s = Settings::default();
+        s.picker.hints = false;
+        assert!(set(&store, s).errors.is_empty());
+        assert!(!store.current.read().picker.hints);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// W3: notifications follow the commit order. If a later change is announced first, the
+    /// earlier one is not announced after it (settings would go backwards), and the single
+    /// announcement covers both changes (no field is missed by an `old != new` subscriber).
+    #[test]
+    fn announcements_never_go_backwards() {
+        let (dir, store) = temp_store("order");
+        let seen: Arc<Mutex<Vec<(Settings, Settings)>>> = Arc::new(Mutex::new(Vec::new()));
+        let log = seen.clone();
+        store.subscribers.lock().push(Arc::new(move |old: &Settings, new: &Settings| log.lock().push((old.clone(), new.clone()))));
+        let initial = store.current.read().clone();
+        let mut a = initial.clone();
+        a.ocr.enabled = false; // change A
+        let (_, pa) = store.commit(a.clone(), |_, _, _| {});
+        let mut b = a.clone();
+        b.picker.hints = false; // change B, committed after A
+        let (_, pb) = store.commit(b.clone(), |_, _, _| {});
+        let notify = |prev: &Settings, next: &Settings| {
+            for sub in store.subscribers() {
+                sub(prev, next);
+            }
+        };
+        store.announce(pb.unwrap(), notify); // B's thread wins the race to announce
+        store.announce(pa.unwrap(), notify); // A's arrives late: dropped
+        {
+            let got = seen.lock();
+            assert_eq!(got.len(), 1);
+            assert_eq!(got[0].0, initial, "from the state before both");
+            assert_eq!(got[0].1, b, "to the state after both");
+            assert_ne!(got[0].0.ocr, got[0].1.ocr, "A's change is part of the announcement");
+        }
+        // In order, each change is announced once, from the previous one; no change → nothing.
+        let mut c = b.clone();
+        c.stack.newline_after_paste = true;
+        set(&store, c.clone());
+        set(&store, c.clone());
+        let got = seen.lock();
+        assert_eq!(got.len(), 2);
+        assert_eq!((&got[1].0, &got[1].1), (&b, &c));
+        drop(got);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

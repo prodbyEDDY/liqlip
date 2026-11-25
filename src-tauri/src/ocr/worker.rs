@@ -361,9 +361,9 @@ where
             Ok(_) if ms >= SLOW_MS => logx::warn("ocr", &format!("clip {} took {ms} ms", job.id)),
             Ok(_) => {}
         }
-        match store.ocr_finish(job.id, outcome.as_deref().map_err(|_| ()), OcrWrite::Queued) {
+        match store.ocr_finish_job(&job, outcome.as_deref().map_err(|_| ()), OcrWrite::Queued) {
             Ok(true) => batch.push(job.id),
-            Ok(false) => {} // deleted (or answered by clip_ocr) meanwhile: dropped silently
+            Ok(false) => {} // deleted / answered by clip_ocr / database replaced meanwhile: dropped
             Err(e) => {
                 logx::warn("ocr", &format!("clip {} write: {e}", job.id));
                 ctl.wait(snap.wake, t.retry);

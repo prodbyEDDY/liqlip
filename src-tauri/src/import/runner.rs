@@ -4,7 +4,9 @@
 //!
 //! With `settings.privacy.secretPatterns` on, a text record that looks like a secret (the
 //! capture rule, `capture::secrets`) is not imported and counts as `skipped` (FIX-01) —
-//! otherwise an import would bring in what the capture had refused.
+//! otherwise an import would bring in what the capture had refused. For the same reason a
+//! record whose source app is on `settings.privacy.ignoredApps` (KeePass, Bitwarden, …) is
+//! skipped too (W3).
 
 use crate::capture::secrets;
 use crate::logx;
@@ -29,12 +31,35 @@ fn looks_like_secret(clip: &NewClip) -> bool {
     !matches!(clip.kind, Kind::Image | Kind::File) && clip.text.as_deref().is_some_and(secrets::looks_like_secret)
 }
 
-/// `skip_secrets` = `settings.privacy.secretPatterns`.
+/// The capture's ignore-list rule (`capture::snapshot::is_ignored`, private to the capture
+/// module — keep the two in step): an entry matches the exe's full path, its file name, or
+/// its bare stem, case-insensitively, `/` ≡ `\`. An exe known only by its file name (Liquid
+/// Tools kept the stem) also matches a full-path entry with that file name: privacy first.
+pub(crate) fn is_ignored(exe: &str, ignored: &[String]) -> bool {
+    let full = exe.trim().replace('/', "\\").to_lowercase();
+    let name = full.rsplit('\\').next().unwrap_or(&full);
+    let stem = name.strip_suffix(".exe").unwrap_or(name);
+    let bare = name.len() == full.len();
+    ignored.iter().any(|entry| {
+        let e = entry.trim().replace('/', "\\").to_lowercase();
+        let e_name = e.rsplit('\\').next().unwrap_or(&e);
+        !e.is_empty()
+            && (e == full
+                || e == name
+                || (!e.contains('\\') && !e.contains('.') && e == stem)
+                || (bare && e_name == name))
+    })
+}
+
+/// `skip_secrets` = `settings.privacy.secretPatterns`; `ignored_apps` =
+/// `settings.privacy.ignoredApps`.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn run(
     store: &Store,
     folders: &[String],
     total: i64,
     skip_secrets: bool,
+    ignored_apps: &[String],
     progress: Progress<'_>,
     mut next_page: impl FnMut() -> Result<Option<Page>, String>,
 ) -> Result<ImportReport, String> {
@@ -46,6 +71,7 @@ pub(crate) fn run(
     let base = store.fav_order_base()?;
     let mut stats = BatchStats::default();
     let mut secret = 0i64;
+    let mut ignored = 0i64;
     let mut done = 0i64;
     progress("clips", 0, total);
     while let Some(page) = next_page()? {
@@ -54,6 +80,7 @@ pub(crate) fn run(
         for rec in page {
             match rec {
                 Ok(it) if skip_secrets && looks_like_secret(&it.clip) => secret += 1,
+                Ok(it) if it.clip.source.as_ref().is_some_and(|s| is_ignored(&s.exe, ignored_apps)) => ignored += 1,
                 Ok(mut it) => {
                     it.fav_order = it.fav_order.map(|rank| base + 1.0 + rank);
                     items.push(it);
@@ -67,11 +94,11 @@ pub(crate) fn run(
         stats += store.import_batch(items, &mut session)?;
         progress("clips", done, total.max(done));
     }
-    stats.skipped += secret;
+    stats.skipped += secret + ignored;
     logx::warn(
         "import",
         &format!(
-            "done: {} imported, {} skipped ({secret} looked like secrets), {} errors, {created} folders",
+            "done: {} imported, {} skipped ({secret} looked like secrets, {ignored} from ignored apps), {} errors, {created} folders",
             stats.imported, stats.skipped, stats.errors
         ),
     );

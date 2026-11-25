@@ -32,7 +32,7 @@ use crate::model::{ClipMeta, Format, Kind};
 use parking_lot::{Mutex, MutexGuard};
 use rusqlite::{Connection, ErrorCode};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Manager};
@@ -151,6 +151,13 @@ pub struct Store {
     maint: Mutex<Option<mpsc::Sender<maint::Wake>>>,
     /// W2-A: queue new images for OCR + wake the recognizer (`store/ocr.rs`).
     ocr: ocr::OcrHook,
+    /// W3: retention is suspended while > 0 (`hold_retention`, a `replace` restore).
+    retention_hold: AtomicUsize,
+    /// W3: privacy actions in progress (`secure_delete = ON` until the last one ends).
+    privacy_depth: Mutex<usize>,
+    /// W3: grows when a `replace` restore swaps the database — ids taken before refer to the
+    /// old one (an OCR result computed for them is dropped, `store/ocr.rs`).
+    generation: AtomicU64,
 }
 
 impl Store {
@@ -163,6 +170,8 @@ impl Store {
 
     pub(crate) fn open_with_clock(data_dir: &Path, clock: Clock) -> Result<Store, String> {
         let paths = media::Paths::new(data_dir);
+        // W3: a `replace` restore cut short by a crash is undone before anything else runs.
+        bulk::recover_interrupted_restore(&paths);
         paths.create_dirs()?;
         let conn = schema::open_or_recover(&paths, clock())?;
         Ok(Store {
@@ -172,7 +181,15 @@ impl Store {
             undo: Mutex::new(lifecycle::UndoBook::default()),
             maint: Mutex::new(None),
             ocr: ocr::OcrHook::default(),
+            retention_hold: AtomicUsize::new(0),
+            privacy_depth: Mutex::new(0),
+            generation: AtomicU64::new(0),
         })
+    }
+
+    /// Database generation (see the field): compare before acting on an id taken earlier.
+    pub(crate) fn generation(&self) -> u64 {
+        self.generation.load(Ordering::SeqCst)
     }
 
     pub(crate) fn now(&self) -> i64 {

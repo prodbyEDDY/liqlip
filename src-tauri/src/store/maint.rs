@@ -8,6 +8,7 @@ use super::lifecycle::VACUUM_MIN_FREE_PAGES;
 use super::Store;
 use crate::model::{ChangeOrigin, ClipsChange, ClipsChanged};
 use crate::{events, logx, settings};
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager};
@@ -41,7 +42,14 @@ pub(crate) fn start(app: &AppHandle) {
         }
     });
     let app = app.clone();
-    let spawned = std::thread::Builder::new().name("liqlip-store".into()).spawn(move || run(app, rx));
+    // Supervised (W3): a panic must not end retention and the purge for the whole session.
+    let spawned = std::thread::Builder::new().name("liqlip-store".into()).spawn(move || loop {
+        match catch_unwind(AssertUnwindSafe(|| run(&app, &rx))) {
+            Ok(()) => return,
+            Err(_) => logx::warn("store", "background thread panicked; restarting"),
+        }
+        std::thread::sleep(Duration::from_secs(5));
+    });
     if let Err(e) = spawned {
         logx::warn("store", &format!("background thread failed to start: {e}"));
     }
@@ -95,15 +103,25 @@ fn hourly(app: &AppHandle, store: &Store) {
     }
 }
 
-fn run(app: AppHandle, rx: mpsc::Receiver<Wake>) {
+fn run(app: &AppHandle, rx: &mpsc::Receiver<Wake>) {
     let Some(store) = app.try_state::<Store>() else { return };
     // Start-up: leftovers from the last session, retention, orphan files.
     tick(&store);
-    retention(&app, &store);
+    retention(app, &store);
     match store.sweep_orphans() {
         Ok(n) if n > 0 => logx::warn("store", &format!("orphan sweep: {n} files removed")),
         Ok(_) => {}
         Err(e) => logx::warn("store", &format!("orphan sweep: {e}")),
+    }
+    // FIX-08: older file records get their folder (`meta.dir`) once; the shelf re-reads them.
+    match store.backfill_file_dirs() {
+        Ok(ids) if !ids.is_empty() => {
+            logx::warn("store", &format!("file folders filled in for {} records", ids.len()));
+            let ids = (ids.len() <= EVENT_IDS_MAX).then_some(ids);
+            events::clips_changed(app, &ClipsChanged { origin: ChangeOrigin::User, change: ClipsChange::Updated, ids });
+        }
+        Ok(_) => {}
+        Err(e) => logx::warn("store", &format!("file folders: {e}")),
     }
     let mut last_retention = Instant::now();
     let mut pending: Option<Instant> = None;
@@ -124,7 +142,7 @@ fn run(app: AppHandle, rx: mpsc::Receiver<Wake>) {
         let now = Instant::now();
         if pending.is_some_and(|p| p <= now) {
             pending = None;
-            retention(&app, &store);
+            retention(app, &store);
             last_retention = Instant::now();
         }
         if next_tick <= now {
@@ -132,7 +150,7 @@ fn run(app: AppHandle, rx: mpsc::Receiver<Wake>) {
             next_tick = now + PURGE_EVERY;
         }
         if next_hour <= now {
-            hourly(&app, &store);
+            hourly(app, &store);
             last_retention = Instant::now();
             next_hour = now + HOURLY;
         }

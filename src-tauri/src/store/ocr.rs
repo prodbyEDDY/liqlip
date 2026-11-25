@@ -44,6 +44,9 @@ pub(crate) struct OcrJob {
     pub id: i64,
     /// `media\<id>.png` (absolute when the data dir is).
     pub png: PathBuf,
+    /// [`Store::generation`] when the job was taken: a `replace` restore in between makes
+    /// `id` name another record, and the result is dropped ([`Store::ocr_finish_job`]).
+    pub generation: u64,
 }
 
 /// What `clip_ocr` needs to decide whether to recognise.
@@ -71,6 +74,29 @@ pub(crate) fn state_of(v: i64) -> OcrState {
         STATE_ERROR => OcrState::Error,
         _ => OcrState::None,
     }
+}
+
+/// The `UPDATE` of [`Store::ocr_finish_job`] (conditions in its doc).
+fn finish(conn: &rusqlite::Connection, id: i64, outcome: Result<&str, ()>, mode: OcrWrite) -> Result<bool, String> {
+    let only_pending = if mode == OcrWrite::Queued { " AND ocr_state = 1" } else { "" };
+    let n = match outcome {
+        Ok(text) => conn.execute(
+            &format!(
+                "UPDATE clips SET ocr_text = ?1, ocr_state = ?2
+                 WHERE id = ?3 AND kind = 'image' AND deleted_at IS NULL{only_pending}"
+            ),
+            params![text, STATE_DONE, id],
+        ),
+        Err(()) => conn.execute(
+            &format!(
+                "UPDATE clips SET ocr_state = ?1
+                 WHERE id = ?2 AND kind = 'image' AND deleted_at IS NULL{only_pending}"
+            ),
+            params![STATE_ERROR, id],
+        ),
+    }
+    .map_err(db_err)?;
+    Ok(n > 0)
 }
 
 impl Store {
@@ -110,8 +136,9 @@ impl Store {
 
     /// Newest pending live image, if any.
     pub(crate) fn ocr_next(&self) -> Result<Option<OcrJob>, String> {
-        let id: Option<i64> = self
-            .lock()
+        let conn = self.lock();
+        let generation = self.generation(); // read under the lock: a swap can't interleave
+        let id: Option<i64> = conn
             .query_row(
                 "SELECT id FROM clips
                  WHERE kind = 'image' AND deleted_at IS NULL AND ocr_state = ?1
@@ -121,7 +148,7 @@ impl Store {
             )
             .optional()
             .map_err(db_err)?;
-        Ok(id.map(|id| OcrJob { id, png: self.paths().media_png(id) }))
+        Ok(id.map(|id| OcrJob { id, png: self.paths().media_png(id), generation }))
     }
 
     /// Kind, state and text of a live record (`not_found: clip <id>` otherwise).
@@ -142,38 +169,31 @@ impl Store {
 
     /// The PNG of a live image record, for a direct recognition.
     pub(crate) fn ocr_job(&self, id: i64) -> Result<OcrJob, String> {
+        let generation = self.generation();
         let rec = self.ocr_record(id)?;
         if rec.kind != Kind::Image {
             return Err(format!("invalid: clip {id} is not an image"));
         }
-        Ok(OcrJob { id, png: self.paths().media_png(id) })
+        Ok(OcrJob { id, png: self.paths().media_png(id), generation })
     }
 
     /// Write a recognition result in one statement: `Ok(text)` → `ocr_text = text`, `done`;
     /// `Err(())` → `error` (an earlier text is kept). Returns whether a row changed — `false`
-    /// when the record was deleted meanwhile (the result is dropped) or, for
-    /// [`OcrWrite::Queued`], when it is no longer pending.
-    pub(crate) fn ocr_finish(&self, id: i64, outcome: Result<&str, ()>, mode: OcrWrite) -> Result<bool, String> {
-        let only_pending = if mode == OcrWrite::Queued { " AND ocr_state = 1" } else { "" };
+    /// when the record was deleted meanwhile (the result is dropped), for
+    /// [`OcrWrite::Queued`] when it is no longer pending, and when a `replace` restore swapped
+    /// the database since the job was taken (its id now names another record — W3).
+    pub(crate) fn ocr_finish_job(&self, job: &OcrJob, outcome: Result<&str, ()>, mode: OcrWrite) -> Result<bool, String> {
         let conn = self.lock();
-        let n = match outcome {
-            Ok(text) => conn.execute(
-                &format!(
-                    "UPDATE clips SET ocr_text = ?1, ocr_state = ?2
-                     WHERE id = ?3 AND kind = 'image' AND deleted_at IS NULL{only_pending}"
-                ),
-                params![text, STATE_DONE, id],
-            ),
-            Err(()) => conn.execute(
-                &format!(
-                    "UPDATE clips SET ocr_state = ?1
-                     WHERE id = ?2 AND kind = 'image' AND deleted_at IS NULL{only_pending}"
-                ),
-                params![STATE_ERROR, id],
-            ),
+        if self.generation() != job.generation {
+            return Ok(false);
         }
-        .map_err(db_err)?;
-        Ok(n > 0)
+        finish(&conn, job.id, outcome, mode)
+    }
+
+    /// [`Self::ocr_finish_job`] for the current database (tests).
+    #[cfg(test)]
+    pub(crate) fn ocr_finish(&self, id: i64, outcome: Result<&str, ()>, mode: OcrWrite) -> Result<bool, String> {
+        finish(&self.lock(), id, outcome, mode)
     }
 
     /// Live images waiting for the recognizer (`OcrStatus.pending`).
@@ -360,5 +380,23 @@ mod tests {
         assert!(next.contains("idx_clips_kind") && !next.contains("TEMP B-TREE"), "{next}");
         let count = plan("SELECT count(*) FROM clips WHERE kind = 'image' AND deleted_at IS NULL AND ocr_state = 1");
         assert!(count.contains("idx_clips_kind"), "{count}");
+    }
+
+    /// W3: a job taken before a `replace` restore swapped the database names a record of the
+    /// OLD database; its text must not land on whatever record has that id now.
+    #[test]
+    fn a_result_for_a_replaced_database_is_dropped() {
+        let t = TestStore::new();
+        t.ocr_set_queue_new(true);
+        let id = t.add_image(9, 9, 1_000, false);
+        let queued = t.ocr_next().unwrap().unwrap();
+        let direct = t.ocr_job(id).unwrap();
+        t.generation.fetch_add(1, Ordering::SeqCst); // what a successful replace does
+        assert!(!t.ocr_finish_job(&queued, Ok("text of another image"), OcrWrite::Queued).unwrap());
+        assert!(!t.ocr_finish_job(&direct, Ok("text of another image"), OcrWrite::Direct).unwrap());
+        assert_eq!(state(&t, id), (STATE_PENDING, None), "untouched, still queued");
+        let fresh = t.ocr_next().unwrap().unwrap();
+        assert!(t.ocr_finish_job(&fresh, Ok("right text"), OcrWrite::Queued).unwrap());
+        assert_eq!(state(&t, id), (STATE_DONE, Some("right text".into())));
     }
 }

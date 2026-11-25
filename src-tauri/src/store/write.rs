@@ -213,6 +213,7 @@ fn prepare(clip: NewClip, now: i64) -> Result<Prepared, String> {
                 hash = content::content_hash(Kind::File, &content::canonical_files(&paths));
             }
             p.preview = if preview.trim().is_empty() { file_name(&paths[0]) } else { content::make_preview(preview.trim()) };
+            meta.dir = content::file_dir(&paths[0]); // FIX-08: the card's path tail
             p.text = Some(paths.join("\n"));
             p.file_count = Some(paths.len() as i64);
             let blob = FilesBlob { drop_effect: if f.drop_effect == 0 { 1 } else { f.drop_effect }, paths };
@@ -816,6 +817,52 @@ impl Store {
         Ok(clip)
     }
 
+    /// FIX-08 (W3): file records stored before `ClipMeta.dir` existed get it — once, lazily,
+    /// on the background thread at start-up, [`CHUNK`] rows per transaction, no schema change
+    /// (only the `meta` JSON). Live file rows without `dir` are visited (the kind index); a
+    /// row whose first path has no parent folder stays without it. Returns the updated ids.
+    pub(crate) fn backfill_file_dirs(&self) -> Result<Vec<i64>, String> {
+        let mut updated = Vec::new();
+        let mut after = 0i64;
+        loop {
+            let mut conn = self.lock();
+            let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate).map_err(db_err)?;
+            type Row = (i64, Option<String>, Option<String>, Option<Vec<u8>>);
+            let rows: Vec<Row> = {
+                let mut st = tx
+                    .prepare_cached(
+                        "SELECT c.id, c.meta, c.text,
+                           (SELECT data FROM clip_formats f WHERE f.clip_id = c.id AND f.format = 'files')
+                         FROM clips c
+                         WHERE c.kind = 'file' AND c.deleted_at IS NULL AND c.id > ?1
+                           AND (CASE WHEN json_valid(c.meta) THEN json_extract(c.meta, '$.dir') END) IS NULL
+                         ORDER BY c.id LIMIT ?2",
+                    )
+                    .map_err(db_err)?;
+                let rows = st
+                    .query_map(params![after, CHUNK as i64], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+                    .map_err(db_err)?;
+                rows.collect::<Result<_, _>>().map_err(db_err)?
+            };
+            let Some(last) = rows.last() else { break };
+            after = last.0;
+            for (id, meta, text, blob) in rows {
+                let first = blob
+                    .as_deref()
+                    .and_then(FilesBlob::parse)
+                    .and_then(|f| f.paths.into_iter().next())
+                    .or_else(|| text.as_deref().and_then(|t| t.lines().find(|l| !l.trim().is_empty()).map(str::to_string)));
+                let Some(dir) = first.as_deref().and_then(content::file_dir) else { continue };
+                let mut m = parse_meta(meta.as_deref());
+                m.dir = Some(dir);
+                tx.execute("UPDATE clips SET meta = ?1 WHERE id = ?2", params![meta_json(&m), id]).map_err(db_err)?;
+                updated.push(id);
+            }
+            tx.commit().map_err(db_err)?;
+        }
+        Ok(updated)
+    }
+
     /// New record from text (merge, transform → save), `origin: 'user'`, no source app. An
     /// identical existing record is bumped (and revived) instead. Returns the record and
     /// whether it was created.
@@ -1248,6 +1295,40 @@ mod tests {
             });
         });
         assert_eq!(store.counts().unwrap().all, 200);
+    }
+
+    /// FIX-08: a file record knows the folder of its first file (for the card's path tail);
+    /// records stored before get it from the one-time backfill.
+    #[test]
+    fn file_records_carry_their_folder() {
+        let t = TestStore::new();
+        let a = t.add_files(&["C:\\Users\\me\\Docs\\report.pdf", "C:\\Users\\me\\Docs\\b.txt"], 1_000);
+        let dir = |t: &TestStore, id| t.clip_detail(id).unwrap().clip.meta.dir;
+        assert_eq!(dir(&t, a).as_deref(), Some("C:\\Users\\me\\Docs"));
+        let root = t.add_files(&["D:\\only.txt"], 2_000);
+        assert_eq!(dir(&t, root).as_deref(), Some("D:\\"));
+        let text = t.add_text("not a file", 3_000);
+        assert_eq!(dir(&t, text), None);
+        // Records written before FIX-08: no `dir` in their meta.
+        let b = t.add_files(&["\\\\nas\\share\\photos\\cat.png"], 4_000);
+        let gone = t.add_files(&["E:\\x\\deleted.txt"], 5_000);
+        t.delete(&[gone]).unwrap();
+        t.lock()
+            .execute("UPDATE clips SET meta = json_remove(meta, '$.dir') WHERE kind = 'file'", [])
+            .unwrap();
+        t.lock().execute("UPDATE clips SET meta = 'not json' WHERE id = ?1", [root]).unwrap();
+        assert_eq!(dir(&t, a), None);
+        let mut filled = t.backfill_file_dirs().unwrap();
+        filled.sort();
+        assert_eq!(filled, vec![a, root, b], "live file records only");
+        assert_eq!(dir(&t, a).as_deref(), Some("C:\\Users\\me\\Docs"));
+        assert_eq!(dir(&t, root).as_deref(), Some("D:\\"), "a broken meta is rewritten");
+        assert_eq!(dir(&t, b).as_deref(), Some("\\\\nas\\share\\photos"));
+        assert!(t.backfill_file_dirs().unwrap().is_empty(), "once");
+        // A re-copy (bump) keeps it.
+        let again = t.insert_clip(files_clip(&["C:\\Users\\me\\Docs\\report.pdf", "C:\\Users\\me\\Docs\\b.txt"], 6_000)).unwrap();
+        assert_eq!((again.id, again.created), (a, false));
+        assert_eq!(dir(&t, a).as_deref(), Some("C:\\Users\\me\\Docs"));
     }
 
     #[test]
