@@ -312,27 +312,37 @@ mod tests {
     fn missing_exe_has_no_icon_and_is_remembered() {
         // SHGetFileInfoW may still return a generic icon for a non-existent .exe path; either
         // way the call must not fail hard and the result is cached.
-        let first = png_for("c:\\definitely\\not\\here\\nothing.exe");
-        let t = std::time::Instant::now();
-        let second = png_for("c:\\definitely\\not\\here\\nothing.exe");
-        assert!(t.elapsed() < std::time::Duration::from_millis(5), "no second extraction");
-        assert_eq!(first.is_some(), second.is_some());
+        let missing = "c:\\definitely\\not\\here\\nothing.exe";
+        let first = png_for(missing);
+        // Remembered — the next call is served from the cache, not extracted again (checked by
+        // the cache state, not by a stopwatch: FIX-04).
+        assert!(matches!(cache().lock().get(missing), Some(Entry::Ready(_))));
+        let second = png_for(&missing.to_uppercase());
+        match (&first, &second) {
+            (Some(a), Some(b)) => assert!(Arc::ptr_eq(a, b), "served from the cache"),
+            (None, None) => {}
+            _ => panic!("the cached result changed"),
+        }
     }
 
     /// The shelf summon path: never blocks on extraction; a miss queues it in the background
-    /// and a later call returns the cached data URL.
+    /// and a later call returns the cached data URL. Proven without a stopwatch (FIX-04): a
+    /// blocking call would have returned the icon of an exe that has one, the non-blocking
+    /// call returns `None` and leaves a `Pending` marker (or, if the background thread was
+    /// already done, a ready entry) behind.
     #[test]
     fn cached_data_url_never_blocks() {
         let windir = std::env::var("WINDIR").unwrap_or_else(|_| "C:\\Windows".into());
-        let exe = format!("{windir}\\System32\\cmd.exe").to_lowercase();
+        // charmap.exe: no other test touches it (`apps_running` may cache the icons of
+        // running apps such as cmd.exe), so the first call here is a real miss.
+        let exe = format!("{windir}\\System32\\charmap.exe").to_lowercase();
         if !std::path::Path::new(&exe).exists() {
             return;
         }
-        let t = std::time::Instant::now();
         let first = data_url_cached(&exe);
-        assert!(t.elapsed() < std::time::Duration::from_millis(5), "summon path blocked {:?}", t.elapsed());
-        assert!(first.is_none(), "first call is a miss");
-        let end = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        assert!(first.is_none(), "first call is a miss, answered at once");
+        assert!(cache().lock().get(&exe).is_some(), "queued for the background thread");
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(10);
         let mut got = None;
         while got.is_none() && std::time::Instant::now() < end {
             std::thread::sleep(std::time::Duration::from_millis(10));
@@ -340,14 +350,13 @@ mod tests {
         }
         let url = got.expect("extracted in the background");
         assert!(url.starts_with("data:image/png;base64,"));
-        let t = std::time::Instant::now();
+        assert!(matches!(cache().lock().get(&exe), Some(Entry::Ready(Some(_)))), "a cache hit from now on");
         assert_eq!(data_url_cached(&exe), Some(url));
-        assert!(t.elapsed() < std::time::Duration::from_millis(2));
 
         // A file without an icon: the failure is cached too, no re-extraction.
         let missing = "c:\\definitely\\not\\here\\summon-target.exe";
         assert_eq!(data_url_cached(missing), None);
-        let end = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(10);
         while matches!(cache().lock().get(missing), Some(Entry::Pending)) && std::time::Instant::now() < end {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }

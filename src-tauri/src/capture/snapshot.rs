@@ -576,10 +576,18 @@ pub mod fake {
         owner: Option<OwnerInfo>,
         open: bool,
         fail_opens: u32,
-        delays: HashMap<u32, Duration>,
+        /// Formats whose read blocks until [`FakeClipboard::release`] (a hung owner).
+        hung: std::collections::HashSet<u32>,
+        /// Reads blocked in a hang right now.
+        blocked: u32,
         unresponsive: bool,
         reads: Vec<u32>,
         opens: u32,
+        /// How often `sequence()` returned each number (the capture loop reads it first
+        /// thing in every pass — pipeline tests synchronise on it).
+        seq_reads: HashMap<u32, u32>,
+        /// Sequence numbers whose CF_UNICODETEXT was read.
+        text_read: std::collections::HashSet<u32>,
     }
 
     #[derive(Default)]
@@ -611,11 +619,51 @@ pub mod fake {
         pub fn set_text(&self, s: &str) -> u32 {
             self.set(vec![(CF_UNICODETEXT, utf16z(s))], None, owner("c:\\apps\\notepad.exe"))
         }
+        /// [`Self::set_text`] the way a real app writes: only while nobody holds the clipboard
+        /// open — its `OpenClipboard` fails during our read and it retries. (`set` writes
+        /// regardless, which no app can do: a write in the middle of a snapshot bumps the
+        /// sequence number the reader takes for a delayed-render bump of its own read.)
+        pub fn set_text_when_closed(&self, s: &str) -> u32 {
+            loop {
+                {
+                    let mut i = self.inner.lock();
+                    if !i.open {
+                        i.seq += 1;
+                        i.data = vec![(CF_UNICODETEXT, utf16z(s))];
+                        i.files = None;
+                        i.owner = owner("c:\\apps\\notepad.exe");
+                        return i.seq;
+                    }
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        }
         pub fn fail_next_opens(&self, n: u32) {
             self.inner.lock().fail_opens = n;
         }
-        pub fn delay(&self, fmt: u32, d: Duration) {
-            self.inner.lock().delays.insert(fmt, d);
+        /// Reads of `fmt` block until [`Self::release`]: an owner hung in `WM_RENDERFORMAT`
+        /// for as long as the test wants — no timing assumptions.
+        pub fn hang(&self, fmt: u32) {
+            self.inner.lock().hung.insert(fmt);
+        }
+        pub fn release(&self) {
+            self.inner.lock().hung.clear();
+        }
+        /// A read is blocked in a hang right now.
+        pub fn blocked(&self) -> bool {
+            self.inner.lock().blocked > 0
+        }
+        /// How many times `sequence()` has returned `seq`.
+        pub fn seq_reads(&self, seq: u32) -> u32 {
+            self.inner.lock().seq_reads.get(&seq).copied().unwrap_or(0)
+        }
+        /// The current sequence number, without counting it as a read.
+        pub fn current_seq(&self) -> u32 {
+            self.inner.lock().seq
+        }
+        /// A snapshot has read the text of change `seq`.
+        pub fn text_read(&self, seq: u32) -> bool {
+            self.inner.lock().text_read.contains(&seq)
         }
         pub fn set_unresponsive(&self, v: bool) {
             self.inner.lock().unresponsive = v;
@@ -639,7 +687,10 @@ pub mod fake {
             IDS
         }
         fn sequence(&self) -> u32 {
-            self.inner.lock().seq
+            let mut i = self.inner.lock();
+            let seq = i.seq;
+            *i.seq_reads.entry(seq).or_default() += 1;
+            seq
         }
         fn own_pid(&self) -> u32 {
             1
@@ -678,15 +729,27 @@ pub mod fake {
             self.formats().contains(&fmt)
         }
         fn read_with(&self, fmt: u32, visit: &mut dyn FnMut(&[u8])) -> bool {
-            let (bytes, delay) = {
+            let (bytes, hung) = {
                 let mut i = self.inner.lock();
                 assert!(i.open, "read while the clipboard is closed");
                 i.reads.push(fmt);
+                if fmt == CF_UNICODETEXT {
+                    let seq = i.seq;
+                    i.text_read.insert(seq);
+                }
                 let bytes = i.data.iter().find(|(f, _)| *f == fmt).map(|(_, b)| b.clone());
-                (bytes, i.delays.get(&fmt).copied())
+                let hung = i.hung.contains(&fmt);
+                if hung {
+                    i.blocked += 1;
+                }
+                (bytes, hung)
             };
-            if let Some(d) = delay {
-                std::thread::sleep(d); // a slow / hung WM_RENDERFORMAT
+            if hung {
+                // A hung WM_RENDERFORMAT: the call returns only when the owner answers.
+                while self.inner.lock().hung.contains(&fmt) {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                self.inner.lock().blocked -= 1;
             }
             match bytes {
                 Some(b) => {
@@ -721,19 +784,31 @@ mod tests {
         })
     }
 
-    fn fast() -> Timing {
+    /// For tests about WHAT is read: deadlines far beyond any machine load (FIX-04: a 2 MB
+    /// read must not time out on a busy machine), so only a real hang could trip them.
+    fn generous() -> Timing {
         let ms = Duration::from_millis;
-        Timing {
-            open_delay: ms(2),
-            format_timeout: ms(150),
-            budget: ms(400),
-            ..Timing::default()
+        Timing { open_delay: ms(2), format_timeout: ms(10_000), budget: ms(20_000), ..Timing::default() }
+    }
+
+    /// For tests about the deadlines themselves: the production values (1 s per format, 3 s
+    /// per snapshot); the hang is a gate the test releases, not a race against the clock.
+    fn production() -> Timing {
+        Timing { open_delay: Duration::from_millis(2), ..Timing::default() }
+    }
+
+    /// Wait (≤ 10 s) until the abandoned reader thread has exited.
+    fn wait_reader_gone(busy: &AtomicBool) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while busy.load(Ordering::SeqCst) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
         }
+        assert!(!busy.load(Ordering::SeqCst), "the reader thread did not exit");
     }
 
     fn snap(cb: &Arc<FakeClipboard>, c: &Arc<CaptureConfig>) -> SnapshotOutcome {
         let state = Arc::new(CaptureState::new());
-        snapshot_with_deadline(cb, &state, c, &fast(), &Arc::new(AtomicBool::new(false)))
+        snapshot_with_deadline(cb, &state, c, &generous(), &Arc::new(AtomicBool::new(false)))
     }
 
     fn snapshot(o: SnapshotOutcome) -> RawSnapshot {
@@ -870,7 +945,7 @@ mod tests {
         let seq = cb.set_text("pasted by liqlip");
         let state = Arc::new(CaptureState::new());
         state.mark_own(seq);
-        let out = snapshot_with_deadline(&cb, &state, &cfg(), &fast(), &Arc::new(AtomicBool::new(false)));
+        let out = snapshot_with_deadline(&cb, &state, &cfg(), &generous(), &Arc::new(AtomicBool::new(false)));
         assert_eq!(skipped(out), SkipReason::Own);
     }
 
@@ -949,6 +1024,8 @@ mod tests {
         assert_eq!(cb.take_reads(), vec![IDS.html, IDS.png]);
     }
 
+    /// The read limit, not the speed: with `generous()` deadlines a slow machine cannot turn
+    /// this into a timeout (FIX-04 — it used to fail under load with a 150 ms deadline).
     #[test]
     fn huge_text_is_cut_at_the_read_limit_and_rich_formats_capped() {
         let cb = FakeClipboard::new();
@@ -957,9 +1034,11 @@ mod tests {
         big_rtf.push(0);
         cb.set(vec![(CF_UNICODETEXT, utf16z(&big)), (IDS.rtf, big_rtf)], None, None);
         let r = snapshot(snap(&cb, &cfg()));
+        assert!(!r.incomplete, "no deadline was involved");
         assert_eq!(r.text.as_ref().unwrap().len(), TEXT_READ_UNITS);
         assert!(r.text_cut);
         assert!(r.rtf.is_none(), "RTF over 2 MB is dropped, not truncated");
+        assert_eq!(cb.take_reads(), vec![CF_UNICODETEXT, IDS.rtf], "the RTF was looked at and refused");
     }
 
     #[test]
@@ -978,13 +1057,13 @@ mod tests {
             None,
             owner("c:\\apps\\excel.exe"),
         );
-        cb.delay(IDS.html, Duration::from_millis(700)); // owner "renders" far beyond the timeout
+        cb.hang(IDS.html); // the owner never answers WM_RENDERFORMAT until released
         let busy = Arc::new(AtomicBool::new(false));
         let state = Arc::new(CaptureState::new());
-        let started = Instant::now();
-        let out = snapshot_with_deadline(&cb, &state, &cfg(), &fast(), &busy);
-        let waited = started.elapsed();
-        assert!(waited < Duration::from_millis(450), "waited {waited:?}");
+        let out = snapshot_with_deadline(&cb, &state, &cfg(), &production(), &busy);
+        // The snapshot came back while the owner is STILL hung: the deadline, not the owner,
+        // ended the wait (no elapsed-time bound — FIX-04).
+        assert!(cb.blocked(), "returned without waiting for the hung format");
         let r = snapshot(out);
         assert!(r.incomplete);
         assert_eq!(r.text.as_deref(), Some("visible text"));
@@ -992,15 +1071,12 @@ mod tests {
         // While the stuck reader still holds the clipboard no new snapshot starts.
         assert!(busy.load(Ordering::SeqCst));
         assert!(matches!(
-            snapshot_with_deadline(&cb, &state, &cfg(), &fast(), &busy),
+            snapshot_with_deadline(&cb, &state, &cfg(), &production(), &busy),
             SnapshotOutcome::Busy
         ));
         // When the owner finally answers, the reader closes the clipboard and exits.
-        let deadline = Instant::now() + Duration::from_secs(3);
-        while busy.load(Ordering::SeqCst) && Instant::now() < deadline {
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        assert!(!busy.load(Ordering::SeqCst));
+        cb.release();
+        wait_reader_gone(&busy);
         assert!(!cb.is_open());
     }
 
@@ -1012,9 +1088,17 @@ mod tests {
             None,
             None,
         );
-        cb.delay(IDS.can_include_history, Duration::from_millis(500));
-        assert_eq!(skipped(snap(&cb, &cfg())), SkipReason::Timeout);
-        std::thread::sleep(Duration::from_millis(600));
+        cb.hang(IDS.can_include_history);
+        let busy = Arc::new(AtomicBool::new(false));
+        let state = Arc::new(CaptureState::new());
+        let out = snapshot_with_deadline(&cb, &state, &cfg(), &production(), &busy);
+        assert!(cb.blocked(), "the marker read is still hung");
+        assert_eq!(skipped(out), SkipReason::Timeout);
+        // Once the owner answers (here: "may include"), the cancelled reader must not go on to
+        // read the content — it closes the clipboard and exits.
+        cb.release();
+        wait_reader_gone(&busy);
         assert!(!cb.is_open());
+        assert!(!cb.take_reads().contains(&CF_UNICODETEXT), "content never read");
     }
 }
