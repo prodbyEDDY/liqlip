@@ -349,6 +349,14 @@ pub fn ignore_next(app: &AppHandle) -> Result<CaptureStatus, String> {
     Ok(status)
 }
 
+/// Disarm a pending "skip the next change" (W2-F, additive — FIX-05: the tray's checked
+/// "Skip next copy" item clicked again). Emits `capture:status` + refreshes the tray.
+pub fn cancel_ignore_next(app: &AppHandle) -> Result<CaptureStatus, String> {
+    let status = state().clear_ignore_next();
+    publish(app, &status);
+    Ok(status)
+}
+
 /// "Collect copies into the paste stack" mode (`capture_set_collect`).
 pub fn set_collect(app: &AppHandle, value: bool) -> Result<CaptureStatus, String> {
     let status = state().set_collect(value);
