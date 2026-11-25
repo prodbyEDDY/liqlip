@@ -60,6 +60,9 @@ static CAPTURE_GEN: AtomicU64 = AtomicU64::new(0);
 const CAPTURE_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub(crate) enum Job {
+    /// The hook swallowed a key while Alt / Win is held: tap the mask key so their release
+    /// is not bare (`combo::masks_release`). Queued before the job it belongs to.
+    Mask,
     Action(HotkeyAction),
     /// Recorder finished: a chord, or `""` = cancelled (Esc / timeout).
     Captured(String),
@@ -86,6 +89,9 @@ fn start_dispatcher(app: &AppHandle) {
         .spawn(move || {
             for job in rx {
                 match job {
+                    // Within a millisecond of the swallowed press — long before the user lets
+                    // go of the modifier.
+                    Job::Mask => paste::mask_modifier_release(),
                     Job::Action(action) => {
                         let app = app.clone();
                         let _ = std::thread::Builder::new()
@@ -135,6 +141,15 @@ fn run_action(app: &AppHandle, action: HotkeyAction) {
             Err(e) => logx::warn("hotkeys", &format!("ignore next: {e}")),
         },
     }
+}
+
+/// Main (non-modifier) virtual key of a chord in the settings notation (`"Alt + Shift + V"` →
+/// `0x56`, `"Ctrl + Num5"` → `0x65`), parsed by the same grammar that binds it. The stack-paste
+/// flow waits for this key to be released before it types (W3-A): an autorepeat of a key it
+/// did not know — `Num5`, arrows, `-` — would otherwise land in the target once the paste has
+/// lifted the modifiers. `None` for an empty or unbindable chord.
+pub fn main_vk(combo: &str) -> Option<u16> {
+    combo::parse(combo.trim()).and_then(|c| u16::try_from(c.vk).ok())
 }
 
 fn to_errors(errs: &[Option<SettingsErrorCode>]) -> Vec<SettingsError> {
@@ -285,6 +300,32 @@ mod tests {
         let a = [Some(SettingsErrorCode::Invalid), None, None, None];
         let b = [Some(SettingsErrorCode::Taken), Some(SettingsErrorCode::Taken), None, None];
         assert_eq!(merge(a, b), [Some(SettingsErrorCode::Invalid), Some(SettingsErrorCode::Taken), None, None]);
+    }
+
+    /// W3-A: every main key the grammar binds is the key the paste waits for — not only the
+    /// letters/F-keys the old ad-hoc parser knew.
+    #[test]
+    fn main_vk_follows_the_binding_grammar() {
+        assert_eq!(main_vk("Alt + Shift + V"), Some(0x56));
+        assert_eq!(main_vk("alt+shift+v"), Some(0x56));
+        assert_eq!(main_vk("Ctrl + Num5"), Some(0x65));
+        assert_eq!(main_vk("Ctrl + Down"), Some(0x28));
+        assert_eq!(main_vk("Ctrl + Alt + -"), Some(0xBD));
+        assert_eq!(main_vk("Ctrl + PgDn"), Some(0x22));
+        assert_eq!(main_vk("Ctrl + Delete"), Some(0x2E));
+        assert_eq!(main_vk("Alt + F12"), Some(0x7B));
+        assert_eq!(main_vk("Ctrl + LWin"), Some(0x5B));
+        assert_eq!(main_vk(" Super + Space "), Some(0x20));
+        for unbound in ["", "  ", "LCtrl", "Ctrl +", "Alt + F25", "MMB"] {
+            assert_eq!(main_vk(unbound), None, "{unbound:?}");
+        }
+        // Every key the native recorder can report is waited for.
+        for vk in 1u32..=0xFF {
+            if let Some(token) = combo::vk_token(vk) {
+                let chord = combo::combo_string(combo::Mods { alt: true, shift: true, ..Default::default() }, &token);
+                assert_eq!(main_vk(&chord), Some(vk as u16), "{chord}");
+            }
+        }
     }
 
     #[test]

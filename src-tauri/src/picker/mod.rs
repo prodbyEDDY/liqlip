@@ -145,6 +145,14 @@ pub fn hide_now(app: &AppHandle) {
     }
 }
 
+/// Close the shelf the way Esc does — exit animation, then the native hide — giving focus back
+/// to the window it was summoned from (`restore_focus`, only while the shelf still holds it).
+/// The paste flow uses it when there is no target and the record was only copied (W3-A:
+/// SPEC §3.3 "focus always returns where it was", like `Ctrl+Enter`). Never blocks.
+pub fn close(app: &AppHandle, restore_focus: bool) {
+    dispatch(app, Event::Hide { restore: restore_focus });
+}
+
 /// Show + activate the settings window, optionally on a section (`settings:navigate`).
 /// Closes an open shelf first (always-on-top, it would cover settings). Used by
 /// `settings_open`, the tray and the first-run onboarding (`setup()` step 10).

@@ -531,6 +531,9 @@ fn on_capture(vk: u32, pressed: bool, mods: Mods) -> Option<bool> {
         if let Some(token) = combo::vk_token(vk) {
             done = Some(combo::combo_string(mods, &token));
             swallow = true; // the focused window never sees the recorded key
+            if combo::masks_release(mods) {
+                super::schedule(Job::Mask); // recording "Super + X" must not open Start
+            }
         }
     }
     if let Some(combo) = done {
@@ -544,6 +547,7 @@ fn on_capture(vk: u32, pressed: bool, mods: Mods) -> Option<bool> {
 fn on_input(vk: u32, pressed: bool, mods: Mods) -> bool {
     let Some(mut table) = HOOK_TABLE.try_lock() else { return false };
     let mut fired: Option<usize> = None;
+    let mut mask = false;
     let mut swallow = false;
     for (slot, b) in table.iter_mut().enumerate() {
         let Some(b) = b else { continue };
@@ -555,6 +559,7 @@ fn on_input(vk: u32, pressed: bool, mods: Mods) -> bool {
                 if !b.down {
                     b.down = true;
                     fired = Some(slot);
+                    mask = combo::masks_release(b.combo.mods);
                 }
                 swallow = true;
             }
@@ -566,6 +571,9 @@ fn on_input(vk: u32, pressed: bool, mods: Mods) -> bool {
     }
     drop(table);
     if let Some(slot) = fired {
+        if mask {
+            super::schedule(Job::Mask); // `Alt + F12`: no menu mode on the Alt release
+        }
         super::schedule(Job::Action(super::ACTIONS[slot]));
     }
     swallow

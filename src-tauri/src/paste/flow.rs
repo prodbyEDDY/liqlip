@@ -64,6 +64,9 @@ pub enum Step {
     FocusTarget,
     /// `picker::hide_now` — no exit animation, no focus restore.
     HideShelf,
+    /// `picker::close(restore)` — the Esc close: focus goes back where the shelf was summoned
+    /// from (no target → nothing was typed, the user stays where they were).
+    CloseShelf,
     /// 30 ms between the clipboard write / focus change and the input.
     Settle,
     /// Re-check foreground == target; release held modifiers, chord, restore them.
@@ -93,8 +96,9 @@ pub fn plan(origin: Origin, route: Route, close_on_copy: bool) -> Vec<Step> {
         // away (SetForegroundWindow is not blocked by UIPI; input is).
         (Origin::Shelf { keep_open: false }, Route::Elevated) => vec![Write, WaitKeys, FocusTarget, HideShelf, Hud(HudKind::Elevated)],
         (Origin::Shelf { keep_open: true }, Route::Elevated) => vec![Write],
-        // No target: it is a copy — the shelf closes per `picker.closeOnCopy`.
-        (Origin::Shelf { keep_open: false }, Route::NoTarget) if close_on_copy => vec![Write, HideShelf, Hud(HudKind::Copied)],
+        // No target: it is a copy — the shelf closes per `picker.closeOnCopy` and gives focus
+        // back, exactly like `Ctrl+Enter` (SPEC §3.3).
+        (Origin::Shelf { keep_open: false }, Route::NoTarget) if close_on_copy => vec![Write, CloseShelf, Hud(HudKind::Copied)],
         (Origin::Shelf { .. }, Route::NoTarget) => vec![Write],
         (Origin::Foreground, Route::Paste) => vec![Write, WaitKeys, FocusTarget, Settle, Inject, After, HudIfNotPasted],
         (Origin::Foreground, Route::Elevated) => vec![Write, Hud(HudKind::Elevated)],
@@ -148,6 +152,23 @@ enum Miss {
     Blocked,
 }
 
+/// After `WaitKeys`: a trigger key (Enter, 1–9, the hotkey's key) still held after 1 s means
+/// focus must NOT move — its autorepeat would land in whatever gets the focus. That holds for
+/// an administrator window too (W3-A: the elevated route used to hand it focus anyway, and a
+/// held Enter then reached, say, an admin console): `FocusTarget` and `Inject` are skipped,
+/// the data stays on the clipboard.
+fn miss_after_wait(released: bool) -> Option<Miss> {
+    (!released).then_some(Miss::FocusLost)
+}
+
+/// Runs its closure when dropped — on every exit path of a run, a panic in a step included.
+struct OnDrop<F: FnMut()>(F);
+impl<F: FnMut()> Drop for OnDrop<F> {
+    fn drop(&mut self) {
+        (self.0)();
+    }
+}
+
 /// Run a paste. Serialized process-wide (a second paste waits for the first). Blocking:
 /// call from a worker / `spawn_blocking`.
 pub fn run(app: &AppHandle, job: Job<'_>) -> RunResult {
@@ -158,6 +179,10 @@ pub fn run(app: &AppHandle, job: Job<'_>) -> RunResult {
     let started = Instant::now();
     let mut miss: Option<Miss> = None;
     let mut injected = false;
+    // A hand-off flag left set (a step panicked between Begin/EndHandoff) would turn every
+    // later focus loss of the shelf into "stay open, passive" — it could no longer close by a
+    // click elsewhere (W3-A). Cleared on every exit path.
+    let _handoff = steps.contains(&Step::BeginHandoff).then(|| OnDrop(|| focus::set_handoff(false)));
 
     for step in steps {
         match step {
@@ -170,10 +195,9 @@ pub fn run(app: &AppHandle, job: Job<'_>) -> RunResult {
             Step::WaitKeys => {
                 let keys = input::trigger_keys(&job.wait_keys);
                 #[cfg(windows)]
-                if !input::wait_released(&keys, KEYS_TIMEOUT) && route == Route::Paste {
-                    // Still held after 1 s: typing now would autorepeat into the target.
-                    crate::logx::warn("paste", "trigger key still held; input skipped");
-                    miss = Some(Miss::FocusLost);
+                if let Some(m) = miss_after_wait(input::wait_released(&keys, KEYS_TIMEOUT)) {
+                    crate::logx::warn("paste", "trigger key still held; focus stays, input skipped");
+                    miss = Some(m);
                 }
                 #[cfg(not(windows))]
                 let _ = keys;
@@ -191,6 +215,7 @@ pub fn run(app: &AppHandle, job: Job<'_>) -> RunResult {
                 }
             }
             Step::HideShelf => crate::picker::hide_now(app),
+            Step::CloseShelf => crate::picker::close(app, true),
             Step::Settle => {
                 if miss.is_none() {
                     std::thread::sleep(SETTLE);
@@ -381,9 +406,51 @@ mod tests {
 
     #[test]
     fn no_target_follows_close_on_copy() {
-        assert_eq!(plan(SHELF, Route::NoTarget, true), vec![Write, HideShelf, Hud(HudKind::Copied)]);
+        // W3-A: a copy from the shelf gives focus back where it was summoned from (SPEC §3.3),
+        // like Ctrl+Enter — the Esc close, not the paste's silent hide.
+        assert_eq!(plan(SHELF, Route::NoTarget, true), vec![Write, CloseShelf, Hud(HudKind::Copied)]);
         assert_eq!(plan(SHELF, Route::NoTarget, false), vec![Write]);
         assert_eq!(plan(Origin::Foreground, Route::NoTarget, true), vec![Write, Hud(HudKind::Copied)]);
+        // Only the no-target copy closes that way; a paste never restores focus over its target.
+        for (origin, route) in [(SHELF, Route::Paste), (SHELF, Route::Elevated), (KEEP, Route::Paste), (Origin::Foreground, Route::Paste)] {
+            assert!(!plan(origin, route, true).contains(&CloseShelf), "{origin:?} {route:?}");
+        }
+    }
+
+    /// W3-A: a trigger key still held after the wait keeps focus where it is — on every route
+    /// that would move it (the elevated one included), and every such plan waits first.
+    #[test]
+    fn held_trigger_key_blocks_the_focus_move_on_every_route() {
+        assert_eq!(miss_after_wait(true), None);
+        assert_eq!(miss_after_wait(false), Some(Miss::FocusLost));
+        for origin in [SHELF, KEEP, Origin::Foreground] {
+            for route in [Route::Paste, Route::Elevated, Route::NoTarget] {
+                for close in [true, false] {
+                    let p = plan(origin, route, close);
+                    if let Some(focus) = p.iter().position(|s| *s == FocusTarget) {
+                        let wait = p.iter().position(|s| *s == WaitKeys);
+                        assert!(wait.is_some_and(|w| w < focus), "{origin:?} {route:?}: {p:?}");
+                    }
+                }
+            }
+        }
+    }
+
+    /// W3-A: the run's clean-up (the hand-off flag) also runs when a step panics. A local flag
+    /// stands in for the process-wide one (other tests toggle that in parallel).
+    #[test]
+    fn cleanup_runs_when_a_step_unwinds() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let flag = AtomicBool::new(true);
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _reset = OnDrop(|| flag.store(false, Ordering::SeqCst));
+            panic!("a step failed");
+        }));
+        assert!(r.is_err());
+        assert!(!flag.load(Ordering::SeqCst));
+        let flag = AtomicBool::new(true);
+        drop(OnDrop(|| flag.store(false, Ordering::SeqCst)));
+        assert!(!flag.load(Ordering::SeqCst), "and on the normal path");
     }
 
     /// FIX-07: the HUD names the chord of the target app, not always Ctrl+V.
