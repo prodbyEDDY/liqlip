@@ -1,6 +1,6 @@
 [package]
 name = "liqlip"
-version = "0.1.0"
+version = "1.0.0"
 description = "Liqlip — a keyboard-first clipboard manager for Windows."
 authors = ["Liqlip"]
 edition = "2021"
@@ -40,6 +40,11 @@ rusqlite = { version = "0.43", features = ["bundled", "functions"] }
 image = { version = "0.25", default-features = false, features = ["png", "bmp"] }
 # content_hash (src/content.rs): XXH3-128, stable since xxHash 0.8.0.
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
+# W2-B: `.liqlip` backups are zip archives (docs.rs/zip 9.8.2). Only Deflate: `deflate-flate2`
+# needs a flate2 back-end, so flate2 is listed with its pure-Rust `rust_backend` (miniz_oxide,
+# already in the lock through tauri/png). No AES / bzip2 / zstd / lzma / time.
+zip = { version = "9.8", default-features = false, features = ["deflate-flate2"] }
+flate2 = { version = "1.1", default-features = false, features = ["rust_backend"] }
 
 [target.'cfg(windows)'.dependencies]
 # The #[implement] macro (drag-out COM objects, W1-C) emits paths to `windows_core`,
@@ -109,4 +114,20 @@ windows = { version = "0.62", features = [
     "Storage_Streams",
     "Globalization",
     "Win32_System_WinRT",
+    # W2-D tray: a timed pause's end in local time (FileTimeToSystemTime,
+    # SystemTimeToTzSpecificLocalTime; GetTimeFormatEx is in Globalization above).
+    "Win32_System_Time",
+    # W2-B: GetLocalTime (the local date in the default backup file name).
+    "Win32_System_SystemInformation",
 ] }
+
+# Release build for the NSIS installer (W2-D, ARCHITECTURE §16). Speed over size:
+# opt-level 3 keeps the hot paths (SQLite compiled by cc with the same level, PNG
+# encode/decode of clipboard images) at full speed; fat LTO + one codegen unit + stripped
+# symbols win back most of the size. `panic` stays `unwind` (the default): capture restarts
+# its threads through `catch_unwind` (ARCHITECTURE §5), which `abort` would make impossible.
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true

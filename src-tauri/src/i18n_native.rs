@@ -43,6 +43,8 @@ fn system_lang() -> Lang {
 pub enum Key {
     TrayTooltip,
     TrayTooltipPaused,
+    /// `{time}` = local time a timed pause ends ("14:30" / "2:30 PM")
+    TrayTooltipPausedUntil,
     TrayOpen,
     TrayPause,
     TrayPause5m,
@@ -69,13 +71,18 @@ pub enum Key {
     Cancel,
     PickExeTitle,
     PickExeFilter,
+    BackupExportTitle,
+    BackupRestoreTitle,
+    BackupFilter,
 }
 
 pub fn tr(lang: Lang, key: Key) -> &'static str {
     use Key::*;
     match (lang, key) {
-        (Lang::En, TrayTooltip) => "Liqlip",
-        (Lang::Ru, TrayTooltip) => "Liqlip",
+        (Lang::En, TrayTooltip) => "Liqlip — recording",
+        (Lang::Ru, TrayTooltip) => "Liqlip — запись идёт",
+        (Lang::En, TrayTooltipPausedUntil) => "Liqlip — paused until {time}",
+        (Lang::Ru, TrayTooltipPausedUntil) => "Liqlip — пауза до {time}",
         (Lang::En, TrayTooltipPaused) => "Liqlip — recording paused",
         (Lang::Ru, TrayTooltipPaused) => "Liqlip — запись на паузе",
         (Lang::En, TrayOpen) => "Open Liqlip",
@@ -130,6 +137,12 @@ pub fn tr(lang: Lang, key: Key) -> &'static str {
         (Lang::Ru, PickExeTitle) => "Выберите приложение",
         (Lang::En, PickExeFilter) => "Applications",
         (Lang::Ru, PickExeFilter) => "Приложения",
+        (Lang::En, BackupExportTitle) => "Export a Liqlip backup",
+        (Lang::Ru, BackupExportTitle) => "Экспорт резервной копии Liqlip",
+        (Lang::En, BackupRestoreTitle) => "Restore from a Liqlip backup",
+        (Lang::Ru, BackupRestoreTitle) => "Восстановление из резервной копии Liqlip",
+        (Lang::En, BackupFilter) => "Liqlip backup",
+        (Lang::Ru, BackupFilter) => "Резервная копия Liqlip",
     }
 }
 
@@ -142,16 +155,19 @@ mod tests {
         // `tr` is an exhaustive match, so this mainly guards against empty strings.
         use Key::*;
         let keys = [
-            TrayTooltip, TrayTooltipPaused, TrayOpen, TrayPause, TrayPause5m, TrayPause30m,
+            TrayTooltip, TrayTooltipPaused, TrayTooltipPausedUntil, TrayOpen, TrayPause, TrayPause5m, TrayPause30m,
             TrayPause1h, TrayPauseUntilResume, TrayResume, TrayIgnoreNext, TrayDeleteRecent,
             TrayDelete5m, TrayDelete15m, TrayDelete30m, TrayDelete1h, TrayDelete24h, TrayStack,
             TraySettings, TrayQuit, SettingsWindowTitle, ConfirmDeleteRecentTitle,
             ConfirmDeleteRecentBody, ConfirmDelete, Cancel, PickExeTitle, PickExeFilter,
+            BackupExportTitle, BackupRestoreTitle, BackupFilter,
         ];
         for k in keys {
             assert!(!tr(Lang::En, k).is_empty());
             assert!(!tr(Lang::Ru, k).is_empty());
         }
         assert!(tr(Lang::Ru, TrayStack).contains("{n}"));
+        assert!(tr(Lang::Ru, TrayTooltipPausedUntil).contains("{time}"));
+        assert!(tr(Lang::En, TrayTooltipPausedUntil).contains("{time}"));
     }
 }

@@ -14,6 +14,37 @@ the full IPC contract with a stub for every command, settings, tray, the three w
 in-browser mock backend. Capture, storage, paste, the shelf and the settings UI are the next
 wave. See [`docs/ROADMAP.md`](docs/ROADMAP.md) (Russian).
 
+## Install
+
+Liqlip 1.0 ships as a per-user NSIS installer: no administrator rights, no code signing and
+no auto-update (v1 is for personal use).
+
+1. Run `Liqlip_1.0.0_x64-setup.exe`. The installer is not signed, so Windows SmartScreen may
+   say it protected your PC: choose **More info → Run anyway**.
+2. The installer speaks English or Russian, following the Windows display language, and
+   installs into `%LOCALAPPDATA%\Liqlip`. It adds a Start menu shortcut; a desktop shortcut is
+   a checkbox on the last page.
+3. WebView2 is part of Windows 10/11. If it is missing, the installer downloads Microsoft's
+   bootstrapper (internet required).
+4. Press `Alt + V`.
+
+**Uninstall:** Settings → Apps → Installed apps → Liqlip → Uninstall. This removes the app,
+its shortcuts and its launch-on-login entry. Tick **Delete the application data** to also
+remove `%APPDATA%\com.liqlip.app` (history, images, settings, logs).
+
+**Build the installer** (Windows, requirements as in [Run](#run)):
+
+```bash
+pnpm install
+node scripts/brand.mjs      # only after changing the mark: icons, tray glyphs, installer art
+node scripts/licenses.mjs   # after dependency changes: public/licenses/THIRD-PARTY.txt
+pnpm tauri build            # → src-tauri/target/release/bundle/nsis/Liqlip_1.0.0_x64-setup.exe
+```
+
+Details: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) §16. Liqlip is proprietary software
+(© 2026 Liqlip, all rights reserved); third-party notices are in
+[`public/licenses/`](public/licenses/).
+
 ## Docs
 
 - [`docs/SPEC.md`](docs/SPEC.md) — product spec

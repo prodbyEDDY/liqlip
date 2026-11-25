@@ -155,6 +155,7 @@ pub fn run() {
             store::commands::snippet_save,
             store::commands::snippet_delete,
             store::commands::snippet_mark_used,
+            store::commands::snippet_move,
             store::commands::apps_list,
             store::commands::storage_stats,
             // paste (W1-C)
@@ -292,14 +293,17 @@ fn build_windows(app: &AppHandle, current: &model::Settings) -> tauri::Result<()
     // the tray icon variant. One window is enough to hear it.
     {
         let app = app.clone();
-        picker.on_window_event(move |event| {
-            if let WindowEvent::ThemeChanged(_) = event {
+        picker.on_window_event(move |event| match event {
+            WindowEvent::ThemeChanged(_) => {
                 let pref = settings::get(&app).general.theme;
                 if pref == model::ThemePref::System {
                     theme::emit_changed(&app, pref);
                 }
                 tray::refresh(&app);
             }
+            // W2-D: the tray glyph size follows the taskbar DPI.
+            WindowEvent::ScaleFactorChanged { .. } => tray::refresh(&app),
+            _ => {}
         });
     }
     // The settings title follows the language.

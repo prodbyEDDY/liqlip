@@ -215,6 +215,14 @@ pub async fn snippet_delete(app: AppHandle, id: i64) -> Result<(), String> {
     Ok(())
 }
 
+/// Manual snippet order (W2-B); `beforeId: null` = move to the end.
+#[tauri::command]
+pub async fn snippet_move(app: AppHandle, id: i64, before_id: Option<i64>) -> Result<(), String> {
+    blocking(&app, move |s| s.snippet_move(id, before_id)).await?;
+    changed(&app, ClipsChange::Updated, None);
+    Ok(())
+}
+
 /// Bump a snippet's use counter.
 #[tauri::command]
 pub async fn snippet_mark_used(app: AppHandle, id: i64) -> Result<(), String> {

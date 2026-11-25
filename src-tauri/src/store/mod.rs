@@ -14,6 +14,7 @@
 //!
 //! Privacy: nothing here logs clipboard content — only ids, counts, sizes and error codes.
 
+pub(crate) mod bulk;
 pub mod commands;
 mod feed;
 mod folders;

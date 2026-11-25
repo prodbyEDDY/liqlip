@@ -74,7 +74,7 @@ liqlip/
       content.rs                общий хэш + правила содержимого (превью, усечение, метрики) — §15
       events.rs                 типизированные эмиттеры всех событий §9.7 (имена + адресация)
       tray.rs · theme.rs · logx.rs · fsx.rs · autostart.rs · i18n_native.rs
-    tauri.conf.json · capabilities/default.json · icons/ (временные, PQ-01)
+    tauri.conf.json · capabilities/default.json · icons/ (знак Liqlip, W2-D — §16)
   tests/                        *.test.mjs (node:test) · helpers/bundle.mjs (esbuild → ESM) ·
                                 fixtures/settings.default.json (дефолты: Rust ≡ мок)
   docs/                         эта библиотека
@@ -1212,6 +1212,7 @@ export interface ImportReport { imported: number; skipped: number; folders: numb
 | `folders_list` / `folder_create` / `folder_rename` / `folder_move` / `folder_delete` | `…` / `name`→`Folder` / `id,name` / `id,beforeId` / `id, withClips` → `{undoToken}` | store |
 | `snippets_list` | `text` → `Snippet[]` | store |
 | `snippet_save` / `snippet_delete` / `snippet_mark_used` | `SnippetInput`→`Snippet` / `id` / `id` | store |
+| `snippet_move` | `id, beforeId: number\|null` → `()` (ручной порядок сниппетов, как `folder_move`; W2-B, аддитивно) | store |
 | `apps_list` | → `AppInfo[]` (источники с числом записей) | store |
 | `storage_stats` | → `StorageStats` | store |
 | `clip_paste` | `PasteRequest` → `PasteOutcome` | paste |
@@ -1237,7 +1238,7 @@ export interface ImportReport { imported: number; skipped: number; folders: numb
 | `pick_exe` | → `string \| null` (диалог) | settings |
 | `ocr_status` / `ocr_reindex` / `clip_ocr` | → `{ available, languages, pending }` / `()` / `id` → `string` | ocr (W2) |
 | `import_lt_probe` / `import_lt_run` | → `ImportProbe` / `ImportReport` | import (W2) |
-| `backup_export` / `backup_import` | → `string\|null` / `mode: 'replace'\|'merge'` → `ImportReport` | import (W2) |
+| `backup_export` / `backup_import` | → `string\|null` / `mode: 'replace'\|'merge'` → `ImportReport` (отмена диалога: экспорт → `null`, восстановление → `invalid: cancelled`; §17.6) | import (W2) |
 
 Ошибки команд — `Result<T, String>` с машинным кодом в начале строки (`"not_found: …"`,
 `"busy: …"`, `"invalid: …"`, `"failed: …"` — сбой ОС/плагина, добавлен в W0; заглушки —
@@ -1628,7 +1629,8 @@ pub fn apply_settings(app: &AppHandle, prev: &HotkeySettings, next: &HotkeySetti
 `PauseToggle → capture::toggle_pause`, `IgnoreNext → capture::ignore_next`.
 
 **ocr (W2-A)** — `pub fn start(app: &AppHandle)` (setup шаг 5, после `store::init`) + команды; аддитивно `pub fn wake(app: &AppHandle)` — разбудить очередь и поставить в неё картинки, ни разу не стоявшие в очереди (для импорта). Внутри хранилища — `store/ocr.rs` (§5a.2). **import (W2-B)** — только
-команды.
+команды; методы `Store` для импорта и восстановления — `store/bulk.rs` (`pub(crate) mod bulk`,
+§17.7); после импорта и восстановления зовёт `ocr::wake`.
 
 **Фронт.** Окна общаются с Rust только через `src/lib/ipc/commands.ts` (`call` → `invoke` или мок) и
 `events.ts` (`on*` → `listen` или мок-шина). Тема/язык окна — `initAppearance()` из `appearance.ts`
@@ -1637,3 +1639,423 @@ pub fn apply_settings(app: &AppHandle, prev: &HotkeySettings, next: &HotkeySetti
 флаги `?mock-empty=1`, `?mock-error=1`, `?mock-live=0`, `?mock-size=N`,
 `?mock-target=chrome|none|elevated`, `?mock-unimpl=ocr,import`; задержка 30–80 мс), стабильный API
 `settings.ts::currentSettings()` для остальных мок-модулей.
+
+## 16. Упаковка (W2-D, 2026-11-26)
+
+> Замер: 2026-11-26 (W2-D: знак, иконки, трей, NSIS 1.0.0, CSP, release-профиль, лицензии;
+> установщик собран, не запускался — PQ-02).
+
+### 16.1. Знак
+
+**Идея:** буфер обмена + жидкость — родственник колбы Liquid Tools. Портретный планшет-сквиркл,
+капсула-зажим поверх верхней кромки, внутри жидкость с рябью. В паузе жидкость уступает место паре
+капсул «‖» в том же планшете. Монохром: без градиентов, теней и свечения.
+
+**Геометрия:**
+- углы планшета — квартика `|x|⁴ + |y|⁴ = 1`, то же, что CSS `corner-shape: squircle`
+  (`superellipse(2)`): одна кубическая кривая на угол, ручки на 9,09 % радиуса от угла;
+- зажим — капсула с круглыми концами (правило дизайн-системы: капсулы — не сквиркл);
+- радиусы концентричны: внутренний = внешний − отступ;
+- на крупных размерах вокруг зажима вырезан зазор (маска `liqlip-clip-gap`), и зажим читается
+  отдельной деталью.
+
+**Один генератор — `node scripts/brand.mjs`.** Геометрия живёт в коде: `MASTER` — сетка 24,
+`TRAY` — по пиксельным размерам. Растр делает `tauri icon` проекта (resvg), без новых зависимостей.
+Скрипт перезаписывает всё ниже; после него — `cargo test` (тест трея сверяет размеры PNG).
+
+| Файл | Что |
+|---|---|
+| `design/logo.svg` · `design/logo-1024.png` | исходник знака (чёрный, viewBox 24, 1024 px) |
+| `design/app-icon.svg` · `design/app-icon-1024.png` | плитка приложения: сквиркл `#171717` (тёмный `paper`) со знаком `#F4F5F7` (тёмный `ink`), как у Liquid Tools; знак — 68 % плитки, радиус — 36 % стороны |
+| `public/brand/logo-light.svg` · `logo-dark.svg` | знак для интерфейса: `ink` светлой (`#252525`) и тёмной (`#F4F5F7`) темы, viewBox 24; от 24 px (мельче — глифы трея) |
+| `src-tauri/icons/icon.ico` + `32x32` · `64x64` · `128x128` · `128x128@2x` · `icon.png` | иконки приложения (`tauri icon design/app-icon.svg`) |
+| `src-tauri/icons/tray/<px>.png` · `<px>-paused.png` | глифы трея 16/20/24/28/32/40/48 px, чёрные на прозрачном |
+| `src-tauri/icons/nsis-sidebar.bmp` | картинка страниц «Добро пожаловать»/«Готово» установщика, 164×314, 24-bit BMP |
+
+**Оптические размеры трея.** 16/20/24 px нарисованы по пиксельной сетке: кромки и обводка — на
+целых или половинных пикселях. Зазора между стенкой и жидкостью нет, зажим слит с кромкой, волна
+одна, S-образная (рябь на 16 px не видна). С 28 px — полный знак (`MASTER` в масштабе).
+
+### 16.2. Иконки приложения
+
+`tauri icon` (v2.tauri.app/develop/icons) рендерит SVG под каждый размер. ICO содержит слои
+32, 16, 24, 48, 64, 256 (PNG); 32 стоит первым, как требуют доки. macOS-, AppX- и мобильные файлы
+генератор выкидывает: Liqlip только для Windows.
+
+В `bundle.icon` четыре файла: 32, 128, 128@2x и ico. Windows берёт ico для ресурса exe, иконки окна
+и ярлыков. Мелкие слои ICO (16/24) — тот же вектор без хинтинга, поэтому они мягче глифов трея.
+
+### 16.3. Трей (`tray.rs`)
+
+**Иконка.** Размер — `SM_CXSMICON` на DPI панели задач: `GetDpiForWindow(Shell_TrayWnd)`, иначе
+`GetDpiForSystem`. Получается 16 px при 100 %, 20 — при 125 %, 24 — при 150 % и так далее. Берётся
+PNG ближайшего размера не меньше нужного; оболочке не приходится масштабировать картинку. Глиф
+чёрный, для тёмной панели (`SystemUsesLightTheme = 0`) он перекрашивается в белый с сохранением
+альфы. Пауза — свой глиф «‖».
+
+**Подсказка.** Формат: «Liqlip — запись идёт» / «Liqlip — пауза до 14:30» / «Liqlip — запись на
+паузе», а пока очередь не пуста — ещё « · Очередь: 3». Время переводится в локальный пояс через
+`SystemTimeToTzSpecificLocalTime` и форматируется `GetTimeFormatEx` в формате пользователя. Строка
+«пауза до {time}» пока лежит в `tray.rs` (временная функция `paused_until_template`), до сниппета
+в `i18n_native` (отчёт W2-D).
+
+**Меню** сверено со SPEC §5 — без изменений.
+
+**Обновление.** `refresh` вызывается при смене паузы, очереди, языка, хоткея и темы. На смену
+масштаба на лету отдельного вызова нет (сниппет для `lib.rs` — в отчёте W2-D); иначе иконка
+обновится при ближайшем `refresh`.
+
+### 16.4. Установщик (NSIS, `tauri.conf.json`)
+
+| Ключ | Значение | Зачем |
+|---|---|---|
+| `productName` / `version` | `Liqlip` / `1.0.0` (так же в `Cargo.toml` и `package.json`) | `app_info.version` = `package_info().version` = версия из конфига |
+| `bundle.targets` | `["nsis"]` | только `…-setup.exe` |
+| `bundle.publisher` / `copyright` | `Liqlip` / `© 2026 Liqlip. All rights reserved.` | «Приложения» Windows, свойства exe, строка внизу окон установщика |
+| `bundle.shortDescription` / `longDescription` | EN | описание exe и пакета |
+| `nsis.installMode` | `currentUser` | без прав администратора, `%LOCALAPPDATA%\Liqlip`, ключи в HKCU |
+| `nsis.languages` | `["English", "Russian"]`, `displayLanguageSelector: false` | язык по языку системы, иначе первый (английский); строки Tauri для русского есть (`Russian.nsh`) |
+| `nsis.installerIcon` / `uninstallerIcon` | `icons/icon.ico` | вместо иконок NSIS по умолчанию |
+| `nsis.sidebarImage` | `icons/nsis-sidebar.bmp` | вместо синей картинки NSIS по умолчанию |
+
+**Сознательно не задано:**
+- `headerImage`: в MUI2 картинка шапки стоит слева и сдвигает заголовок страницы на 150 px; без неё
+  шапка чище.
+- `startMenuFolder`: ярлык ложится прямо в «Пуск» (`Programs\Liqlip.lnk`).
+- `webviewInstallMode`: остаётся по умолчанию `downloadBootstrapper` (тихий). WebView2 на
+  Windows 10/11 обычно уже есть; если нет, установщик скачает бутстрэппер, нужен интернет.
+- Подпись и автообновление (PQ-03): SmartScreen покажет «Windows защитила ваш компьютер» →
+  «Подробнее → Выполнить в любом случае».
+
+**Поведение шаблона Tauri:**
+- ярлык на рабочем столе — галочкой на последней странице;
+- «Запустить Liqlip» — там же, запуск от имени пользователя;
+- повторная установка поверх — обновление, данные сохраняются; `allowDowngrades` по умолчанию `true`;
+- установщик просит закрыть запущенный Liqlip.
+
+**Удаление** — через «Параметры → Приложения» или `uninstall.exe`:
+- убирает файлы, ярлыки и значение автозапуска `HKCU\…\Run\Liqlip` — его имя совпадает с
+  `productName`, так значение называет `tauri-plugin-autostart`;
+- галочка «Удалить данные приложения» дополнительно удаляет `%APPDATA%\com.liqlip.app` (база,
+  медиа, настройки, логи) и `%LOCALAPPDATA%\com.liqlip.app` (данные WebView2).
+
+### 16.5. CSP
+
+```json
+"csp": {
+  "default-src": "'self'",
+  "connect-src": "ipc: http://ipc.localhost 'self'",
+  "img-src": "'self' data: http://liq.localhost",
+  "style-src": "'self' 'unsafe-inline'",
+  "font-src": "'self' data:"
+}
+```
+
+**Что дописывает Tauri** (`tauri-codegen`/`tauri` 2.11, `manager::set_csp`):
+- в `script-src` — `'self'` и sha256 каждого JS из `dist`;
+- в `style-src` — nonce только для элементов `<style>` в HTML. В наших HTML их нет, поэтому
+  `'unsafe-inline'` не отменяется nonce'ом.
+
+**Директивы:**
+- `connect-src`: IPC Tauri v2 — `fetch` на `http://ipc.localhost` (`ipc:` — на других ОС), как в
+  доках Security → CSP. `'self'` — для будущего встроенного просмотра лицензий (`fetch` своих
+  `/licenses/*.txt`).
+- `img-src`: `http://liq.localhost` — схема `liq` в WebView2 (§9.8); `data:` — иконки приложений и
+  мок-превью.
+- `font-src data:`: Vite встраивает мелкий сабсет JetBrains Mono (< 4 КБ) как `data:` (`assetsInlineLimit`).
+- `style-src 'unsafe-inline'` нужен. Проверено в Chromium (тот же движок, что WebView2) на `dist` под
+  этим заголовком:
+  - без `'unsafe-inline'` блокируются `style`-атрибуты разметки (`<body style="background:
+    transparent">` в `picker.html`/`hud.html` — шелф и HUD потеряли бы прозрачность) и
+    `setAttribute('style')`;
+  - CSSOM (`el.style.*`, `style.cssText`) работает и без него;
+  - с итоговой политикой нарушений нет, шрифты Inter и JetBrains Mono грузятся.
+
+**Где действует.** Только в собранном приложении: в `tauri dev` WebView грузит Vite напрямую, и
+заголовок CSP не ставится. Проверка — на установленной сборке. Откат — `"csp": null`, одна строка.
+
+### 16.6. Release-профиль (`Cargo.toml`)
+
+```toml
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
+```
+
+**`opt-level = 3`**, а не `"s"`, который советуют доки Tauri (App Size): «use 3 if you prefer
+speed». Горячие места Liqlip — это:
+- SQLite: `cc` собирает его с тем же уровнем;
+- кодек PNG для картинок буфера;
+- FTS-поиск.
+
+Для личного установщика размер не критичен. Выигрыш размера от `"s"` не замерялся: разрешена одна
+release-сборка.
+
+**`lto`, один codegen unit и `strip`** возвращают большую часть размера.
+
+**`panic` не задан**, остаётся `unwind`: захват перезапускает свои потоки через `catch_unwind`
+(§5), а `abort` сделал бы это невозможным.
+
+### 16.7. Лицензии
+
+**Собственная лицензия Liqlip** — проприетарная, «все права защищены», для личного использования:
+`public/licenses/LICENSE.txt`, `bundle.copyright`, README. MIT не выбран: он безвозвратно разрешил
+бы любому копировать и распространять код. Личной v1 из приватного репозитория это не нужно;
+открыть код позже можно всегда, а отозвать MIT нельзя.
+
+**Сторонние компоненты** — `node scripts/licenses.mjs` → `public/licenses/THIRD-PARTY.txt`.
+Запускать после изменения зависимостей; вывод детерминирован. Что попадает в список:
+- **Rust:** `cargo metadata --filter-platform x86_64-pc-windows-msvc --locked --offline`, обход
+  обычных (normal) зависимостей от `liqlip`. Build/dev-зависимости и proc-macro-крейты пропускаются
+  вместе со всем, что достижимо только через них. `cargo metadata` объединяет фичи, поэтому
+  несколько крейтов, нужных только `tauri-build`, всё же попадают в список — это безвредно.
+- **npm:** `pnpm licenses list --json --prod` (в том числе рантайм Svelte как peer-зависимость
+  `bits-ui`) плюс `tailwindcss`: его preflight копируется в CSS. Набор сверен с sourcemap
+  production-сборки.
+
+**Формат файла:**
+- у каждого пакета — лицензия и ссылка;
+- тексты лицензий из самого пакета; для «A OR B» берётся один (MIT, если есть);
+- одинаковые тексты печатаются один раз;
+- пакеты без файла лицензии вынесены отдельным списком с лицензией из метаданных.
+
+На 2026-11-26: 234 крейта + 36 npm-пакетов, 131 уникальный текст, 285 КБ.
+
+**Где лежит.** Vite копирует `public/licenses/` в `dist`, и Tauri вшивает файлы в exe. Раздел «О
+Liqlip» пока ссылается только на `licenses/heroicons.txt`; ссылки на `LICENSE.txt` и
+`THIRD-PARTY.txt` подключают W2-E или координатор (INT-2).
+
+### 16.8. Как собрать установщик
+
+```bash
+pnpm install
+node scripts/brand.mjs        # только после правки знака
+node scripts/licenses.mjs     # после изменения зависимостей
+CARGO_TARGET_DIR=… pnpm tauri build   # beforeBuildCommand = pnpm build
+```
+
+**Результат:** `<target>/release/bundle/nsis/Liqlip_1.0.0_x64-setup.exe`. NSIS и плагин
+`nsis_tauri_utils` CLI Tauri при первой сборке сам скачивает в `%LOCALAPPDATA%\tauri\NSIS`.
+
+**В `dist` не попадают:** `.map` (sourcemap включается только при `TAURI_ENV_DEBUG`), тесты и
+фикстуры.
+
+**Попадает:** мок-адаптер `mock-*.js` — до 33 КБ с демо-данными. В Tauri он не загружается:
+`import("./mock")` выполняется только вне Tauri.
+
+**Замер сборки W2-D** (2026-11-26, первая release-сборка в общем target):
+- `pnpm tauri build` — 219 с, из них cargo release — 3 мин 25 с;
+- `liqlip.exe` — 15 175 168 байт (14,5 МиБ);
+- `Liqlip_1.0.0_x64-setup.exe` — 4 219 963 байт (4,0 МиБ);
+- единственное предупреждение сборщика — идентификатор `com.liqlip.app` оканчивается на `.app` (касается только macOS; менять нельзя: это путь к данным).
+
+## 17. Импорт и резервные копии (`import/`, `store/bulk.rs`) — W2-B
+
+> Замер: 2026-11-26 (W2-B: импорт из Liquid Tools, экспорт `.liqlip`, восстановление `replace`/`merge`,
+> `snippet_move`; `cargo test` — 289 в крейте, из них 23 теста W2-B на синтетической базе в схеме Liquid
+> Tools и во временных хранилищах; реальная база Liquid Tools в тестах не открывалась; нативно не
+> запускалось).
+
+Файлы: `import/lt.rs` (чтение Liquid Tools) · `import/backup.rs` (zip: экспорт, проверка, распаковка,
+`replace`, `merge`) · `import/runner.rs` (общий цикл импорта) · `import/tmp.rs` (временные каталоги с
+guard-ом) · `import/commands.rs` (диалоги, `import:progress`, события, «занято») · `store/bulk.rs`
+(методы `Store`). Подключение в хранилище — одна строка `pub(crate) mod bulk;`.
+
+### 17.1. Импорт из Liquid Tools
+
+**Источник** — `%APPDATA%\com.liquidtools.app\clipboard\clipboard.db` (`PathResolver::data_dir()` +
+идентификатор) и файлы `<id>.png` рядом (Liquid Tools `docs/library.md` §4, `clipboard/store.rs`).
+
+**Только чтение, без влияния на работающий Liquid Tools.** База никогда не открывается на месте:
+она копируется (вместе с `-journal`/`-wal`, если есть; `-shm` не нужен — SQLite перестроит индекс по
+WAL) в `%TEMP%\liqlip-lt-*`, и открывается копия. Причины (отклонение от «открыть `mode=ro`, при
+занятости — копия»): (1) любое открытие оригинала, даже `SQLITE_OPEN_READONLY`, берёт разделяемую
+блокировку, а у Liquid Tools нет `busy_timeout` — его ближайший INSERT захвата упал бы с
+`SQLITE_BUSY`; (2) у WAL-базы read-only соединение создаёт и пишет `-shm` в его каталоге. Копирование
+читает файлы обычным `ReadFile` (std открывает с `FILE_SHARE_READ|WRITE|DELETE`), байтовые блокировки
+SQLite лежат на смещении 1 ГиБ и чтению не мешают. Запись, попавшая в окно копирования, ловится
+сравнением размера/mtime базы и наличия `-journal`/`-wal` до и после — копия повторяется (≤ 4 раз).
+Копия без сопутствующих файлов открывается `SQLITE_OPEN_READ_ONLY`; с ними — на запись (это наша
+копия: SQLite откатывает «горячий» журнал или проигрывает WAL), затем `PRAGMA quick_check(1)`. Каталог
+копии удаляется guard-ом. PNG читаются из каталога Liquid Tools только на чтение. Тесты сверяют
+отпечаток каталога (имя, размер, mtime, хэш содержимого каждого файла) до и после — в том числе при
+открытой транзакции писателя с журналом и при WAL-базе с открытым писателем.
+
+**Проверка схемы.** Нет заголовка `SQLite format 3` → `invalid: not a Liquid Tools database`; нет
+`clipboard_entries` с `id, kind, preview, created_at` → `invalid: unknown Liquid Tools database format`;
+`SQLITE_CORRUPT`/`NOTADB`/`quick_check ≠ ok` → `invalid: the Liquid Tools database is damaged`.
+Необязательные колонки (`content_ref, source_app, pinned, html, category, app_icon`, таблица `categories`)
+определяются через `pragma_table_info` — старые версии Liquid Tools тоже импортируются.
+
+**Отображение схемы Liquid Tools → Liqlip**
+
+| Liquid Tools | Liqlip |
+|---|---|
+| `kind` text · link · code · contact · color | текстовая запись; вид — заново `capture::classify::classify_text` (все текстовые виды — одно семейство хэша, метка на дедупликацию не влияет; `123456` без `#` больше не «цвет») |
+| `kind` image | `image`: `<dir>\<id>.png` (иначе абсолютный `content_ref`), декод в RGBA8 + нормализация как в захвате (полностью прозрачная → непрозрачная), `content::image_hash` по пикселям; PNG копируется как есть (перекодируется, только если нормализация его изменила); миниатюра ≤ 360 px строится сразу. Нет файла → `errors + 1` |
+| `kind` file | `file`: пути из `content_ref`/`preview` (через `\n`, ≤ 2000), `meta.ext`, `files` (`dropEffect` 1) |
+| `kind` screenshot и любой другой | не переносится и не считается. Диктовки живут в `dictation-history.json`, в этой базе их нет |
+| полный текст | `content_ref` (> 280 символов), иначе `preview` (Liquid Tools хранил текст ≤ 280 символов обрезанным по краям пробелов); усечение до 2 МБ (`meta.truncated`); `content_ref` читается как `substr(…, 1, 2 100 000)` — результат тот же, память страницы ограничена |
+| `html` (сырой CF_HTML с заголовком) | формат `html` без заголовка (`StartHTML..EndHTML`; без контекста — фрагмент в минимальном документе), `SourceURL` → `meta.url/host`, если у записи нет ссылки |
+| `created_at` (мс; < 1e11 — секунды до v3, ×1000, как `migrate_timestamps` Liquid Tools) | `created_at` = `copied_at` |
+| `pinned` | избранное; порядок — как в пилюле «Избранное» Liquid Tools (`created_at DESC`), после уже имеющегося избранного Liqlip |
+| `category` + таблица `categories` | папки: сначала `categories` по `position`, затем имена, встречающиеся только в записях; совпадение по имени без учёта регистра (Unicode), управляющие символы чистятся, ≤ 64 символа. Переносятся все папки Liquid Tools, в том числе пустые и папки только со снимками |
+| `source_app` (имя файла exe без расширения) | приложение `exe = "<stem>.exe"` (нижний регистр), `name = stem`; если в Liqlip уже есть приложение с таким именем файла (полный путь из захвата) — используется оно |
+| `app_icon` (data-URL PNG; в Liquid Tools есть только у строк снимков) | иконка приложения (по одной на `source_app`), если у приложения её ещё нет |
+| `title` | не переносится: в Liquid Tools заголовки только автоматические |
+| `size`, `width`, `height`, `thumb`, `ocr_text` | не используются (размер и габариты считаются заново, OCR Liquid Tools удалён) |
+
+**Правила.**
+- **Срок хранения.** История (не избранное и не в папке) старше `storage.retention` не переносится —
+  первая же ретенция Liqlip удалила бы её. Пробник считает так же, поэтому `imported + skipped + errors =
+  probe.clips`. Лимиты `maxEntries`/`maxSizeMb` применяет обычная ретенция после импорта.
+- **Повторный импорт** не создаёт дублей и не поднимает записи: совпадение хэша с уже существующей
+  записью → `skipped`, её время и счётчики не трогаются; избранное (если не было) и папка (если не было)
+  дополняются. Мягко удалённая запись с тем же хэшем не воскрешается.
+- **Дубли внутри источника** (Liquid Tools хранил каждое неподряд идущее копирование отдельной строкой)
+  сливаются в одну запись этого же прогона: `created_at` — самый ранний, `copied_at` — самый поздний,
+  `copy_count` — число строк; в отчёте такие строки — `skipped`.
+- Пакеты по 200 строк в порядке `(created_at, id)`, по транзакции на пакет и по savepoint на запись:
+  ошибка одной записи → `errors + 1`, импорт идёт дальше; сбой БД (диск, `busy`) прерывает импорт, уже
+  записанные пакеты остаются (повторный запуск продолжит без дублей).
+- PNG и миниатюры пишутся во временные файлы `media\.staging-*` **до** захвата блокировки БД и
+  переименовываются в транзакции (как в захвате); откат записи удаляет её файлы. Иконки приложений
+  пишутся после коммита (id откатанного приложения может быть выдан снова).
+- Прогресс `import:progress`: `folders` (0/N → N/N), затем `clips` (done/total после каждого пакета).
+  В конце — `clips:changed { origin: 'import', change: 'added' }` без `ids` и `ocr::wake` (картинки
+  импорта приходят с `ocr_state = none`). `ImportReport.folders` — сколько папок **создано**;
+  `ImportProbe.folders` — сколько папок в Liquid Tools.
+- `ImportProbe.found = false`, если базы нет **или** переносить нечего (0 записей и 0 папок): шаг
+  онбординга не показывается зря. `path` — только при `found`.
+- Логи — только числа и коды ошибок, без содержимого.
+
+### 17.2. Формат `.liqlip`
+
+Zip (крейт `zip` 9.8, Deflate через `flate2`/miniz_oxide):
+
+```
+manifest.json          Deflate
+clipboard.db           Deflate (ZIP64, если ≥ 4 ГиБ) — снимок liqlip.db
+settings.json          Deflate — Settings на момент экспорта
+media/<id>.png         Stored — PNG записей (картинки и PNG-альтернативы текста)
+media/thumbs/<id>.png  Stored — миниатюры картинок
+icons/<id>.png         Stored — иконки приложений
+```
+
+```json
+{ "format": "liqlip-backup", "formatVersion": 1, "appVersion": "0.1.0", "schemaVersion": 1,
+  "createdAt": 1795638957418,
+  "counts": { "clips": 1240, "favorites": 32, "folders": 3, "snippets": 5, "apps": 14, "media": 300 } }
+```
+
+`schemaVersion` = `PRAGMA user_version` базы. Восстановление отказывает с понятной ошибкой, если
+`format ≠ "liqlip-backup"` или нет манифеста (`invalid: not a Liqlip backup`), если `formatVersion > 1`
+или `schemaVersion` новее сборки (`invalid: the backup was made by a newer Liqlip`), если нет базы
+(`invalid: the backup has no database`), если база не открывается, `quick_check ≠ ok` или версия не та
+(`invalid: the backup database is damaged`). Счётчики манифеста справочные.
+
+### 17.3. Экспорт (`backup_export`)
+
+1. Системный диалог сохранения (`tauri-plugin-dialog`, родитель — окно настроек, фильтр `*.liqlip`,
+   имя `Liqlip-YYYY-MM-DD.liqlip` по локальной дате `GetLocalTime`); отмена → `null`; имя без
+   расширения получает `.liqlip`.
+2. Снимок без остановки приложения (`Store::snapshot_to`): `VACUUM INTO` на втором соединении
+   `SQLITE_OPEN_READ_ONLY` (WAL: захват и UI продолжают работать) во `%TEMP%\liqlip-backup-*`; затем в
+   копии `foreign_keys = ON`, `secure_delete = ON`, удаление мягко удалённых записей (с их форматами и
+   FTS-токенами), `VACUUM`, `journal_mode = DELETE` — один самодостаточный файл без следов удалённого.
+3. Из снимка — списки id с PNG, картинок и приложений с иконкой; файлы берутся из `media\`, `icons\`
+   (удалённый за это время файл пропускается).
+4. Zip пишется в `<цель>.<pid>.part` рядом с целью, `sync_all`, затем переименование в цель (замена
+   существующей). `.part` и временный каталог удаляются на любом пути.
+5. Прогресс: `clips` 0/1 → 1/1 (снимок), `media` (упаковано / всего).
+
+### 17.4. Восстановление `replace`
+
+1. Диалог открытия (фильтр `*.liqlip`); отмена → **`Err("invalid: cancelled")`** (выбрано вместо отчёта
+   с нулями: пустая копия и отмена иначе неотличимы; UI должен молча игнорировать эту ошибку).
+2. Манифест (§17.2) → распаковка в `<data>\restore-staging-*` (тот же том, что и данные: каждый шаг
+   подмены — `rename`; остатки прерванного восстановления удаляются в начале). Распаковываются только
+   точные имена (`clipboard.db`, `media/<цифры>.png`, `media/thumbs/<цифры>.png`, `icons/<цифры>.png`,
+   `settings.json`) — запись за пределы каталога невозможна; размер записи ограничен (PNG ≤ 512 МБ),
+   CRC-32 проверяет zip-ридер.
+3. Проверка распакованной базы (§17.2) и `count(*)` записей.
+4. `Store::replace_with` под мьютексом соединения: соединение закрывается (на его месте — пустая
+   in-memory заглушка, её никто не видит), текущие `liqlip.db`, `-wal`, `-shm`, `media\`, `icons\`
+   переезжают в `backup-before-restore-<ms>\` (переименования с повторами до ~1,5 с: файл может быть
+   открыт схемой `liq` на мгновение), на их место — распакованные, `create_dirs`, открытие обычным
+   `schema::open_or_recover` (WAL, миграции, ремонт `fav_order`), сверка числа записей (иначе испорченный
+   файл был бы молча пересоздан пустым). Успех → новое соединение, книга undo очищается, старые
+   `backup-before-restore-*` удаляются (остаётся одна, последняя), сигнал ретенции. Поле `ocr`
+   (`OcrHook`, W2-A) не трогается — меняется только соединение.
+5. **Откат** при сбое любого шага: удаляются положенные на место файлы (и `*.corrupt-<ms>`, если
+   `open_or_recover` успел их отодвинуть), отодвинутые данные возвращаются, старая база открывается
+   снова, каталог `backup-before-restore-<ms>` удаляется; ошибка `failed: …`. Если вернуть не удалось —
+   ошибка называет каталог, где лежат прежние данные (они не удаляются).
+6. После успеха (в команде): очередь вставки очищается (её id указывали на прежнюю базу),
+   `settings.json` копии накладывается на текущие настройки (сохраняются геометрия окна настроек и
+   пройденный онбординг; поля, которых нет в файле, остаются текущими; файл, не подходящий под
+   `Settings`, игнорируется с записью в лог) и применяется через `settings::settings_set` (валидация,
+   хоткеи, автозапуск, `settings:changed`), затем `clips:changed { origin: 'import', change: 'reset' }`
+   и `ocr::wake`. Отчёт: `imported` — живых записей, `folders` — папок, `skipped = errors = 0`.
+
+### 17.5. Восстановление `merge`
+
+Распаковка во `%TEMP%\liqlip-merge-*`, проверка базы, затем живые записи копии (`deleted_at IS NULL`,
+тот же фильтр срока хранения, что у Liquid Tools) идут **через тот же цикл импорта** (`runner.rs` →
+`Store::import_batch`): дедупликация по хэшу копии (тот же алгоритм `content.rs`), существующие записи не
+поднимаются (избранное и папка дополняются), медиа и миниатюры копируются, форматы (html, rtf, files,
+PNG-альтернатива), заголовок, счётчики, времена, OCR-текст и состояние переносятся, приложения — по
+точному `exe` (с иконкой, если у приложения её нет), папки сливаются по имени без учёта регистра,
+избранное — в порядке копии после имеющегося. Потом сниппеты: такой же (имя + тело) пропускается, иначе
+добавляется в конец, ключевое слово — только если свободно. Настройки не трогаются. Прогресс: `media`
+(распаковка), `folders`, `clips`. В конце — `clips:changed { origin: 'import', change: 'added' }` и
+`ocr::wake`.
+
+### 17.6. Команды, ошибки, конкуренция
+
+- `import_lt_probe` → `ImportProbe`; `import_lt_run` → `ImportReport` (`not_found:` — базы нет);
+  `backup_export` → путь или `null`; `backup_import(mode)` → `ImportReport` (`invalid: cancelled` — диалог
+  закрыт). Коды: `invalid:` — не та, битая или более новая база/копия; `failed:` — ввод-вывод; `busy:` —
+  уже идёт другая операция импорта или копии (одна за раз; пробник не блокируется).
+- Всё тяжёлое — на blocking-пуле; диалоги — асинхронно (`oneshot`), как `pick_exe`.
+- Подписи диалогов (EN/RU) временно в `import/commands.rs` — до ключей в `i18n_native.rs` (сниппет
+  координатору в отчёте W2-B).
+
+### 17.7. `store/bulk.rs` (API для модуля `import`)
+
+```rust
+pub(crate) struct ImportItem { clip: NewClip /*copied_at = исходное*/, created_at, title, copy_count,
+    used_at, use_count, favorite, fav_order: Option<f64>, folder: Option<String>, ocr_text, ocr_state,
+    app_icon: Option<Vec<u8>> }
+pub(crate) struct ImportSession { /* записи этого прогона, папки имя → id */ }
+impl Store {
+    fn retention_cutoff(&self, Retention) -> Option<i64>;      // now − срок; None = всегда
+    fn fav_order_base(&self) -> Result<f64, String>;
+    fn data_dir(&self) -> &Path;
+    fn import_folders(&self, names, &mut ImportSession) -> Result<i64 /*создано*/, String>;
+    fn import_batch(&self, Vec<ImportItem>, &mut ImportSession) -> Result<BatchStats, String>;
+    fn merge_snippets(&self, &[SnippetRow]) -> Result<i64, String>;
+    fn snapshot_to(&self, dest: &Path) -> Result<(), String>;
+    fn replace_with(&self, staging: &Path, expected_clips: i64) -> Result<PathBuf /*aside*/, String>;
+}
+```
+
+Нормализация `ImportItem` повторяет `write.rs::prepare` захвата (хэш, заголовок PNG и 64 МП, текст ≤ 2 МБ
+и списки ≤ 2000 с перехэшированием, форматы ≤ 2 МБ, метрики, превью); `upsert_format`/`recompute_size`
+продублированы для savepoint (`&Connection`). Хранилище по-прежнему не эмитит — эмитит `import`.
+
+### 17.8. Ограничения
+
+- Нативно не проверено (PQ-02): диалоги, переименование каталогов при открытых файлах, импорт с живой
+  базой Liquid Tools — сценарии в отчёте W2-B.
+- Приложение, импортированное как `<stem>.exe` раньше, чем Liqlip сам увидел этот exe, при следующем
+  захвате получит вторую строку `apps` (с полным путём): захват сопоставляет только точный `exe`.
+- «Похоже на секрет» к импорту не применяется: `capture::secrets` — приватный модуль захвата.
+- Экспорт и `replace` временно занимают место: снимок базы во `%TEMP%` и `.part`; `replace` держит
+  прежние данные в `backup-before-restore-<ms>\` до следующего восстановления.
+- `merge` переносит записи, папки и сниппеты, но не настройки; `replace` — всё, кроме геометрии окна
+  настроек.
+- Запись, сделанная в Liquid Tools во время копирования файлов, может не попасть в импорт (повторный
+  импорт её добавит).
