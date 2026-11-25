@@ -11,6 +11,7 @@
   import Skeleton from "$lib/components/Skeleton.svelte";
   import { clipboardText, clipsList, snippetDelete, snippetMove, snippetSave, snippetsList } from "$lib/ipc/commands";
   import { errorMessage } from "$lib/ipc/errors";
+  import { isTauri } from "$lib/ipc/runtime";
   import { onClipsChanged } from "$lib/ipc/events";
   import type { Snippet } from "$lib/ipc/types";
   import { t } from "$lib/i18n/index.svelte";
@@ -51,14 +52,16 @@
   }
 
   // {clipboard} in the preview: the clipboard's current text (`clipboard_text`, what the shelf
-  // pastes with — FIX-09), else the latest copied text from the history. Re-read on new copies
-  // and when the window is shown — never while it is hidden (no clipboard access for nothing).
+  // pastes with — FIX-09). `null` = no text on the clipboard → "" (same as the shelf); only an
+  // error (busy clipboard) — or the browser mock, which can't read the clipboard — falls back to
+  // the latest copied text from the history. Re-read on new copies and when the window is shown —
+  // never while it is hidden (no clipboard access for nothing).
   let clipboard = $state<string | null>(null);
   async function readClipboard() {
     try {
       const now = await clipboardText();
-      if (now !== null) {
-        clipboard = now;
+      if (now !== null || isTauri()) {
+        clipboard = now ?? "";
         return;
       }
     } catch {
