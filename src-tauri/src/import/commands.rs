@@ -54,8 +54,11 @@ fn progress(app: &AppHandle) -> impl Fn(&str, i64, i64) + '_ {
     }
 }
 
+/// After an import / restore: tell the windows (no ids — they re-read) and let OCR pick up
+/// the new images (they arrive with `ocr_state = none`; W2-A `ocr::wake` catches up).
 fn changed(app: &AppHandle, change: ClipsChange) {
     events::clips_changed(app, &ClipsChanged { origin: ChangeOrigin::Import, change, ids: None });
+    crate::ocr::wake(app);
 }
 
 fn lt_db(app: &AppHandle) -> Result<PathBuf, String> {

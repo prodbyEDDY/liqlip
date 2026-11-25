@@ -854,7 +854,6 @@ pub struct HudShow {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-#[allow(dead_code)] // W2-A
 pub struct OcrProgress {
     pub done: i64,
     pub total: i64,
