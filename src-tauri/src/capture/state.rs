@@ -141,6 +141,14 @@ impl CaptureState {
         i.snapshot()
     }
 
+    /// Disarm the one-shot skip without consuming a change (the tray's checked item clicked
+    /// again, FIX-05).
+    pub fn clear_ignore_next(&self) -> CaptureStatus {
+        let mut i = self.inner.lock();
+        i.ignore_next = false;
+        i.snapshot()
+    }
+
     /// Consume the one-shot skip. `true` = this change must be skipped.
     pub fn take_ignore_next(&self) -> bool {
         std::mem::take(&mut self.inner.lock().ignore_next)
@@ -236,6 +244,11 @@ mod tests {
         assert!(s.set_ignore_next().ignore_next);
         assert!(s.status(0).ignore_next);
         assert!(s.take_ignore_next());
+        assert!(!s.take_ignore_next());
+        // Disarmed before any change (tray, FIX-05): nothing left to consume.
+        s.set_ignore_next();
+        assert!(!s.clear_ignore_next().ignore_next);
+        assert!(!s.status(0).ignore_next);
         assert!(!s.take_ignore_next());
         assert!(s.set_collect(true).collect_to_stack);
         assert!(s.collect());

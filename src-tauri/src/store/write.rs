@@ -66,12 +66,69 @@ struct Prepared {
 }
 
 fn file_name(path: &str) -> String {
-    let trimmed = path.trim_end_matches(['\\', '/']);
-    trimmed.rsplit(['\\', '/']).next().unwrap_or(trimmed).to_string()
+    exe_file_name(path).to_string()
+}
+
+/// The file name of an exe path (`c:\apps\code.exe` → `code.exe`; `/` ≡ `\`).
+pub(crate) fn exe_file_name(exe: &str) -> &str {
+    let trimmed = exe.trim_end_matches(['\\', '/']);
+    trimmed.rsplit(['\\', '/']).next().unwrap_or(trimmed)
+}
+
+/// `apps.exe` as stored: trimmed, Unicode lower-case, `/` → `\`.
+pub(crate) fn app_exe_key(exe: &str) -> String {
+    exe.trim().to_lowercase().replace('/', "\\")
+}
+
+/// The existing `apps` row a source exe ([`app_exe_key`]) belongs to (FIX-02). Liquid Tools
+/// kept only the file stem, so its import writes `<stem>.exe` while a capture knows the full
+/// path; both must land on ONE row. In order:
+/// 1. the same exe (case-insensitive, `/` ≡ `\`);
+/// 2. a full path, and a row holding only its file name → that row, `rewrite = true` (it takes
+///    the full path);
+/// 3. a bare file name, and a row with a full path of that file name → the first such row.
+///
+/// `rows` = `(id, stored exe)`. `None` = a new app.
+pub(crate) fn match_app(exe: &str, rows: &[(i64, &str)]) -> Option<(i64, bool)> {
+    if let Some(&(id, _)) = rows.iter().find(|(_, s)| *s == exe).or_else(|| rows.iter().find(|(_, s)| app_exe_key(s) == exe)) {
+        return Some((id, false));
+    }
+    let name = exe_file_name(exe);
+    let bare = name.len() == exe.len();
+    rows.iter().find_map(|&(id, stored)| {
+        let key = app_exe_key(stored);
+        let stored_name = exe_file_name(&key);
+        if stored_name != name {
+            return None;
+        }
+        match (bare, stored_name.len() == key.len()) {
+            (false, true) => Some((id, true)),
+            (true, false) => Some((id, false)),
+            _ => None, // two different full paths: two apps
+        }
+    })
+}
+
+/// [`match_app`] against the table: the indexed exact lookup first, the scan only for an exe
+/// that is not stored as is (normally: once per app).
+fn find_app(tx: &Transaction<'_>, exe: &str) -> Result<Option<(i64, bool)>, String> {
+    let exact: Option<i64> =
+        tx.query_row("SELECT id FROM apps WHERE exe = ?1", [exe], |r| r.get(0)).optional().map_err(db_err)?;
+    if let Some(id) = exact {
+        return Ok(Some((id, false)));
+    }
+    let mut st = tx.prepare_cached("SELECT id, exe FROM apps ORDER BY id").map_err(db_err)?;
+    let rows: Vec<(i64, String)> = st
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        .map_err(db_err)?
+        .collect::<Result<_, _>>()
+        .map_err(db_err)?;
+    let rows: Vec<(i64, &str)> = rows.iter().map(|(id, e)| (*id, e.as_str())).collect();
+    Ok(match_app(exe, &rows))
 }
 
 fn prepare_source(s: SourceApp) -> Option<(String, String, String)> {
-    let exe = s.exe.trim().to_lowercase();
+    let exe = app_exe_key(&s.exe);
     if exe.is_empty() {
         return None;
     }
@@ -327,15 +384,24 @@ impl Store {
         let mut app_id = None;
         let mut app_icon_missing = false;
         if let Some((exe, insert_name, update_name)) = &p.source {
-            let (id, icon): (i64, Option<String>) = tx
-                .query_row(
-                    "INSERT INTO apps (exe, name) VALUES (?1, ?2)
-                     ON CONFLICT (exe) DO UPDATE SET name = CASE WHEN ?3 <> '' THEN ?3 ELSE apps.name END
-                     RETURNING id, icon_path",
-                    params![exe, insert_name, update_name],
-                    |r| Ok((r.get(0)?, r.get(1)?)),
-                )
-                .map_err(db_err)?;
+            let row = |r: &rusqlite::Row<'_>| Ok((r.get(0)?, r.get(1)?));
+            let (id, icon): (i64, Option<String>) = match find_app(&tx, exe)? {
+                // A non-empty name from the capture renames the app, an empty one keeps it;
+                // a row known only by its file name (an import) takes the full path (FIX-02).
+                Some((id, rewrite)) => tx.query_row(
+                    "UPDATE apps SET exe = CASE WHEN ?2 THEN ?3 ELSE exe END,
+                       name = CASE WHEN ?4 <> '' THEN ?4 ELSE name END
+                     WHERE id = ?1 RETURNING id, icon_path",
+                    params![id, rewrite, exe, update_name],
+                    row,
+                ),
+                None => tx.query_row(
+                    "INSERT INTO apps (exe, name) VALUES (?1, ?2) RETURNING id, icon_path",
+                    params![exe, insert_name],
+                    row,
+                ),
+            }
+            .map_err(db_err)?;
             app_id = Some(id);
             app_icon_missing = icon.is_none() || !self.paths().icon_png(id).exists();
         }
@@ -1102,6 +1168,56 @@ mod tests {
         t.insert_clip(blank).unwrap();
         let names: Vec<String> = t.apps_list().unwrap().into_iter().map(|a| a.name).collect();
         assert!(names.contains(&"Browser".to_string()), "{names:?}");
+    }
+
+    #[test]
+    fn match_app_rules() {
+        let rows = [(1, "code.exe"), (2, "c:\\apps\\editor.exe"), (3, "c:\\other\\editor.exe"), (4, "C:/Tools/Vault.EXE")];
+        assert_eq!(match_app("code.exe", &rows), Some((1, false)));
+        assert_eq!(match_app("c:\\program files\\vs code\\code.exe", &rows), Some((1, true)), "bare row takes the full path");
+        assert_eq!(match_app("editor.exe", &rows), Some((2, false)), "bare import → the first full path");
+        assert_eq!(match_app("c:\\other\\editor.exe", &rows), Some((3, false)), "exact wins");
+        assert_eq!(match_app("d:\\x\\editor.exe", &rows), None, "another full path is another app");
+        assert_eq!(match_app("c:\\tools\\vault.exe", &rows), Some((4, false)), "case-insensitive, / ≡ \\");
+        assert_eq!(match_app("vault.exe", &rows), Some((4, false)));
+        assert_eq!(match_app("notepad.exe", &rows), None);
+        assert_eq!(match_app("c:\\x\\notepad.exe", &[]), None);
+        assert_eq!(app_exe_key("  C:/Apps/Code.EXE "), "c:\\apps\\code.exe");
+        assert_eq!(exe_file_name("c:/apps/code.exe"), "code.exe");
+    }
+
+    /// FIX-02: an import writes `<stem>.exe`, a capture the full path — one `apps` row either way.
+    #[test]
+    fn import_and_capture_share_one_app() {
+        let t = TestStore::new();
+        let app_of = |t: &TestStore, id: i64| row_i64(t, "SELECT app_id FROM clips WHERE id = ?1", id);
+        // Imported first (bare file name, icon from Liquid Tools), captured later (full path).
+        let mut imported = text_clip("from the import", 1_000);
+        imported.source = Some(SourceApp { exe: "Code.exe".into(), name: "Code".into() });
+        let a = t.insert_clip(imported).unwrap();
+        t.set_app_icon(a.app_id.unwrap(), &png_bytes(16, 16)).unwrap();
+        let mut captured = text_clip("from a capture", 2_000);
+        captured.source = Some(SourceApp { exe: "C:/Program Files/VS Code/Code.EXE".into(), name: "Visual Studio Code".into() });
+        let b = t.insert_clip(captured).unwrap();
+        assert_eq!(b.app_id, a.app_id);
+        assert!(!b.app_icon_missing, "the imported icon is kept");
+        assert_eq!(row_i64(&t, "SELECT count(*) FROM apps WHERE ?1 > 0", 1), 1, "no second apps row");
+        let apps = t.apps_list().unwrap();
+        assert_eq!(apps[0].exe, "c:\\program files\\vs code\\code.exe");
+        assert_eq!(apps[0].name, "Visual Studio Code");
+        assert_eq!((app_of(&t, a.id), app_of(&t, b.id)), (a.app_id.unwrap(), a.app_id.unwrap()));
+        // The other way round: captured first, a bare import name reuses the full-path row.
+        let editor = t.add_text_from("captured in the editor", 3_000, "c:\\apps\\editor.exe");
+        let mut later = text_clip("imported from the editor", 4_000);
+        later.source = Some(SourceApp { exe: "EDITOR.exe".into(), name: "editor".into() });
+        let c = t.insert_clip(later).unwrap();
+        assert_eq!(c.app_id, editor.app_id);
+        assert_eq!(row_i64(&t, "SELECT count(*) FROM apps WHERE ?1 > 0", 1), 2);
+        let exes: Vec<String> = t.apps_list().unwrap().into_iter().map(|a| a.exe).collect();
+        assert!(exes.contains(&"c:\\apps\\editor.exe".to_string()), "the full path stays: {exes:?}");
+        // A different folder with the same file name is a different app.
+        let other = t.add_text_from("another editor", 5_000, "d:\\portable\\editor.exe");
+        assert_ne!(other.app_id, editor.app_id);
     }
 
     #[test]

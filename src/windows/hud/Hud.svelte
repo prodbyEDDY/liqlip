@@ -2,14 +2,16 @@
   // HUD toast (SPEC §1, ARCHITECTURE §7): a monochrome capsule at the cursor, never focused
   // (Rust shows the window with SWP_NOACTIVATE; it is click-through). Each `hud:show` shows
   // the toast for ~1.4 s, then the exit transition runs and Rust hides the window at 1.66 s.
-  // Browser preview on the mock: /hud.html?kind=copied (static) · &text=… · ?demo=1.
+  // `text` (FIX-07) is the paste chord of the target app for the {keys} chip; without it the
+  // chip says Ctrl+V. Browser preview on the mock: /hud.html?kind=copied (static) ·
+  // &text=Shift%2BInsert · ?demo=1.
   import { onMount } from "svelte";
   import Ico from "$lib/components/Ico.svelte";
   import Kbd from "$lib/components/Kbd.svelte";
   import { t } from "$lib/i18n/index.svelte";
   import { onHudShow } from "$lib/ipc/events";
   import type { HudShow } from "$lib/ipc/types";
-  import { HUD_KINDS, KIND_ICON, KIND_KEY, VISIBLE_MS, isSameToast, previewFromQuery, segments } from "./toast";
+  import { HUD_KINDS, KIND_ICON, KIND_KEY, VISIBLE_MS, isSameToast, keysLabel, previewFromQuery, segments } from "./toast";
 
   const preview = typeof location !== "undefined" ? previewFromQuery(location.search) : { toast: null, demo: false };
 
@@ -43,22 +45,19 @@
     };
   });
 
-  const parts = $derived(toast && !toast.text ? segments(t(KIND_KEY[toast.kind])) : null);
+  const parts = $derived(toast ? segments(t(KIND_KEY[toast.kind])) : []);
+  const keys = $derived(toast ? keysLabel(toast, t("hud.pasteKeys")) : "");
 </script>
 
 <div class="stage">
   {#if toast}
     {#key seq}
-      <div class="hud" class:out={!visible} class:hud--keys-end={parts?.at(-1)?.kind === "keys"} role="status" aria-live="polite">
+      <div class="hud" class:out={!visible} class:hud--keys-end={parts.at(-1)?.kind === "keys"} role="status" aria-live="polite">
         <span class="hud__icon"><Ico name={KIND_ICON[toast.kind]} size={16} /></span>
         <span class="msg">
-          {#if parts}
-            {#each parts as part, i (i)}
-              {#if part.kind === "keys"}<Kbd>{t("hud.pasteKeys")}</Kbd>{:else}<span class="msg__text">{part.text.trim()}</span>{/if}
-            {/each}
-          {:else}
-            <span class="msg__text">{toast.text}</span>
-          {/if}
+          {#each parts as part, i (i)}
+            {#if part.kind === "keys"}<Kbd>{keys}</Kbd>{:else}<span class="msg__text">{part.text.trim()}</span>{/if}
+          {/each}
         </span>
       </div>
     {/key}

@@ -17,7 +17,8 @@
 //! `category` → folder, `created_at` (ms; pre-v3 seconds lifted like Liquid Tools does) →
 //! `created_at` = `copied_at`, `source_app` (an exe file stem) → app `<stem>.exe`, icons from
 //! `app_icon` data URLs (Liquid Tools stores them on screenshot rows), `html` (raw CF_HTML
-//! with header) → the HTML format without header + `SourceURL`.
+//! with header) → the HTML format without header + `SourceURL`. Texts that look like a
+//! secret are left out when `privacy.secretPatterns` is on (`runner`, FIX-01).
 
 use super::runner::{self, Page, Progress, PAGE};
 use super::tmp::TempDir;
@@ -549,8 +550,14 @@ pub(crate) fn probe(db: &Path, cutoff: Option<i64>) -> Result<ImportProbe, Strin
     Ok(ImportProbe { found, path: found.then(|| db.to_string_lossy().into_owned()), clips, favorites, folders })
 }
 
-/// `import_lt_run`.
-pub(crate) fn run(store: &Store, db: &Path, cutoff: Option<i64>, progress: Progress<'_>) -> Result<ImportReport, String> {
+/// `import_lt_run`. `skip_secrets` = `settings.privacy.secretPatterns` (see `runner`).
+pub(crate) fn run(
+    store: &Store,
+    db: &Path,
+    cutoff: Option<i64>,
+    skip_secrets: bool,
+    progress: Progress<'_>,
+) -> Result<ImportReport, String> {
     if !db.is_file() {
         return Err("not_found: Liquid Tools history".into());
     }
@@ -561,7 +568,7 @@ pub(crate) fn run(store: &Store, db: &Path, cutoff: Option<i64>, progress: Progr
     let favs = lt.favorite_ranks(cutoff)?;
     let icons = lt.app_icons();
     let mut after = (i64::MIN, i64::MIN);
-    runner::run(store, &folders, total, progress, || -> Result<Option<Page>, String> {
+    runner::run(store, &folders, total, skip_secrets, progress, || -> Result<Option<Page>, String> {
         let rows = lt.page(cutoff, after)?;
         let Some(last) = rows.last() else { return Ok(None) };
         after = (last.ts, last.id);

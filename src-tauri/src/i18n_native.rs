@@ -45,6 +45,8 @@ pub enum Key {
     TrayTooltipPaused,
     /// `{time}` = local time a timed pause ends ("14:30" / "2:30 PM")
     TrayTooltipPausedUntil,
+    /// Tooltip part while "skip the next copy" is armed (FIX-05)
+    TrayTooltipSkipNext,
     TrayOpen,
     TrayPause,
     TrayPause5m,
@@ -85,6 +87,8 @@ pub fn tr(lang: Lang, key: Key) -> &'static str {
         (Lang::Ru, TrayTooltipPausedUntil) => "Liqlip — пауза до {time}",
         (Lang::En, TrayTooltipPaused) => "Liqlip — recording paused",
         (Lang::Ru, TrayTooltipPaused) => "Liqlip — запись на паузе",
+        (Lang::En, TrayTooltipSkipNext) => "The next copy won't be saved",
+        (Lang::Ru, TrayTooltipSkipNext) => "Следующее копирование не сохранится",
         (Lang::En, TrayOpen) => "Open Liqlip",
         (Lang::Ru, TrayOpen) => "Открыть Liqlip",
         (Lang::En, TrayPause) => "Pause recording",
@@ -155,7 +159,7 @@ mod tests {
         // `tr` is an exhaustive match, so this mainly guards against empty strings.
         use Key::*;
         let keys = [
-            TrayTooltip, TrayTooltipPaused, TrayTooltipPausedUntil, TrayOpen, TrayPause, TrayPause5m, TrayPause30m,
+            TrayTooltip, TrayTooltipPaused, TrayTooltipPausedUntil, TrayTooltipSkipNext, TrayOpen, TrayPause, TrayPause5m, TrayPause30m,
             TrayPause1h, TrayPauseUntilResume, TrayResume, TrayIgnoreNext, TrayDeleteRecent,
             TrayDelete5m, TrayDelete15m, TrayDelete30m, TrayDelete1h, TrayDelete24h, TrayStack,
             TraySettings, TrayQuit, SettingsWindowTitle, ConfirmDeleteRecentTitle,

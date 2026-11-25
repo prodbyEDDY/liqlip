@@ -41,13 +41,21 @@ export function segments(template: string): Segment[] {
   return out;
 }
 
+/** What the `{keys}` chip says: `HudShow.text` — the paste chord of the target app, sent by
+ *  the paste flow ("Shift+Insert" for PuTTY/mintty, a per-app setting…) — or the default
+ *  (`hud.pasteKeys`, "Ctrl+V") when there is none. */
+export function keysLabel(toast: HudShow, fallback: string): string {
+  return toast.text?.trim() || fallback;
+}
+
 /** A new `hud:show` while the same toast is still visible only extends it (no second entry
  *  animation — the paste flow and the hotkey path may both report "stack empty"). */
 export function isSameToast(current: HudShow | null, visible: boolean, next: HudShow): boolean {
   return visible && current !== null && current.kind === next.kind && (current.text ?? null) === (next.text ?? null);
 }
 
-/** Browser preview: `?kind=copied` (static), `?text=…`, `?demo=1` (cycles every kind). */
+/** Browser preview: `?kind=copied` (static), `?text=…` (the key chip; `+` is `%2B` in a
+ *  query: `&text=Shift%2BInsert`), `?demo=1` (cycles every kind). */
 export function previewFromQuery(search: string): { toast: HudShow | null; demo: boolean } {
   const q = new URLSearchParams(search);
   const kind = q.get("kind");

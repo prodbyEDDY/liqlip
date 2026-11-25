@@ -70,6 +70,11 @@ fn cutoff(app: &AppHandle, store: &Store) -> Option<i64> {
     store.retention_cutoff(settings::get(app).storage.retention)
 }
 
+/// `privacy.secretPatterns`: imports leave out texts that look like a secret (FIX-01).
+fn skip_secrets(app: &AppHandle) -> bool {
+    settings::get(app).privacy.secret_patterns
+}
+
 /// Local date and time (`GetLocalTime`) for the default file name and the zip entries.
 #[cfg(windows)]
 fn local_now() -> (u16, u16, u16, u16, u16, u16) {
@@ -110,28 +115,17 @@ async fn file_dialog(app: &AppHandle, save_as: Option<String>) -> Result<Option<
     }
 }
 
-/// The backup's settings over the current ones. Kept from the current settings: the
-/// settings window geometry (machine-specific), a finished onboarding and the version.
-/// Fields the backup lacks keep their current value; a file that does not fit `Settings`
-/// at all is ignored (logged).
+/// The backup's settings, read field by field like `settings.json` at start-up
+/// (`settings::parse_file`, FIX-03): a field that does not fit — or that the backup lacks —
+/// takes its default, every other field is restored. Kept from the current settings: the
+/// settings window geometry (machine-specific) and a finished onboarding. A file that is not
+/// a JSON object at all is ignored (logged by the caller): it would reset everything.
 fn restored_settings(current: &Settings, raw: &[u8]) -> Option<Settings> {
-    fn overlay(acc: &mut serde_json::Value, file: &serde_json::Value) {
-        match (acc, file) {
-            (serde_json::Value::Object(a), serde_json::Value::Object(f)) => {
-                for (k, v) in f {
-                    if let Some(slot) = a.get_mut(k) {
-                        overlay(slot, v);
-                    }
-                }
-            }
-            (slot, v) => *slot = v.clone(),
-        }
-    }
     let file: serde_json::Value = serde_json::from_slice(raw).ok()?;
-    let mut acc = serde_json::to_value(current).ok()?;
-    overlay(&mut acc, &file);
-    let mut s: Settings = serde_json::from_value(acc).ok()?;
-    s.version = current.version;
+    if !file.is_object() {
+        return None;
+    }
+    let mut s = settings::parse_file(raw);
     s.window = current.window.clone();
     s.general.onboarding_done |= current.general.onboarding_done;
     Some(s)
@@ -148,7 +142,7 @@ pub async fn import_lt_probe(app: AppHandle) -> Result<ImportProbe, String> {
 pub async fn import_lt_run(app: AppHandle) -> Result<ImportReport, String> {
     let report = blocking(&app, |app, store| {
         let _busy = Busy::take()?;
-        lt::run(store, &lt_db(app)?, cutoff(app, store), &progress(app))
+        lt::run(store, &lt_db(app)?, cutoff(app, store), skip_secrets(app), &progress(app))
     })
     .await?;
     changed(&app, ClipsChange::Added);
@@ -187,7 +181,7 @@ pub async fn backup_import(app: AppHandle, mode: BackupMode) -> Result<ImportRep
         BackupMode::Merge => {
             let report = blocking(&app, move |app, store| {
                 let _busy = Busy::take()?;
-                backup::restore_merge(store, &src, cutoff(app, store), &progress(app))
+                backup::restore_merge(store, &src, cutoff(app, store), skip_secrets(app), &progress(app))
             })
             .await?;
             changed(&app, ClipsChange::Added);
@@ -244,12 +238,44 @@ mod tests {
         assert_eq!(s.storage.max_entries, 20_000);
         assert_eq!(s.window, current.window, "geometry is machine-specific");
         assert!(s.general.onboarding_done);
-        // A partial (older) file keeps the current values for what it lacks.
+        assert_eq!(s.version, crate::settings::CURRENT_VERSION);
+        // A partial (older) file: what it lacks takes the default, like a settings.json at start-up.
         let s = restored_settings(&current, br#"{"picker":{"hints":false}}"#).unwrap();
         assert!(!s.picker.hints);
-        assert_eq!(s.storage, current.storage);
-        // Garbage → ignored.
+        assert_eq!(s.storage, Settings::default().storage);
+        // Garbage → ignored (the current settings stay).
         assert!(restored_settings(&current, b"not json").is_none());
-        assert!(restored_settings(&current, br#"{"picker":{"hints":"yes"}}"#).is_none());
+        assert!(restored_settings(&current, b"[1, 2]").is_none());
+    }
+
+    /// FIX-03: one broken field no longer throws away the whole file.
+    #[test]
+    fn restored_settings_survive_a_broken_field() {
+        let mut current = Settings::default();
+        current.general.onboarding_done = true;
+        current.window.settings_bounds = Some(crate::model::Bounds { x: 1, y: 2, w: 900, h: 700 });
+        let raw = br#"{
+            "version": 1,
+            "general": { "language": "ru", "theme": "neon", "onboardingDone": false },
+            "picker": { "hints": "yes", "favoritesFirst": true, "position": "left" },
+            "storage": { "maxEntries": 20000, "retention": "1y" },
+            "privacy": { "ignoredApps": ["vault.exe"], "secretPatterns": false },
+            "window": { "settingsBounds": { "x": 9, "y": 9, "w": 999, "h": 999 } }
+        }"#;
+        let s = restored_settings(&current, raw).unwrap();
+        // Broken fields → defaults.
+        assert_eq!(s.general.theme, Settings::default().general.theme);
+        assert!(s.picker.hints);
+        // Everything else is restored.
+        assert_eq!(s.general.language, crate::model::Language::Ru);
+        assert!(s.picker.favorites_first);
+        assert_eq!(s.picker.position, crate::model::Position::Left);
+        assert_eq!(s.storage.max_entries, 20_000);
+        assert_eq!(s.storage.retention, crate::model::Retention::Year1);
+        assert_eq!(s.privacy.ignored_apps, vec!["vault.exe".to_string()]);
+        assert!(!s.privacy.secret_patterns);
+        // Machine bits stay.
+        assert_eq!(s.window, current.window);
+        assert!(s.general.onboarding_done);
     }
 }

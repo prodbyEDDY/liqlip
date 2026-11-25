@@ -87,6 +87,16 @@ pub fn chord_keys(chord: PasteChord) -> &'static [u16] {
     }
 }
 
+/// How the chord is written for the user — the HUD's key chip ("copied — press Shift+Insert",
+/// FIX-07). Key names are the same in every UI language (the keycaps say so).
+pub fn chord_label(chord: PasteChord) -> &'static str {
+    match chord {
+        PasteChord::CtrlV => "Ctrl+V",
+        PasteChord::ShiftInsert => "Shift+Insert",
+        PasteChord::CtrlShiftV => "Ctrl+Shift+V",
+    }
+}
+
 /// Presses in order, releases in reverse.
 pub fn chord_sequence(chord: PasteChord) -> Vec<Key> {
     let keys = chord_keys(chord);

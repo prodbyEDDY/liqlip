@@ -24,7 +24,7 @@ mod imaging;
 #[cfg(windows)]
 mod listener;
 mod pipeline;
-mod secrets;
+pub(crate) mod secrets; // pub(crate): the import applies the same filter (FIX-01)
 mod snapshot;
 mod state;
 #[cfg(windows)]
@@ -345,6 +345,14 @@ pub fn toggle_pause(app: &AppHandle) -> Result<CaptureStatus, String> {
 /// Skip the next clipboard change (one-shot). Tray, hotkey and `capture_ignore_next`.
 pub fn ignore_next(app: &AppHandle) -> Result<CaptureStatus, String> {
     let status = state().set_ignore_next();
+    publish(app, &status);
+    Ok(status)
+}
+
+/// Disarm a pending "skip the next change" (W2-F, additive — FIX-05: the tray's checked
+/// "Skip next copy" item clicked again). Emits `capture:status` + refreshes the tray.
+pub fn cancel_ignore_next(app: &AppHandle) -> Result<CaptureStatus, String> {
+    let status = state().clear_ignore_next();
     publish(app, &status);
     Ok(status)
 }

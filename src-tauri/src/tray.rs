@@ -1,14 +1,14 @@
 //! Tray icon + menu (SPEC §5). Coordinator module (W0, polished in W2-D). Labels come
 //! from `i18n_native`; actions call the module APIs of §15. The menu, icon and tooltip are
-//! rebuilt by [`refresh`] — call it after anything they show changes (pause state, stack
-//! size, language, summon hotkey, taskbar theme or scale); it is cheap and callable from any
-//! thread.
+//! rebuilt by [`refresh`] — call it after anything they show changes (pause state, armed
+//! "skip next copy", stack size, language, summon hotkey, taskbar theme or scale); it is
+//! cheap and callable from any thread.
 
 use crate::i18n_native::{self, Key, Lang};
 use crate::model::{ChangeOrigin, ClipsChange, ClipsChanged};
 use crate::{capture, events, logx, paste, picker, settings, store};
 use tauri::image::Image;
-use tauri::menu::{IsMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
+use tauri::menu::{CheckMenuItem, IsMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager};
 
@@ -103,18 +103,21 @@ struct TrayState {
     paused: bool,
     /// `CaptureStatus.pausedUntil`: `None` recording, [`PAUSED_UNTIL_RESUMED`], or Unix ms.
     paused_until: Option<i64>,
+    /// "Skip the next copy" is armed (`CaptureStatus.ignoreNext`, FIX-05).
+    skip_next: bool,
     stack: usize,
 }
 
 impl TrayState {
     fn read(app: &AppHandle) -> TrayState {
         let s = settings::get(app);
-        let paused_until = capture::status(app).paused_until;
+        let status = capture::status(app);
         TrayState {
             lang: i18n_native::resolve(s.general.language),
             summon: s.hotkeys.summon,
-            paused: paused_until.is_some(),
-            paused_until,
+            paused: status.paused_until.is_some(),
+            paused_until: status.paused_until,
+            skip_next: status.ignore_next,
             stack: paste::stack::len(app),
         }
     }
@@ -124,10 +127,11 @@ impl TrayState {
     }
 
     /// "Liqlip — recording" / "Liqlip — paused until 14:30" / "Liqlip — recording paused",
-    /// plus " · Paste stack: 3" while the stack is not empty.
+    /// plus " · The next copy won't be saved" while that is armed and " · Paste stack: 3"
+    /// while the stack is not empty.
     fn tooltip(&self) -> String {
         let until = self.paused_until.filter(|&ms| ms != PAUSED_UNTIL_RESUMED).and_then(local_time_label);
-        tooltip_text(self.lang, self.paused, until.as_deref(), self.stack)
+        tooltip_text(self.lang, self.paused, until.as_deref(), self.skip_next, self.stack)
     }
 
     fn icon(&self) -> Image<'static> {
@@ -146,18 +150,20 @@ impl TrayState {
 
 /// The tooltip from its parts (pure, so it is unit-tested). `until` = the local time a
 /// timed pause ends, already formatted.
-fn tooltip_text(lang: Lang, paused: bool, until: Option<&str>, stack: usize) -> String {
+fn tooltip_text(lang: Lang, paused: bool, until: Option<&str>, skip_next: bool, stack: usize) -> String {
     let t = |k| i18n_native::tr(lang, k);
-    let state = match (paused, until) {
+    let mut out = match (paused, until) {
         (false, _) => t(Key::TrayTooltip).to_string(),
         (true, Some(time)) => t(Key::TrayTooltipPausedUntil).replace("{time}", time),
         (true, None) => t(Key::TrayTooltipPaused).to_string(),
     };
-    if stack == 0 {
-        state
-    } else {
-        format!("{state} · {}", t(Key::TrayStack).replace("{n}", &stack.to_string()))
+    if skip_next {
+        out = format!("{out} · {}", t(Key::TrayTooltipSkipNext));
     }
+    if stack > 0 {
+        out = format!("{out} · {}", t(Key::TrayStack).replace("{n}", &stack.to_string()));
+    }
+    out
 }
 
 /// The glyph recoloured white for a dark taskbar (alpha kept: the glyph is one colour).
@@ -194,7 +200,9 @@ fn build_menu(app: &AppHandle, st: &TrayState) -> tauri::Result<Menu<tauri::Wry>
         let refs: Vec<&dyn IsMenuItem<tauri::Wry>> = items.iter().map(|i| i as _).collect();
         Box::new(Submenu::with_items(app, st.t(Key::TrayPause), true, &refs)?)
     };
-    let ignore = MenuItem::with_id(app, "ignore_next", st.t(Key::TrayIgnoreNext), true, None::<&str>)?;
+    // A check item: ticked while the skip is armed; clicking it again disarms it (FIX-05).
+    // muda flips the tick itself on click — `refresh` then rebuilds it from the real state.
+    let ignore = CheckMenuItem::with_id(app, "ignore_next", st.t(Key::TrayIgnoreNext), true, st.skip_next, None::<&str>)?;
 
     let delete_items = DELETES
         .iter()
@@ -232,6 +240,8 @@ fn on_menu_event(app: &AppHandle, event: MenuEvent) {
             Ok(())
         }
         "resume" => capture::resume(app).map(|_| ()),
+        // Toggle on the real state (the tick the user saw may be older than a consumed skip).
+        "ignore_next" if capture::status(app).ignore_next => capture::cancel_ignore_next(app).map(|_| ()),
         "ignore_next" => capture::ignore_next(app).map(|_| ()),
         "settings" => {
             picker::show_settings(app, None);
@@ -414,15 +424,20 @@ mod tests {
 
     #[test]
     fn tooltip_says_the_state_and_the_stack() {
-        let rec = tooltip_text(Lang::En, false, None, 0);
+        let rec = tooltip_text(Lang::En, false, None, false, 0);
         assert_eq!(rec, i18n_native::tr(Lang::En, Key::TrayTooltip));
-        assert_eq!(tooltip_text(Lang::En, true, Some("14:30"), 0), "Liqlip — paused until 14:30");
-        assert_eq!(tooltip_text(Lang::Ru, true, Some("14:30"), 0), "Liqlip — пауза до 14:30");
-        assert_eq!(tooltip_text(Lang::Ru, true, None, 0), i18n_native::tr(Lang::Ru, Key::TrayTooltipPaused));
-        let with_stack = tooltip_text(Lang::Ru, true, Some("14:30"), 3);
+        assert_eq!(tooltip_text(Lang::En, true, Some("14:30"), false, 0), "Liqlip — paused until 14:30");
+        assert_eq!(tooltip_text(Lang::Ru, true, Some("14:30"), false, 0), "Liqlip — пауза до 14:30");
+        assert_eq!(tooltip_text(Lang::Ru, true, None, false, 0), i18n_native::tr(Lang::Ru, Key::TrayTooltipPaused));
+        let with_stack = tooltip_text(Lang::Ru, true, Some("14:30"), false, 3);
         assert_eq!(with_stack, format!("Liqlip — пауза до 14:30 · {}", i18n_native::tr(Lang::Ru, Key::TrayStack).replace("{n}", "3")));
-        // Shell_NotifyIcon truncates szTip at 128 UTF-16 units.
-        assert!(with_stack.encode_utf16().count() < 128);
+        // FIX-05: an armed "skip next copy" is said too.
+        assert_eq!(tooltip_text(Lang::En, false, None, true, 0), "Liqlip — recording · The next copy won't be saved");
+        assert_eq!(tooltip_text(Lang::Ru, false, None, true, 0), "Liqlip — запись идёт · Следующее копирование не сохранится");
+        // The longest combination: Shell_NotifyIcon truncates szTip at 128 UTF-16 units.
+        let longest = tooltip_text(Lang::Ru, true, Some("12:30 PM"), true, 9_999);
+        assert!(longest.starts_with("Liqlip — пауза до 12:30 PM · Следующее копирование не сохранится · "), "{longest}");
+        assert!(longest.encode_utf16().count() < 128, "{longest}");
     }
 
     #[cfg(windows)]

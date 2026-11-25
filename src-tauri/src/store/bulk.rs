@@ -10,7 +10,7 @@ use super::lifecycle::{retention_ms, UndoBook};
 use super::maint::Wake;
 use super::media::{self, is_png, media_rel};
 use super::snippets::{SNIPPET_KEYWORD_MAX, SNIPPET_NAME_MAX};
-use super::write::{meta_json, FilesBlob, FORMAT_MAX_BYTES, TITLE_MAX_CHARS};
+use super::write::{app_exe_key, match_app, meta_json, FilesBlob, FORMAT_MAX_BYTES, TITLE_MAX_CHARS};
 use super::{db_err, placeholders, schema, ClipFiles, NewClip, SourceApp, Store, CHUNK};
 use crate::content::{self, FILES_MAX, IMAGE_MAX_PIXELS, TEXT_MAX_BYTES};
 use crate::logx;
@@ -813,10 +813,10 @@ fn load_apps(conn: &Connection) -> Result<Vec<AppRow>, String> {
     rows.collect::<Result<_, _>>().map_err(db_err)
 }
 
-/// Find or create the `apps` row of an imported record. Exact exe match first; an exe
-/// without a directory (Liquid Tools stored only the file stem) also matches an existing
-/// app with that file name, so a later capture with the full path does not duplicate it
-/// when the app was seen before. An existing app is never renamed.
+/// Find or create the `apps` row of an imported record — the capture's matching
+/// (`write::match_app`, FIX-02): exact exe first; an exe without a directory (Liquid Tools
+/// stored only the file stem) matches an existing app with that file name; a full path (a
+/// backup) upgrades a row known only by its file name. An existing app is never renamed.
 fn resolve_app(
     conn: &Connection,
     src: &SourceApp,
@@ -824,16 +824,28 @@ fn resolve_app(
     icon: Option<Vec<u8>>,
     icons: &mut Vec<(i64, Vec<u8>)>,
 ) -> Result<Option<i64>, String> {
-    let exe = src.exe.trim().to_lowercase();
+    let exe = app_exe_key(&src.exe);
     if exe.is_empty() {
         return Ok(None);
     }
-    let bare = !exe.contains(['\\', '/']);
-    let found = apps
-        .iter()
-        .find(|a| a.exe == exe)
-        .or_else(|| if bare { apps.iter().find(|a| file_name(&a.exe) == exe) } else { None })
-        .map(|a| (a.id, a.has_icon));
+    let found = {
+        let rows: Vec<(i64, &str)> = apps.iter().map(|a| (a.id, a.exe.as_str())).collect();
+        match_app(&exe, &rows)
+    };
+    let found = match found {
+        Some((id, rewrite)) => {
+            if rewrite {
+                conn.execute("UPDATE apps SET exe = ?1 WHERE id = ?2", params![exe, id]).map_err(db_err)?;
+            }
+            apps.iter_mut().find(|a| a.id == id).map(|a| {
+                if rewrite {
+                    a.exe = exe.clone();
+                }
+                (a.id, a.has_icon)
+            })
+        }
+        None => None,
+    };
     let (id, has_icon) = match found {
         Some(f) => f,
         None => {
@@ -1017,6 +1029,39 @@ mod tests {
             .filter(|e| e.as_ref().unwrap().file_name().to_string_lossy().starts_with(".staging-"))
             .count();
         assert_eq!(staging, 0);
+    }
+
+    /// FIX-02, the merge direction: a backup's full path upgrades an app known only by its
+    /// file name (an earlier Liquid Tools import) instead of adding a second row.
+    #[test]
+    fn full_path_upgrades_a_bare_app() {
+        let apps = |t: &TestStore| -> Vec<String> {
+            let c = t.lock();
+            let mut st = c.prepare("SELECT exe FROM apps ORDER BY id").unwrap();
+            st.query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect()
+        };
+        let from = |text: &str, at: i64, exe: &str| {
+            let mut it = item(text_clip(text, at));
+            it.clip.source = Some(SourceApp { exe: exe.into(), name: "Editor".into() });
+            it
+        };
+        let t = TestStore::new();
+        let mut session = ImportSession::default();
+        t.import_batch(vec![from("from liquid tools", 1_000, "editor.exe")], &mut session).unwrap();
+        t.import_batch(vec![from("from a backup", 2_000, "C:\\Apps\\Editor.exe")], &mut session).unwrap();
+        assert_eq!(apps(&t), vec!["c:\\apps\\editor.exe"]);
+        // Inside one batch too: the transaction's app cache follows the rewrite.
+        let t = TestStore::new();
+        let batch = vec![
+            from("a", 1_000, "editor.exe"),
+            from("b", 2_000, "c:/apps/editor.exe"),
+            from("c", 3_000, "EDITOR.EXE"),
+        ];
+        let s = t.import_batch(batch, &mut ImportSession::default()).unwrap();
+        assert_eq!(s.imported, 3);
+        assert_eq!(apps(&t), vec!["c:\\apps\\editor.exe"]);
+        let distinct: i64 = row(&t, "SELECT count(DISTINCT app_id) FROM clips WHERE ?1 > 0", 1);
+        assert_eq!(distinct, 1);
     }
 
     #[test]
