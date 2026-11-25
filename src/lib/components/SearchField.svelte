@@ -2,24 +2,20 @@
   import Ico from "$lib/components/Ico.svelte";
   import { t } from "$lib/i18n/index.svelte";
 
+  // Filled capsule search field (settings lists). The input itself draws no ring; the
+  // capsule carries the concentric focus ring while the input has :focus-visible.
   interface Props {
     value?: string;
     placeholder?: string;
     disabled?: boolean;
     /** Show the leading search icon. Default true. */
     icon?: boolean;
-    /** Filled grey field with no border (toolbars). Default false. */
+    /** Kept for API compatibility (every field is filled now). */
     filled?: boolean;
+    ariaLabel?: string;
     onInput?: (value: string) => void;
   }
-  let {
-    value = $bindable(""),
-    placeholder = "",
-    disabled = false,
-    icon = true,
-    filled = false,
-    onInput,
-  }: Props = $props();
+  let { value = $bindable(""), placeholder = "", disabled = false, icon = true, ariaLabel, onInput }: Props = $props();
 
   function handleInput(e: Event) {
     value = (e.currentTarget as HTMLInputElement).value;
@@ -31,7 +27,7 @@
   }
 </script>
 
-<div class="field squircle" class:field--disabled={disabled} class:field--filled={filled}>
+<div class="field" class:field--disabled={disabled}>
   {#if icon}<span class="field__icon"><Ico name="search" size={15} /></span>{/if}
   <input
     class="field__input selectable"
@@ -39,11 +35,14 @@
     {placeholder}
     {disabled}
     {value}
+    aria-label={ariaLabel ?? (placeholder || undefined)}
+    spellcheck="false"
+    autocomplete="off"
     oninput={handleInput}
   />
   {#if value}
-    <button type="button" class="field__clear" aria-label={t("common.clear")} onclick={clear}>
-      <Ico name="x" size={14} />
+    <button type="button" class="field__clear" aria-label={t("common.clear")} title={t("common.clear")} onclick={clear}>
+      <Ico name="x" size={13} />
     </button>
   {/if}
 </div>
@@ -53,34 +52,25 @@
     display: flex;
     align-items: center;
     gap: 8px;
-    height: 36px;
-    padding: 0 10px;
-    border-radius: 12px;
+    min-width: 0;
+    height: var(--h-lg);
+    padding: 0 6px 0 14px;
+    border-radius: 999px;
     background: var(--color-track);
     color: var(--color-ink-3);
     transition: background-color var(--dur-fast) var(--ease-out-soft);
   }
+  .field:not(:has(.field__clear)) {
+    padding-right: 14px;
+  }
   .field:hover:not(.field--disabled) {
     background: var(--color-hover);
   }
-  .field:focus-within {
-    background: var(--color-selected);
+  .field:has(.field__input:focus-visible) {
+    background: var(--color-track);
     color: var(--color-ink-2);
-    /* The inner input swallows the global :focus-visible ring (outline: none),
-       so the container carries a real keyboard-focus indicator itself. */
-    outline: 2px solid var(--color-ink);
-    outline-offset: 2px;
-  }
-  .field--filled {
-    height: 36px;
-    border-radius: 12px;
-    background: var(--color-hover);
-  }
-  .field--filled:hover:not(.field--disabled) {
-    background: var(--color-selected);
-  }
-  .field--filled:focus-within {
-    background: var(--color-selected);
+    outline: var(--focus-ring);
+    outline-offset: var(--focus-offset);
   }
   .field--disabled {
     opacity: 0.5;
@@ -92,6 +82,7 @@
   .field__input {
     flex: 1 1 auto;
     min-width: 0;
+    height: 100%;
     border: 0;
     background: transparent;
     color: var(--color-ink);
@@ -107,17 +98,19 @@
     align-items: center;
     justify-content: center;
     flex: 0 0 auto;
-    width: 20px;
-    height: 20px;
+    width: var(--h-sm);
+    height: var(--h-sm);
     border: 0;
-    border-radius: 6px;
+    border-radius: 999px;
     background: transparent;
     color: var(--color-ink-3);
-    cursor: default;
     transition: background-color var(--dur-fast) var(--ease-out-soft);
   }
   .field__clear:hover {
     background: var(--color-hover);
     color: var(--color-ink);
+  }
+  .field__clear:focus-visible {
+    outline-offset: 0;
   }
 </style>

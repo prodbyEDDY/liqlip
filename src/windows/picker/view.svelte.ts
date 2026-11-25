@@ -3,10 +3,12 @@
 import { feed } from "./feed.svelte";
 import { geometry, onScreen, scrollFor, type Geometry } from "./layout";
 
-/** Horizontal padding of the scroller (`.list-wrap`: 4 px each side, as in Liquid Tools). */
-const PAD_X = 8;
-/** Vertical padding of the scroller (2 px top + 8 px bottom). */
-const PAD_Y = 10;
+/** Horizontal padding of the vertical scroller (`.list-wrap`): the panel padding on the left;
+ *  on the right the 12 px scrollbar gutter (`scrollbar-gutter: stable`, outside clientWidth)
+ *  plays the same role, so cards sit 12 px from both panel edges. */
+const PAD_X = 12;
+/** Vertical padding of the scroller (4 px top for the hover lift + 8 px bottom for shadows). */
+const PAD_Y = 12;
 
 class GridView {
   el = $state<HTMLElement | null>(null);

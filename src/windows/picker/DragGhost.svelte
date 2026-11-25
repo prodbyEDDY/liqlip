@@ -30,8 +30,9 @@
     height: 56px;
     margin: -28px 0 0 -42px;
     padding: 0 8px;
-    border-radius: 12px;
-    background: var(--color-track);
+    border-radius: var(--radius-md);
+    corner-shape: squircle;
+    background: var(--color-card-lift);
     box-shadow: var(--shadow-pop);
     pointer-events: none;
     transform: rotate(-3deg);
@@ -42,14 +43,15 @@
     display: block;
     width: 100%;
     height: 100%;
-    border-radius: 12px;
+    border-radius: inherit;
+    corner-shape: squircle;
     object-fit: cover;
   }
   .ghost__title {
     max-width: 100%;
     overflow: hidden;
     color: var(--color-ink-2);
-    font-size: var(--text-micro);
+    font-size: var(--text-meta);
     font-weight: 600;
     text-overflow: ellipsis;
     white-space: nowrap;

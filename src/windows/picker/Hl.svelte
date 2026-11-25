@@ -16,7 +16,7 @@
 <style>
   .hl {
     padding: 0 1px;
-    border-radius: 3px;
+    border-radius: 4px;
     background: color-mix(in srgb, var(--color-ink) 16%, transparent);
     color: var(--color-ink);
     font-weight: 600;

@@ -8,6 +8,7 @@
   import CardShell from "./CardShell.svelte";
   import CardActions from "./CardActions.svelte";
   import TextCard from "./cards/TextCard.svelte";
+  import CodeCard from "./cards/CodeCard.svelte";
   import LinkCard from "./cards/LinkCard.svelte";
   import ColorCard from "./cards/ColorCard.svelte";
   import ContactCard from "./cards/ContactCard.svelte";
@@ -34,6 +35,9 @@
   const title = $derived(
     snippet ? snippet.name : (clip!.title ?? autoTitle(clip!, app?.name ?? null) ?? kindLabel),
   );
+  // The meta row names the source; a link's host + path is already the preview itself, so its
+  // meta shows the app it was copied from (a user-set title still wins).
+  const metaTitle = $derived(clip && clip.kind === "link" && !clip.title ? (app?.name ?? kindLabel) : title);
   const badge = $derived(clip ? entryFormat(clip) : "SNIP");
   const tooltip = $derived.by(() => {
     if (!clip) return snippet!.name;
@@ -124,7 +128,7 @@
 
 <CardShell
   {id}
-  {title}
+  title={metaTitle}
   terms={shelf.terms}
   {label}
   {tooltip}
@@ -150,17 +154,19 @@
     <TextCard text={snippet.body} terms={shelf.terms} />
   {:else if clip}
     {#if clip.kind === "image"}
-      <ImageCard src={clip.thumbUrl} />
+      <ImageCard src={clip.thumbUrl} width={clip.width} height={clip.height} />
     {:else if clip.kind === "link"}
-      <LinkCard host={linkHost(clip)} terms={shelf.terms} />
+      <LinkCard host={linkHost(clip)} url={clip.meta.url ?? clip.preview} terms={shelf.terms} />
     {:else if clip.kind === "color"}
       <ColorCard css={colorValue(clip)} value={clip.preview} />
     {:else if clip.kind === "contact"}
       <ContactCard value={clip.preview} email={(clip.meta.contact ?? (clip.preview.includes("@") ? "email" : "phone")) === "email"} terms={shelf.terms} />
     {:else if clip.kind === "file"}
       <FileCard name={baseName(clip.preview)} format={badge} more={Math.max(0, (clip.fileCount ?? 1) - 1)} terms={shelf.terms} />
+    {:else if clip.kind === "code"}
+      <CodeCard text={clip.preview} terms={shelf.terms} />
     {:else}
-      <TextCard text={clip.preview} terms={shelf.terms} mono={clip.kind === "code"} />
+      <TextCard text={clip.preview} terms={shelf.terms} />
     {/if}
   {/if}
 </CardShell>
@@ -192,22 +198,24 @@
 {/if}
 
 <style>
+  /* F2 rename: a 24 px capsule over the meta row, inset 4 px from the card's bottom corners
+     (12 + 4 = 16, concentric). Text entry keeps its focus ring while focused. */
   .rename {
     position: absolute;
-    left: 21px;
-    right: 2px;
-    bottom: 4px;
+    left: var(--pad-card);
+    right: var(--pad-card);
+    bottom: var(--pad-card);
     z-index: 3;
-    height: 28px;
-    padding: 0 8px;
+    height: calc(2 * var(--r-card-in));
+    padding: 0 10px;
     border: 0;
-    border-radius: 8px;
-    background: var(--color-paper);
+    border-radius: 999px;
+    background: var(--color-raised);
     box-shadow: var(--shadow-pop);
     color: var(--color-ink);
     font: inherit;
-    font-size: 11px;
-    outline: 2px solid var(--color-ink);
+    font-size: var(--text-secondary);
+    outline: var(--focus-ring);
     outline-offset: 0;
   }
   .rename::placeholder {

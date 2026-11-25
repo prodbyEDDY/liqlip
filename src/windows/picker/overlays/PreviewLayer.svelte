@@ -4,7 +4,7 @@
   // ←/→ to the neighbouring record and Enter to paste. W2-C registers the real Quick Look
   // (info table, zoom, editing) over this kind: `overlays.register("preview", QuickLook)`.
   import Ico from "$lib/components/Ico.svelte";
-  import Kbd from "$lib/components/Kbd.svelte";
+  import { LayerFooter, LayerHeader, LayerSurface } from "./kit";
   import Skeleton from "$lib/components/Skeleton.svelte";
   import { clipDetail } from "$lib/ipc/commands";
   import { errorMessage } from "$lib/ipc/errors";
@@ -88,29 +88,25 @@
   });
 </script>
 
-<div class="scrim" role="presentation" onpointerdown={close}></div>
-<div class="sheet squircle" role="dialog" aria-modal="true" aria-label={t("picker.preview.label")}>
-  <header class="sheet__head">
-    <span class="sheet__title">{title}</span>
-    <button type="button" class="sheet__close" aria-label={t("common.close")} title={t("common.close")} onclick={close}>
-      <Ico name="x" size={15} />
-    </button>
-  </header>
-  <div class="sheet__body">
+<LayerSurface variant="sheet" label={t("picker.preview.label")} onclose={close}>
+  {#snippet header()}
+    <LayerHeader {title} onclose={close} />
+  {/snippet}
+  <div class="body">
     {#if snippet}
-      <pre class="text selectable"><Hl text={snippet.body} terms={shelf.terms} /></pre>
+      <pre class="text well selectable"><Hl text={snippet.body} terms={shelf.terms} /></pre>
     {:else if error}
-      <p class="sheet__error"><Ico name="warning" size={16} />{error}</p>
+      <p class="error"><Ico name="warning" size={16} />{error}</p>
     {:else if !detail}
-      <div class="sheet__loading" aria-busy="true">
+      <div class="loading well" aria-busy="true">
         <Skeleton height="12px" width="70%" />
         <Skeleton height="12px" width="90%" />
         <Skeleton height="12px" width="55%" />
       </div>
     {:else if detail.kind === "image"}
-      <img class="image" src={detail.imageUrl ?? detail.thumbUrl ?? ""} alt={title} draggable="false" />
+      <div class="stage well checker"><img class="image" src={detail.imageUrl ?? detail.thumbUrl ?? ""} alt={title} draggable="false" /></div>
     {:else if detail.kind === "color"}
-      <div class="checker"><div class="swatch" style:background={colorValue(detail) ?? "var(--color-track)"}></div></div>
+      <div class="stage well checker"><div class="swatch" style:background={colorValue(detail) ?? "var(--color-track)"}></div></div>
       <div class="values selectable">
         {#each [detail.meta.color?.hex, detail.meta.color?.rgb, detail.meta.color?.hsl].filter(Boolean) as v (v)}
           <code>{v}</code>
@@ -120,142 +116,85 @@
       <ul class="files selectable">
         {#each detail.files ?? [] as f (f.path)}
           <li class:missing={!f.exists}>
-            <Ico name={f.exists ? "file" : "warning"} size={14} />
+            <Ico name={f.exists ? "file" : "warning"} size={16} />
             <span class="files__name">{baseName(f.path)}</span>
-            <span class="files__path">{f.path}</span>
+            <span class="files__path" title={f.path}><bdi>{f.path}</bdi></span>
           </li>
         {/each}
       </ul>
     {:else}
-      <pre class="text selectable" class:text--mono={detail.kind === "code"}><Hl text={detail.text ?? detail.preview} terms={shelf.terms} /></pre>
+      <pre class="text well selectable" class:text--mono={detail.kind === "code"}><Hl text={detail.text ?? detail.preview} terms={shelf.terms} /></pre>
     {/if}
   </div>
-  <footer class="sheet__foot">
-    <span><Kbd>↵</Kbd>{t("picker.preview.paste")}</span>
-    <span><Kbd>← →</Kbd>{t("picker.preview.browse")}</span>
-    <span><Kbd>Esc</Kbd>{t("common.close")}</span>
-  </footer>
-</div>
+  {#snippet footer()}
+    <LayerFooter hints={[["↵", t("picker.preview.paste")], ["← →", t("picker.preview.browse")], ["Esc", t("common.close")]]} />
+  {/snippet}
+</LayerSurface>
 
 <style>
-  .scrim {
-    position: absolute;
-    inset: 0;
-    z-index: 40;
-    background: color-mix(in srgb, var(--color-paper) 55%, transparent);
-    animation: fade-in var(--dur-base) var(--ease-out-soft);
-  }
-  @keyframes fade-in {
-    from {
-      opacity: 0;
-    }
-  }
-  .sheet {
-    position: absolute;
-    inset: 54px 18px 46px;
-    z-index: 41;
-    display: flex;
-    flex-direction: column;
-    border-radius: 22px;
-    background: var(--color-paper);
-    box-shadow: var(--shadow-card-lg);
-    overflow: hidden;
-    animation: sheet-in var(--dur-slow) var(--ease-liquid);
-  }
-  @keyframes sheet-in {
-    from {
-      opacity: 0;
-      transform: scale(0.96);
-    }
-  }
-  .sheet__head {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    height: 44px;
-    padding: 0 8px 0 16px;
-  }
-  .sheet__title {
-    flex: 1 1 auto;
-    min-width: 0;
-    overflow: hidden;
-    color: var(--color-ink);
-    font-size: var(--text-row);
-    font-weight: 600;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .sheet__close {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 30px;
-    height: 30px;
-    border: 0;
-    border-radius: 999px;
-    background: transparent;
-    color: var(--color-ink-3);
-    cursor: pointer;
-    transition: background-color var(--dur-fast) var(--ease-out-soft);
-  }
-  .sheet__close:hover {
-    background: var(--color-hover);
-    color: var(--color-ink);
-  }
-  .sheet__close:focus-visible {
-    outline: 2px solid var(--color-ink);
-    outline-offset: 2px;
-  }
-  .sheet__body {
+  .body {
     display: flex;
     flex: 1 1 auto;
     flex-direction: column;
+    gap: 8px;
     min-height: 0;
-    padding: 0 16px 12px;
-    overflow: auto;
+    margin-top: 6px;
+  }
+  /* Content wells: concentric with the sheet (--layer-r-in). */
+  .well {
+    flex: 1 1 auto;
+    min-height: 0;
+    border-radius: var(--layer-r-in);
   }
   .text {
     margin: 0;
+    padding: 12px 14px;
+    overflow: auto;
+    background: var(--color-track);
     color: var(--color-ink);
     font-family: var(--font-sans);
     font-size: var(--text-row);
-    line-height: 1.55;
+    line-height: 1.6;
     white-space: pre-wrap;
-    word-break: break-word;
+    overflow-wrap: break-word;
   }
   .text--mono {
     font-family: var(--font-mono);
     font-size: var(--text-secondary);
+    white-space: pre;
   }
-  .image {
-    display: block;
-    width: 100%;
-    height: 100%;
-    min-height: 0;
-    object-fit: contain;
+  .stage {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
   }
   .checker {
-    display: flex;
-    flex: 1 1 auto;
-    min-height: 120px;
-    border-radius: 16px;
-    overflow: hidden;
     background-color: var(--color-paper);
     background-image: conic-gradient(var(--color-checker) 25%, transparent 0 50%, var(--color-checker) 0 75%, transparent 0);
     background-size: 16px 16px;
   }
+  .image {
+    display: block;
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+  }
   .swatch {
+    align-self: stretch;
     flex: 1 1 auto;
   }
   .values {
     display: flex;
     flex-wrap: wrap;
     gap: 6px;
-    padding-top: 10px;
   }
   .values code {
-    padding: 4px 8px;
-    border-radius: 8px;
+    display: inline-flex;
+    align-items: center;
+    height: var(--h-md);
+    padding: 0 12px;
+    border-radius: 999px;
     background: var(--color-track);
     color: var(--color-ink);
     font-family: var(--font-mono);
@@ -264,65 +203,58 @@
   .files {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 2px;
     margin: 0;
     padding: 0;
+    overflow: auto;
     list-style: none;
   }
   .files li {
     display: grid;
-    grid-template-columns: 18px 1fr;
-    column-gap: 8px;
+    grid-template-columns: 20px minmax(0, 1fr);
+    column-gap: 10px;
     align-items: center;
+    padding: 8px 10px;
+    border-radius: var(--layer-r-in);
     color: var(--color-ink);
-    font-size: var(--text-secondary);
+    font-size: var(--text-row);
+  }
+  .files li:hover {
+    background: var(--color-track);
   }
   .files li.missing {
     color: var(--color-ink-3);
   }
   .files__name {
+    overflow: hidden;
     font-weight: 600;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .files__path {
     grid-column: 2;
     overflow: hidden;
     color: var(--color-ink-3);
-    font-size: var(--text-meta);
+    font-size: var(--text-secondary);
     text-overflow: ellipsis;
     white-space: nowrap;
+    direction: rtl;
+    text-align: left;
   }
-  .sheet__loading {
+  .loading {
     display: flex;
     flex-direction: column;
     gap: 10px;
-    padding-top: 6px;
+    padding: 14px;
+    background: var(--color-track);
   }
-  .sheet__error {
+  .error {
     display: flex;
     align-items: center;
     gap: 8px;
     margin: 0;
+    padding: 12px;
     color: var(--color-ink-2);
     font-size: var(--text-secondary);
-  }
-  .sheet__foot {
-    display: flex;
-    align-items: center;
-    gap: 14px;
-    height: 36px;
-    padding: 0 16px;
-    color: var(--color-ink-3);
-    font-size: var(--text-meta);
-  }
-  .sheet__foot span {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-  }
-  .sheet__foot :global(.kbd) {
-    height: 20px;
-    min-width: 20px;
-    padding: 0 5px;
-    border-radius: 6px;
   }
 </style>

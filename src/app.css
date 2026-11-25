@@ -8,11 +8,25 @@
 @custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
 
 /*
-  Liqlip — design tokens, ported 1:1 from Liquid Tools `src/app.css` (2026-11-26).
-  Only studio/capture/launcher/account-specific bits were dropped. Hub file: change
+  Liqlip design tokens (W2-E, 2026-11-26) — the single source of truth for colour, geometry,
+  elevation, type and motion. Rules and rationale: docs/design-system.md. Hub file: change
   only through the coordinator (CLAUDE.md hard rule 7).
-  Identity: light · white · liquid · squircle · 1px hairline · deep-soft shadow · MONOCHROME (ink + greys).
-  Accent IS ink. No color, no gradients-as-decoration, no glass, no neon. Monochrome is LOCKED.
+
+  Identity (from Liquid Tools, kept): monochrome · liquid motion · squircle surfaces ·
+  capsule controls · Inter + JetBrains Mono. Accent IS ink. No colour in chrome, no
+  decorative gradients, no glass, no neon. Monochrome is LOCKED.
+
+  What changed against the Liquid Tools port (W0):
+  - Control fills (track / hover / selected / wash-sel / toggle-track) are INK WASHES —
+    translucent ink over whatever surface they sit on. A control therefore always differs
+    from its parent (paper, a card, a settings tile, a popover) in both themes: no more
+    "tile on tile" fills that vanish in the dark theme.
+  - Semantic surfaces: ground (window), tile (settings groups), raised (popovers, menus,
+    dialogs), card / card-hover / card-lift (shelf cards).
+  - One radius + spacing scale (multiples of 4) and the CONCENTRIC rule: a nested surface's
+    radius = outer radius − the gap between them (≥ 4 px). The --r-* / --pad-* pairs below
+    compute every nested radius with calc() — no magic numbers in components.
+  - Strict black/white: no blue-tinted greys left (#d8dbe1, #f4f5f7 were neutralised).
 */
 @theme {
   /* Wipe Tailwind's default color palette so a stray `bg-blue-500` cannot exist. */
@@ -24,48 +38,60 @@
   --color-white: #ffffff;
   --color-black: #000000;
 
-  /* --- Surfaces & ground --- */
-  --color-paper: #ffffff; /* panels / cards */
-  --color-page: #e9e9e7; /* window ground (boards) */
-  --color-content: #f0f0ef; /* content background */
-  --color-panel-2: #f8f8f7; /* titlebar / second neutral chrome */
+  /* --- Surfaces (light) --- */
+  --color-paper: #ffffff; /* shelf panel, popover base in light */
+  --color-page: #ececeb; /* backdrop behind floating panels (browser preview) */
+  --color-content: #f3f3f2; /* inset content areas */
+  --color-panel-2: #f7f7f6; /* second neutral chrome */
+  --color-ground: #efefee; /* settings window ground */
+  --color-tile: #ffffff; /* settings group tile on the ground */
+  --color-raised: #ffffff; /* popovers, menus, dialogs, sheets (shadow does the lift) */
+  --color-card: #f3f3f2; /* shelf card face on the panel */
+  --color-card-hover: #ebebea; /* hovered card */
+  --color-card-lift: #ffffff; /* current (keyboard cursor) card — lifted with --shadow-lift */
 
   /* --- Ink (text + the only accent) --- */
-  --color-ink: #252525; /* primary text + ACCENT / selection */
-  --color-ink-2: #555555; /* secondary text, inactive icons */
-  --color-ink-3: #646464; /* meta, captions, placeholders */
-  --color-ink-hover: #353535; /* hover fill on ink-filled (inverted) controls */
-  --color-ink-active: #191919; /* pressed fill on ink-filled controls */
+  --color-ink: #222222; /* primary text + ACCENT / selection */
+  --color-ink-2: #4f4f4f; /* secondary text, inactive icons */
+  --color-ink-3: #6a6a6a; /* meta, captions, placeholders (≥ 4.5:1 on paper/card/tile) */
+  --color-ink-hover: #383838; /* hover fill on ink-filled (inverted) controls */
+  --color-ink-active: #121212; /* pressed fill on ink-filled controls */
 
   /* --- Functional one-offs (not decoration) --- */
-  --color-danger: #b3261e; /* destructive action text (menus) */
-  --color-checker: #e2e4e7; /* transparency checkerboard squares (image stages) */
+  --color-danger: #b3261e; /* destructive action text */
+  --color-checker: #e4e4e3; /* transparency checkerboard squares */
 
-  /* --- Lines & low-contrast fills (exact values reconciled against design/liquid-tools.pen) --- */
-  --color-hairline: #dededc; /* borders REMOVED globally (redesign: no strokes anywhere) */
-  --color-hairline-strong: #b7b7b4; /* hover-emphasis border removed */
-  --color-divider: #e4e4e2; /* inner row dividers removed */
-  --color-track: #e8e8e7; /* segmented / tabs track, badges (.pen tabs track) */
-  --color-hover: #dededd; /* hover surface */
-  --color-wash-sel: #e8e8e7; /* near-white wash — tile selection (with ink border) */
-  --color-selected: #dededd; /* list / menu item selected wash (.pen) */
-  --color-toggle-track: #d8dbe1; /* toggle OFF track (ON track = ink; knob = paper) */
+  /* --- Control fills: ink washes (relative to the surface underneath) --- */
+  --color-track: color-mix(in srgb, var(--color-ink) 6.5%, transparent); /* resting control: pill, segment track, kbd, chip */
+  --color-hover: color-mix(in srgb, var(--color-ink) 10%, transparent); /* hover on a control / row */
+  --color-wash-sel: color-mix(in srgb, var(--color-ink) 9%, transparent); /* multi-selected tile wash */
+  --color-selected: color-mix(in srgb, var(--color-ink) 13%, transparent); /* pressed / chosen row */
+  --color-toggle-track: color-mix(in srgb, var(--color-ink) 20%, transparent); /* toggle OFF track */
+  --color-scrim: color-mix(in srgb, var(--color-paper) 62%, transparent); /* dim behind modal layers */
+  --color-thumb: #ffffff; /* the chosen segment's thumb on a control track */
 
-  /* --- Radii (squircle utility approximates the true superellipse; these are the nominal radii) --- */
-  --radius-panel: 24px; /* panels / boards */
-  --radius-card: 22px; /* cards */
-  --radius-control: 14px; /* buttons, inputs, tiles */
-  --radius-control-sm: 12px;
-  --radius-chip: 10px; /* chips */
-  --radius-kbd: 8px; /* kbd keys */
-  --radius-pill: 999px; /* pills, toggles */
+  /* --- Lines: NEVER used for borders (rule: no strokes). Kept only so old references resolve. --- */
+  --color-hairline: color-mix(in srgb, var(--color-ink) 12%, transparent);
+  --color-hairline-strong: color-mix(in srgb, var(--color-ink) 22%, transparent);
+  --color-divider: color-mix(in srgb, var(--color-ink) 8%, transparent);
 
-  /* --- Elevation: hairline first, then one soft shadow (deeper for summoned windows) --- */
-  --shadow-card: 0 6px 24px rgb(20 22 28 / 0.07);
-  --shadow-card-lg: 0 10px 34px rgb(20 22 28 / 0.1);
-  --shadow-pop: 0 12px 38px rgb(20 22 28 / 0.12); /* dropdowns / popovers */
-  --shadow-summoned: 0 18px 50px rgb(0 0 0 / 0.2); /* summoned windows (clipboard, etc.) */
-  --shadow-on-lift: 0 1px 2px rgb(18 20 32 / 0.13); /* selected segment / tab lift onto paper */
+  /* --- Radius scale (multiples of 4; squircle surfaces, 999 = capsule/circle) --- */
+  --radius-xs: 4px;
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 20px;
+  --radius-2xl: 24px;
+  --radius-3xl: 28px;
+  --radius-pill: 999px;
+
+  /* --- Elevation: one soft, layered shadow per level (dark theme deepens them) --- */
+  --shadow-card: 0 1px 2px rgb(0 0 0 / 0.04), 0 4px 14px rgb(0 0 0 / 0.06);
+  --shadow-lift: 0 1px 3px rgb(0 0 0 / 0.06), 0 8px 22px rgb(0 0 0 / 0.11); /* hovered / current card */
+  --shadow-card-lg: 0 2px 6px rgb(0 0 0 / 0.05), 0 14px 36px rgb(0 0 0 / 0.12);
+  --shadow-pop: 0 2px 6px rgb(0 0 0 / 0.06), 0 14px 38px rgb(0 0 0 / 0.14); /* menus / popovers */
+  --shadow-summoned: 0 2px 8px rgb(0 0 0 / 0.06), 0 18px 50px rgb(0 0 0 / 0.2); /* the shelf panel */
+  --shadow-on-lift: 0 1px 2px rgb(0 0 0 / 0.14); /* segment thumb / toggle knob lift */
 
   /* --- Type families (self-hosted via @fontsource, imported in each window entry) --- */
   --font-sans:
@@ -75,40 +101,159 @@
     "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, "Cascadia Code",
     "Source Code Pro", Menlo, Consolas, monospace;
 
-  /* --- Type scale (fixed, tight; BUILD-PROMPT §3 typography) --- */
+  /* --- Type scale (fixed). Captions ≥ 12 px; 11 px only for service labels (badges, kbd). --- */
+  --text-title: 1.375rem; /* 22 — onboarding step title (700) */
+  --text-title--line-height: 1.25;
   --text-section: 1.125rem; /* 18 — section title (700) */
   --text-section--line-height: 1.3;
-  --text-panel: 0.875rem; /* 14 — panel header (600) */
-  --text-panel--line-height: 1.35;
-  --text-row: 0.8125rem; /* 13 — row title (600) */
-  --text-row--line-height: 1.4;
-  --text-secondary: 0.75rem; /* 12 — secondary */
-  --text-secondary--line-height: 1.45;
-  --text-meta: 0.6875rem; /* 11 — meta / description */
-  --text-meta--line-height: 1.45;
-  --text-micro: 0.59375rem; /* 9.5 — tracked uppercase micro-label */
-  --text-micro--line-height: 1.2;
+  --text-panel: 0.875rem; /* 14 — group / layer header (600) */
+  --text-panel--line-height: 1.4;
+  --text-row: 0.8125rem; /* 13 — row label, menu item, body (500–600) */
+  --text-row--line-height: 1.45;
+  --text-secondary: 0.75rem; /* 12 — captions, descriptions, hints */
+  --text-secondary--line-height: 1.5;
+  --text-meta: 0.6875rem; /* 11 — service labels only: badges, kbd, counters */
+  --text-meta--line-height: 1.4;
+  --text-micro: 0.6875rem; /* 11 — tracked uppercase label (was 9.5 px: too small) */
+  --text-micro--line-height: 1.3;
 }
 
 /*
-  True squircle corners (CSS Borders Level 4). Pair with any `border-radius`:
-  border, background, box-shadow, outline AND overflow all follow the superellipse,
-  so a squircle with a soft shadow + 1px hairline needs no SVG. `squircle` keyword
-  == superellipse(2) == the iOS look. Supported in WebView2 / Chromium 139+ (our
-  target is 148); older engines degrade gracefully to the plain border-radius curve.
+  GEOMETRY — the concentric system. Every nested radius is derived:
+    inner radius = max(4px, outer radius − gap)
+  Capsules and circles are always 999px (their half-height is their radius), so a capsule
+  of height h sits concentric in a corner of radius R when its inset is R − h/2.
+*/
+:root {
+  /* Spacing scale (4 px grid). */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 20px;
+  --sp-6: 24px;
+  --sp-8: 32px;
+
+  /* Control heights. */
+  --h-xs: 20px; /* inline kbd, tiny counters */
+  --h-sm: 24px; /* card tools, footer status, small chips */
+  --h-md: 32px; /* pills, buttons, inputs, menu items */
+  --h-lg: 36px; /* primary buttons, settings controls */
+
+  /* Shelf panel → its content (search row, pills, cards, layers). */
+  --r-panel: 28px;
+  --pad-panel: 12px;
+  --r-panel-in: max(4px, calc(var(--r-panel) - var(--pad-panel))); /* 16 */
+
+  /* Shelf card → elements inside its corners (tools capsule, digit, check). */
+  --r-card: var(--r-panel-in); /* 16 */
+  --pad-card: 4px;
+  --r-card-in: max(4px, calc(var(--r-card) - var(--pad-card))); /* 12 → 24 px capsules */
+
+  /* Layers. Rule of thumb: a layer's radius = 16 + its padding, so whatever sits in its
+     corners is a 32 px capsule (menu rows, buttons, close circles) or an r16 well. */
+  --r-layer: 22px; /* menus, dropdown lists */
+  --pad-layer: 6px;
+  --r-layer-in: max(4px, calc(var(--r-layer) - var(--pad-layer))); /* 16 → 32 px capsule rows */
+
+  --r-popover: 24px; /* popovers with a header / footer (paste stack) */
+  --pad-popover: 8px;
+  --r-popover-in: max(4px, calc(var(--r-popover) - var(--pad-popover))); /* 16 */
+
+  /* Sheet (Quick Look style): inset from the panel so it stays concentric with it. */
+  --inset-sheet: 4px;
+  --r-sheet: max(4px, calc(var(--r-panel) - var(--inset-sheet))); /* 24 */
+  --pad-sheet: 8px;
+  --r-sheet-in: max(4px, calc(var(--r-sheet) - var(--pad-sheet))); /* 16 */
+
+  /* Centered dialogs: buttons sit 12 px from the corners. */
+  --r-dialog: 28px;
+  --pad-dialog: 12px;
+  --r-dialog-in: max(4px, calc(var(--r-dialog) - var(--pad-dialog))); /* 16 */
+
+  /* Settings group tile → rows / list items inside it. */
+  --r-tile: 16px;
+  --pad-tile: 4px;
+  --r-tile-in: max(4px, calc(var(--r-tile) - var(--pad-tile))); /* 12 */
+
+  /* Multi-line fields (textarea, code wells) → content inside. */
+  --r-field: 12px;
+
+  /* Keyboard focus: the only outline in the product, concentric with its element. */
+  --focus-ring: 2px solid var(--color-ink);
+  --focus-offset: 2px;
+
+  /* Motion primitives (mirrored in src/lib/motion). Motion conveys state, never decorates. */
+  --ease-liquid: cubic-bezier(0.34, 1.24, 0.44, 1); /* slide / morph — pronounced overshoot */
+  --ease-pill: cubic-bezier(0.34, 1.12, 0.42, 1); /* sliding pills — gentle overshoot */
+  --ease-out-soft: cubic-bezier(0.22, 1, 0.36, 1); /* fades / content swaps */
+  --ease-emphasized: cubic-bezier(0.2, 0, 0, 1); /* strong decelerate, no overshoot */
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1); /* symmetric */
+  --dur-fast: 150ms;
+  --dur-base: 200ms;
+  --dur-slow: 250ms;
+  --dur-pill: 240ms; /* sliding-pill travel */
+  --icon-hover-tilt: 18deg; /* subtle right-tilt on interactive icon hover (opt-in) */
+}
+
+/*
+  DARK THEME — the ONE place the dark palette is defined. Surfaces lift by getting lighter
+  (shadows barely read on black): ground #000 → tile/panel → card → raised. Control fills
+  are ink washes, so they recompute from the near-white ink automatically; only their
+  strength is tuned here.
+*/
+:root[data-theme="dark"] {
+  --color-paper: #181818;
+  --color-page: #000000;
+  --color-content: #222222;
+  --color-panel-2: #1e1e1e;
+  --color-ground: #000000;
+  --color-tile: #1b1b1b;
+  --color-raised: #262626;
+  --color-card: #232323;
+  --color-card-hover: #2b2b2b;
+  --color-card-lift: #313131;
+
+  --color-ink: #f5f5f5;
+  --color-ink-2: #c4c4c4;
+  --color-ink-3: #9c9c9c; /* ≥ 4.5:1 on every dark surface up to raised */
+  --color-ink-hover: #e2e2e2;
+  --color-ink-active: #cdcdcd;
+
+  --color-danger: #f2b8b5; /* the light-theme red is unreadable on black */
+  --color-checker: #2c2c2c;
+
+  --color-track: color-mix(in srgb, var(--color-ink) 8%, transparent);
+  --color-hover: color-mix(in srgb, var(--color-ink) 12%, transparent);
+  --color-wash-sel: color-mix(in srgb, var(--color-ink) 11%, transparent);
+  --color-selected: color-mix(in srgb, var(--color-ink) 15%, transparent);
+  --color-toggle-track: color-mix(in srgb, var(--color-ink) 24%, transparent);
+  --color-scrim: color-mix(in srgb, #000 55%, transparent);
+  --color-thumb: color-mix(in srgb, var(--color-ink) 16%, transparent);
+
+  --shadow-card: 0 1px 2px rgb(0 0 0 / 0.4), 0 4px 14px rgb(0 0 0 / 0.35);
+  --shadow-lift: 0 1px 3px rgb(0 0 0 / 0.5), 0 8px 22px rgb(0 0 0 / 0.5);
+  --shadow-card-lg: 0 2px 6px rgb(0 0 0 / 0.5), 0 14px 36px rgb(0 0 0 / 0.55);
+  --shadow-pop: 0 2px 6px rgb(0 0 0 / 0.5), 0 14px 38px rgb(0 0 0 / 0.6);
+  --shadow-summoned: 0 2px 8px rgb(0 0 0 / 0.5), 0 18px 50px rgb(0 0 0 / 0.72);
+  --shadow-on-lift: 0 1px 2px rgb(0 0 0 / 0.5);
+}
+
+/*
+  True squircle corners (CSS Borders Level 4, MDN `corner-shape`). Pair with any
+  `border-radius`: background, box-shadow, outline AND overflow follow the superellipse.
+  `squircle` == superellipse(2). Supported in WebView2 / Chromium 139+ (target 148); older
+  engines fall back to the plain border-radius curve. Never on capsules (999px) — it turns
+  them into rounded squares.
 */
 @utility squircle {
   corner-shape: squircle;
 }
 
 /*
-  App icons = Heroicons outline (local src/lib/heroicons/) via the <Ico> wrapper
-  ($lib/components/Ico.svelte). The wrapper renders an <svg> at 1em, so `font-size`
-  (from the `size` prop) drives the box and `currentColor` tints the stroke.
-  On hover of any interactive ancestor the icon does a subtle tilt-right — motion =
-  state, one shared knob (`--icon-hover-tilt`). Opt out per-icon with `tilt={false}`
-  (adds `.ico--static`) for marks that animate themselves (flipping chevrons,
-  spinning loaders) so the tilt never fights their own transform.
+  App icons = Heroicons outline (local src/lib/heroicons/) via the <Ico> wrapper. The svg
+  renders at 1em, so `font-size` (the `size` prop) drives the box and `currentColor` tints
+  the stroke. The hover tilt is opt-in (`tilt` prop).
 */
 .ico {
   display: inline-flex;
@@ -139,71 +284,6 @@
   }
 }
 
-/* Dark-preview gradient — used ONLY for mini-screen / overlay previews (BUILD-PROMPT §3). */
-:root {
-  --gradient-dark-preview: linear-gradient(155deg, #2b313c 0%, #1b1f26 100%);
-  /* Motion primitives (mirrored in src/lib/motion). Motion conveys state, never decorates. */
-  --ease-liquid: cubic-bezier(0.34, 1.24, 0.44, 1); /* slide / morph — pronounced overshoot */
-  --ease-pill: cubic-bezier(0.34, 1.12, 0.42, 1); /* sliding pills — gentle overshoot */
-  --ease-out-soft: cubic-bezier(0.22, 1, 0.36, 1); /* fades / content swaps */
-  --ease-emphasized: cubic-bezier(0.2, 0, 0, 1); /* strong decelerate, no overshoot */
-  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1); /* symmetric — panel slide out from under the menu */
-  --dur-fast: 150ms;
-  --dur-base: 200ms;
-  --dur-slow: 250ms;
-  --dur-pill: 240ms; /* sliding-pill travel */
-  --icon-hover-tilt: 18deg; /* subtle right-tilt on interactive icon hover */
-}
-
-/*
-  DARK THEME — the ONE place the dark palette is defined (single source of truth).
-  Same monochrome system, hierarchy inverted: deep near-black ground, near-white
-  ink, surfaces lift by getting lighter (not by shadow), 1px hairlines do the
-  elevation work that soft shadows do in light. Every --color- and --shadow- token
-  is overridden here, so every Tailwind utility (var-referenced in v4) AND every
-  raw var() in component CSS re-themes automatically. Components must use tokens;
-  any unavoidable literal gets a scoped :root[data-theme="dark"] override in its
-  own file. NOT overridden: --gradient-dark-preview (dark in BOTH themes).
-  Values are a first pass — reviewed in-app against the monochrome identity.
-*/
-:root[data-theme="dark"] {
-  /* --- Surfaces & ground: STRICT BLACK. Pure #000 for bg + every container;
-     #1a1a1a is the only "lift" (interactive chips/tracks/hover). No blue tint. --- */
-  --color-paper: #171717; /* panels / cards */
-  --color-page: #000000; /* window ground */
-  --color-content: #242424; /* content background */
-  --color-panel-2: #1c1c1c; /* titlebar / second chrome */
-
-  /* --- Ink (text + the only accent → near-white) --- */
-  --color-ink: #f4f5f7; /* primary text + ACCENT / selection */
-  --color-ink-2: #bcbcbc; /* secondary text, inactive icons */
-  --color-ink-3: #a2a2a2; /* meta, captions, placeholders */
-  /* Ink-filled controls are near-white here: hover/active dim the fill. */
-  --color-ink-hover: #e3e5e9;
-  --color-ink-active: #cfd2d8;
-
-  /* --- Functional one-offs --- */
-  --color-danger: #f2b8b5; /* the light-theme red is unreadable on black */
-  --color-checker: #1a1a1a; /* faint checker over the black stage */
-
-  /* --- Lines REMOVED (no strokes/dividers anywhere); fills are neutral grey --- */
-  --color-hairline: transparent;
-  --color-hairline-strong: transparent;
-  --color-divider: transparent;
-  --color-track: #1a1a1a; /* inactive pill / segmented / tabs track / chip */
-  --color-hover: #1f1f1f; /* hover surface (above black) */
-  --color-wash-sel: #1a1a1a; /* tile selection wash */
-  --color-selected: #242424; /* list / menu item selected wash */
-  --color-toggle-track: #1a1a1a; /* toggle OFF track (ON = ink, knob = #000) */
-
-  /* --- Elevation: hairline-first; shadows deepen but mostly recede on dark --- */
-  --shadow-card: 0 6px 24px rgb(0 0 0 / 0.5);
-  --shadow-card-lg: 0 10px 34px rgb(0 0 0 / 0.6);
-  --shadow-pop: 0 12px 38px rgb(0 0 0 / 0.6);
-  --shadow-summoned: 0 18px 50px rgb(0 0 0 / 0.72);
-  --shadow-on-lift: 0 1px 2px rgb(18 20 32 / 0.13); /* segment lift (unchanged from prior hardcoded value) */
-}
-
 @layer base {
   *,
   *::before,
@@ -220,6 +300,7 @@
   body {
     font-family: var(--font-sans);
     font-size: var(--text-row);
+    line-height: var(--text-row--line-height);
     color: var(--color-ink);
     background-color: var(--color-page);
     -webkit-font-smoothing: antialiased;
@@ -234,6 +315,12 @@
     user-select: none;
   }
 
+  /* Interactive things show the hand (Liquid Tools principle 7). Zero specificity, so a
+     component (e.g. a draggable card → grab) overrides it. */
+  :where(button:not(:disabled), [role="button"], [role="tab"], [role="radio"], [role="switch"], [role="menuitem"], [role="option"], a[href], summary, select) {
+    cursor: pointer;
+  }
+
   /* Re-enable selection where text is genuinely content. */
   input,
   textarea,
@@ -244,35 +331,52 @@
   }
 
   ::selection {
-    background-color: color-mix(in srgb, var(--color-ink) 14%, transparent);
+    background-color: color-mix(in srgb, var(--color-ink) 16%, transparent);
     color: var(--color-ink);
   }
 
-  /* One consistent focus ring across the whole product. */
+  /* One focus ring across the product: keyboard only, concentric (the outline follows the
+     element's own radius / corner-shape; the offset grows it by 2 px). Components never
+     reset border-radius on focus. */
   :focus-visible {
-    outline: 2px solid var(--color-ink);
-    outline-offset: 2px;
-    border-radius: 4px;
+    outline: var(--focus-ring);
+    outline-offset: var(--focus-offset);
   }
   :focus:not(:focus-visible) {
     outline: none;
   }
 
-  /* Thin, monochrome scrollbars (don't reinvent the affordance — just quiet it). */
-  * {
-    scrollbar-width: thin;
-    scrollbar-color: var(--color-hairline) transparent;
+  /* Scrollbars: a quiet floating capsule thumb, no arrow buttons, transparent track.
+     (The standard scrollbar-width/-color properties would disable these in Chromium 121+,
+     so they are deliberately not set.) */
+  ::-webkit-scrollbar {
+    width: 12px;
+    height: 12px;
+  }
+  ::-webkit-scrollbar-track,
+  ::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-button {
+    display: none;
+  }
+  ::-webkit-scrollbar-thumb {
+    min-height: 32px;
+    min-width: 32px;
+    border: 4px solid transparent;
+    border-radius: 999px;
+    background-color: color-mix(in srgb, var(--color-ink) 18%, transparent);
+    background-clip: padding-box;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    border-width: 3px;
+    background-color: color-mix(in srgb, var(--color-ink) 34%, transparent);
   }
 }
 
 /*
-  Selection micro-feedback. When a swatch / preset / segment
-  becomes the chosen one, the element plays ONE fast scale "pop" so the pick
-  reads as a deliberate, responsive landing — not a silent colour swap. State
-  motion, not decoration: ≤180 ms, ease-out, no overshoot loop. Apply by adding
-  the `pop-select` class to an element AT THE MOMENT it gains its selected
-  state (e.g. `class:pop-select={on}`). The global prefers-reduced-motion guard
-  below already collapses this animation to a no-op.
+  Selection micro-feedback: ONE fast scale pop when an element becomes the chosen one.
+  ≤ 180 ms, ease-out, no loop. The reduced-motion guard below collapses it.
 */
 @keyframes pop-select {
   0% {
@@ -289,7 +393,7 @@
   animation: pop-select 170ms var(--ease-out-soft);
 }
 
-/* Respect the user's motion preference everywhere (BUILD-PROMPT §motion). */
+/* Respect the user's motion preference everywhere. */
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

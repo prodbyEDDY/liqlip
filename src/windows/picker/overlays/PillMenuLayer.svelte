@@ -22,6 +22,7 @@
       label: t("picker.folder.delete"),
       icon: "trash",
       danger: true,
+      gapBefore: true,
       run: () => {
         overlays.open("confirm", { folderId });
       },

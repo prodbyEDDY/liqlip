@@ -4,6 +4,8 @@
   // Esc cancels; the safe choice is focused first.
   import { onMount } from "svelte";
   import Ico from "$lib/components/Ico.svelte";
+  import Button from "$lib/components/Button.svelte";
+  import { LayerSurface } from "./kit";
   import { getLocale, t, type TranslationKey } from "$lib/i18n/index.svelte";
   import type { LayerProps } from "../overlays.svelte";
   import { shelf } from "../shelf.svelte";
@@ -52,146 +54,67 @@
   });
 </script>
 
-<div class="scrim" role="presentation" onpointerdown={cancel}></div>
-<div bind:this={dialog} class="dialog squircle" role="alertdialog" aria-modal="true" aria-labelledby="confirm-title" aria-describedby="confirm-desc">
-  <div class="dialog__icon squircle"><Ico name="trash" size={20} /></div>
-  <h2 id="confirm-title" class="dialog__title">{t("picker.folder.confirm.title", { name })}</h2>
-  <p id="confirm-desc" class="dialog__desc">
-    {count > 0 ? t("picker.folder.confirm.desc", { count: countText }) : t("picker.folder.confirm.empty")}
-  </p>
-  <div class="dialog__actions">
-    {#if count > 0}
-      <button type="button" class="btn btn--secondary squircle" data-autofocus onclick={() => choose(false)}>
-        <Ico name="folderMinus" size={15} />{t("picker.folder.confirm.keep")}
-      </button>
-      <button type="button" class="btn btn--danger squircle" onclick={() => choose(true)}>
-        <Ico name="trash" size={15} />{t("picker.folder.confirm.withClips")}
-      </button>
-    {:else}
-      <button type="button" class="btn btn--danger squircle" data-autofocus onclick={() => choose(false)}>
-        <Ico name="trash" size={15} />{t("common.delete")}
-      </button>
-    {/if}
-    <button type="button" class="btn btn--ghost squircle" onclick={cancel}>{t("common.cancel")}</button>
+<LayerSurface variant="dialog" role="alertdialog" labelledby="confirm-title" describedby="confirm-desc" onclose={cancel} bind:el={dialog}>
+  <div class="body">
+    <div class="icon squircle" aria-hidden="true"><Ico name="folderMinus" size={20} /></div>
+    <h2 id="confirm-title" class="title">{t("picker.folder.confirm.title", { name })}</h2>
+    <p id="confirm-desc" class="desc">
+      {count > 0 ? t("picker.folder.confirm.desc", { count: countText }) : t("picker.folder.confirm.empty")}
+    </p>
   </div>
-</div>
+  <div class="actions">
+    {#if count > 0}
+      <Button variant="secondary" size="sm" icon="folderMinus" data-autofocus onclick={() => choose(false)}>{t("picker.folder.confirm.keep")}</Button>
+      <Button variant="danger" size="sm" icon="trash" onclick={() => choose(true)}>{t("picker.folder.confirm.withClips")}</Button>
+    {:else}
+      <Button variant="danger" size="sm" icon="trash" data-autofocus onclick={() => choose(false)}>{t("common.delete")}</Button>
+    {/if}
+    <Button variant="ghost" size="sm" onclick={cancel}>{t("common.cancel")}</Button>
+  </div>
+</LayerSurface>
 
 <style>
-  .scrim {
-    position: absolute;
-    inset: 0;
-    z-index: 40;
-    border-radius: inherit;
-    background: color-mix(in srgb, var(--color-paper) 55%, transparent);
-    animation: fade-in var(--dur-base) var(--ease-out-soft);
-  }
-  .dialog {
-    position: absolute;
-    top: 50%;
-    left: 50%;
-    z-index: 41;
+  .body {
     display: flex;
     flex-direction: column;
     align-items: center;
     gap: 6px;
-    width: min(340px, calc(100% - 32px));
-    padding: 20px 18px 16px;
-    border-radius: 22px;
-    background: var(--color-paper);
-    box-shadow: var(--shadow-card-lg);
+    padding: 12px 8px 14px;
     text-align: center;
-    transform: translate(-50%, -50%);
-    animation: dialog-in var(--dur-slow) var(--ease-liquid);
   }
-  @keyframes dialog-in {
-    from {
-      opacity: 0;
-      transform: translate(-50%, -50%) scale(0.94);
-    }
-  }
-  @keyframes fade-in {
-    from {
-      opacity: 0;
-    }
-  }
-  .dialog__icon {
+  .icon {
     display: flex;
     align-items: center;
     justify-content: center;
     width: 44px;
     height: 44px;
-    margin-bottom: 4px;
-    border-radius: 15px;
+    margin-bottom: 6px;
+    border-radius: var(--radius-md);
     background: var(--color-track);
     color: var(--color-ink-2);
   }
-  .dialog__title {
+  .title {
     margin: 0;
     color: var(--color-ink);
     font-size: var(--text-panel);
     font-weight: 600;
+    line-height: var(--text-panel--line-height);
     overflow-wrap: anywhere;
+    text-wrap: balance;
   }
-  .dialog__desc {
-    margin: 0 0 8px;
+  .desc {
+    margin: 0;
     color: var(--color-ink-3);
     font-size: var(--text-secondary);
-    line-height: 1.45;
+    line-height: var(--text-secondary--line-height);
+    text-wrap: pretty;
   }
-  .dialog__actions {
+  .actions {
     display: flex;
     flex-direction: column;
     gap: 6px;
+  }
+  .actions :global(.btn) {
     width: 100%;
-  }
-  .btn {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    gap: 7px;
-    height: 34px;
-    padding: 0 14px;
-    border: 0;
-    border-radius: 12px;
-    font: inherit;
-    font-size: var(--text-secondary);
-    font-weight: 600;
-    cursor: pointer;
-    transition:
-      background-color var(--dur-fast) var(--ease-out-soft),
-      color var(--dur-fast) var(--ease-out-soft),
-      transform var(--dur-fast) var(--ease-out-soft);
-  }
-  .btn:active {
-    transform: scale(0.97);
-  }
-  .btn:focus-visible {
-    outline: 2px solid var(--color-ink);
-    outline-offset: 2px;
-  }
-  .btn:disabled {
-    opacity: 0.45;
-  }
-  .btn--secondary {
-    background: var(--color-track);
-    color: var(--color-ink);
-  }
-  .btn--secondary:hover {
-    background: var(--color-hover);
-  }
-  .btn--danger {
-    background: var(--color-track);
-    color: var(--color-danger);
-  }
-  .btn--danger:hover {
-    background: var(--color-hover);
-  }
-  .btn--ghost {
-    background: transparent;
-    color: var(--color-ink-2);
-  }
-  .btn--ghost:hover {
-    background: var(--color-hover);
-    color: var(--color-ink);
   }
 </style>

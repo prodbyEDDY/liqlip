@@ -2,8 +2,10 @@
   // Hint row (SPEC §3.1): "↵ Paste into <icon> <app>" for the real target (no target →
   // "↵ Copy"; elevated → "↵ Copy · administrator window"), ⇧↵ plain text, Space preview,
   // Ctrl K actions; on the right the pause indicator (click → resume) and "Stack N" (click →
-  // the stack layer; also a drop target for dragged cards). Labels shorten on narrow strips
-  // (container queries). Hidden when `settings.picker.hints` is off.
+  // the stack layer; also a drop target for dragged cards). A 32 px row with 4 px side
+  // padding: its 24 px keycaps / status capsules sit 16 px from the panel's bottom corners —
+  // concentric (12 + 16 = 28). Labels shorten on narrow strips (container queries). Hidden
+  // when `settings.picker.hints` is off.
   import Ico from "$lib/components/Ico.svelte";
   import Kbd from "$lib/components/Kbd.svelte";
   import { t } from "$lib/i18n/index.svelte";
@@ -34,13 +36,13 @@
           {#if target.iconUrl && !iconFailed}
             <img src={target.iconUrl} alt="" onerror={() => (iconFailed = true)} />
           {:else}
-            <Ico name="appWindow" size={13} />
+            <Ico name="appWindow" size={14} />
           {/if}
           <span class="target__name">{target.name}</span>
         </span>
       {:else if target?.elevated}
         <span class="hint__label">{t("picker.hint.copy")}</span>
-        <span class="hint__sub" title={target.title}><Ico name="shield" size={12} />{t("picker.hint.elevated")}</span>
+        <span class="hint__sub" title={target.title}><Ico name="shield" size={13} />{t("picker.hint.elevated")}</span>
       {:else}
         <span class="hint__label">{t("picker.hint.copy")}</span>
       {/if}
@@ -58,7 +60,7 @@
   <div class="status">
     {#if shelf.paused}
       <button type="button" class="status__btn" title={t("picker.hint.resumeTitle")} onclick={() => void shelf.resume()}>
-        <Ico name="pause" size={13} />
+        <Ico name="pause" size={12} />
         <span class="status__label">{t("picker.hint.paused")}</span>
       </button>
     {/if}
@@ -73,7 +75,7 @@
         aria-haspopup="dialog"
         onclick={() => overlays.open("stack")}
       >
-        <Ico name="stack" size={13} />
+        <Ico name="stack" size={12} />
         <span class="status__label">{t("picker.hint.stack")}</span>
         <span class="status__n">{stackCount}</span>
       </button>
@@ -89,17 +91,18 @@
     align-items: center;
     justify-content: space-between;
     gap: 12px;
-    height: 32px;
-    padding: 4px 2px 0;
-    color: var(--color-ink-3);
-    font-size: var(--text-meta);
+    height: var(--h-md);
+    margin-top: 4px;
+    padding: 0 4px;
+    color: var(--color-ink-2);
+    font-size: var(--text-secondary);
     white-space: nowrap;
   }
   .hints {
     display: flex;
     flex: 1 1 auto;
     align-items: center;
-    gap: 14px;
+    gap: 16px;
     min-width: 0;
     overflow: hidden;
   }
@@ -107,17 +110,11 @@
     display: inline-flex;
     flex: 0 0 auto;
     align-items: center;
-    gap: 6px;
+    gap: 7px;
     min-width: 0;
   }
   .hint--main {
     flex: 0 1 auto;
-  }
-  .hint :global(.kbd) {
-    height: 20px;
-    min-width: 20px;
-    padding: 0 5px;
-    border-radius: 6px;
   }
   .hint__label {
     color: var(--color-ink-2);
@@ -125,7 +122,11 @@
   .hint__sub {
     display: inline-flex;
     align-items: center;
-    gap: 4px;
+    gap: 5px;
+    min-width: 0;
+    overflow: hidden;
+    color: var(--color-ink-2);
+    text-overflow: ellipsis;
   }
   .hint--selected {
     color: var(--color-ink);
@@ -134,20 +135,20 @@
   .target {
     display: inline-flex;
     align-items: center;
-    gap: 5px;
+    gap: 6px;
     min-width: 0;
     color: var(--color-ink);
     font-weight: 600;
   }
   .target img {
     flex: 0 0 auto;
-    width: 14px;
-    height: 14px;
+    width: 16px;
+    height: 16px;
     object-fit: contain;
   }
   .target__name {
     min-width: 0;
-    max-width: 180px;
+    max-width: 200px;
     overflow: hidden;
     text-overflow: ellipsis;
   }
@@ -161,16 +162,15 @@
     display: inline-flex;
     align-items: center;
     gap: 5px;
-    height: 24px;
-    padding: 0 9px;
+    height: var(--h-sm);
+    padding: 0 10px 0 8px;
     border: 0;
     border-radius: 999px;
     background: var(--color-track);
-    color: var(--color-ink-2);
+    color: var(--color-ink);
     font: inherit;
-    font-size: var(--text-meta);
+    font-size: var(--text-secondary);
     font-weight: 600;
-    cursor: pointer;
     transition:
       background-color var(--dur-fast) var(--ease-out-soft),
       color var(--dur-fast) var(--ease-out-soft),
@@ -178,14 +178,9 @@
   }
   .status__btn:hover {
     background: var(--color-hover);
-    color: var(--color-ink);
   }
   .status__btn:active {
     transform: scale(0.96);
-  }
-  .status__btn:focus-visible {
-    outline: 2px solid var(--color-ink);
-    outline-offset: 2px;
   }
   .status__n {
     font-variant-numeric: tabular-nums;
@@ -199,7 +194,7 @@
   }
 
   /* Narrow panels / strips: drop the labels of the secondary hints, then the hints. */
-  @container (max-width: 560px) {
+  @container (max-width: 600px) {
     .hint--plain .hint__label,
     .hint--preview .hint__label,
     .hint--actions .hint__label {
@@ -209,7 +204,7 @@
       gap: 10px;
     }
   }
-  @container (max-width: 400px) {
+  @container (max-width: 330px) {
     .hint--plain,
     .hint--preview,
     .hint--actions,
@@ -217,7 +212,7 @@
       display: none;
     }
     .target__name {
-      max-width: 110px;
+      max-width: 120px;
     }
   }
 </style>

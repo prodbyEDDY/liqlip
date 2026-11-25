@@ -177,7 +177,8 @@ class Shelf {
     const stopEffects = $effect.root(() => {
       $effect(() => {
         view.horizontal = this.horizontal;
-        view.stripLead = this.layout.position === "center" ? 16 : 14;
+        // = the panel padding (--pad-panel): the first card lines up with the pills.
+        view.stripLead = 12;
       });
       // Typing is debounced; chips and pills apply at once.
       $effect(() => {

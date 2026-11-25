@@ -4,19 +4,19 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { importTs } from "./helpers/bundle.mjs";
 
-const { geometry, tileRect, visibleRange, onScreen, scrollFor, CARD_FOOTER, GAP } = await importTs(
+const { geometry, tileRect, visibleRange, onScreen, scrollFor, CARD_FOOTER, GAP, PREVIEW_RATIO } = await importTs(
   "src/windows/picker/layout.ts",
 );
 
 const tiles = (g) => Array.from({ length: g.count }, (_, i) => tileRect(g, i));
 
-test("a 360 px shelf fits two cards; previews stay square", () => {
+test("a 360 px shelf fits two cards; previews keep the 4:3 ratio", () => {
   const g = geometry(3, 360, 600, false);
   assert.equal(g.columns, 2);
   const t = tiles(g);
-  assert.equal(t[0].width, 175);
-  assert.equal(t[1].x, 185);
-  assert.equal(t[0].height - CARD_FOOTER, t[0].width);
+  assert.equal(t[0].width, 176);
+  assert.equal(t[1].x, 184);
+  assert.equal(t[0].height - CARD_FOOTER, Math.round(t[0].width * PREVIEW_RATIO));
   assert.equal(t[2].y, t[0].height + GAP);
 });
 
@@ -73,8 +73,10 @@ test("appending a page does not move already placed cards", () => {
 
 test("onScreen lists the first nine cards in view (for Ctrl+1…9)", () => {
   const g = geometry(100, 728, 480, false);
-  assert.deepEqual(onScreen(g, 0, 480), [0, 1, 2, 3, 4, 5, 6, 7]);
-  const scrolled = onScreen(g, g.strideY, 480);
+  // Two rows whose middles are in a 340 px viewport; a third row would add a 9th card.
+  assert.deepEqual(onScreen(g, 0, 340), [0, 1, 2, 3, 4, 5, 6, 7]);
+  assert.deepEqual(onScreen(g, 0, 480), [0, 1, 2, 3, 4, 5, 6, 7, 8], "capped at nine");
+  const scrolled = onScreen(g, g.strideY, 340);
   assert.equal(scrolled[0], 4);
   assert.ok(scrolled.length <= 9);
 });

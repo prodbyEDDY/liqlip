@@ -68,6 +68,7 @@
   <section
     bind:this={panel}
     class="panel squircle"
+    class:panel--strip={shelf.horizontal}
     style="width:{shelf.layout.width}px;height:{shelf.layout.height}px"
     aria-label={t("picker.panel.label")}
     aria-hidden={!shelf.open}
@@ -75,9 +76,9 @@
   >
     <SearchBar />
     {#if shelf.paused}
-      <div class="banner squircle" role="status">
-        <Ico name="pause" size={14} />
-        <span class="banner__text">{pausedText}</span>
+      <div class="banner" role="status">
+        <span class="banner__icon"><Ico name="pause" size={14} /></span>
+        <span class="banner__text" title={pausedText}>{pausedText}</span>
         <button type="button" class="banner__btn" onmousedown={(e) => e.preventDefault()} onclick={() => void shelf.resume()}>
           <Ico name="play" size={12} />{t("picker.paused.resume")}
         </button>
@@ -144,19 +145,20 @@
     padding: var(--bleed);
   }
 
-  /* Panel: paper, the `summoned` shadow, radius 24 on every edge (Liquid Tools 2026-09-22:
-     all positions share the same corners). */
+  /* Panel: one geometry for every position — radius --r-panel (28), padding --pad-panel (12)
+     on all sides, so whatever sits in its corners (the settings circle, the hint-row
+     capsules, a sheet) is concentric. No overflow clipping: rings, lifts and shadows of the
+     content are never cut; scroll areas clip themselves. */
   .panel {
     position: relative;
     display: flex;
     flex-direction: column;
     max-width: 100%;
     max-height: 100%;
-    padding: 14px 14px 6px;
-    border-radius: var(--radius-panel);
+    padding: var(--pad-panel);
+    border-radius: var(--r-panel);
     background: var(--color-paper);
     box-shadow: var(--shadow-summoned);
-    overflow: hidden;
     opacity: 0;
     pointer-events: none;
     /* Exit: the soft ease (a dismiss never bounces). */
@@ -164,13 +166,8 @@
       transform var(--dur-base) var(--ease-in-out),
       opacity var(--dur-base) var(--ease-out-soft);
   }
-  .stage[data-edge="top"] .panel,
-  .stage[data-edge="bottom"] .panel {
-    padding: 16px 14px 6px;
-  }
   .stage[data-edge="center"] .panel {
-    padding: 16px 16px 8px;
-    transform: scale(0.8);
+    transform: scale(0.92);
   }
   /* Edges slide out of the docked screen edge (no overshoot: it would open a gap at the edge). */
   .stage[data-edge="left"] .panel {
@@ -200,16 +197,17 @@
       opacity var(--dur-base) var(--ease-out-soft);
   }
 
-  /* "Recording is paused · Resume" under the search (SPEC §2.4.4, §3.13). */
+  /* "Recording is paused · Resume" under the search (SPEC §2.4.4, §3.13): a 32 px capsule
+     with a 24 px capsule button inset 4 px (concentric). */
   .banner {
     display: flex;
     flex: 0 0 auto;
     align-items: center;
     gap: 8px;
-    height: 34px;
+    height: var(--h-md);
     margin-top: 8px;
     padding: 0 4px 0 12px;
-    border-radius: 12px;
+    border-radius: 999px;
     background: var(--color-track);
     color: var(--color-ink-2);
     font-size: var(--text-secondary);
@@ -220,6 +218,10 @@
       opacity: 0;
       transform: translateY(-4px);
     }
+  }
+  .banner__icon {
+    display: inline-flex;
+    flex: 0 0 auto;
   }
   .banner__text {
     flex: 1 1 auto;
@@ -235,8 +237,8 @@
     flex: 0 0 auto;
     align-items: center;
     gap: 5px;
-    height: 26px;
-    padding: 0 11px;
+    height: var(--h-sm);
+    padding: 0 10px 0 8px;
     border: 0;
     border-radius: 999px;
     background: var(--color-ink);
@@ -244,7 +246,6 @@
     font: inherit;
     font-size: var(--text-secondary);
     font-weight: 600;
-    cursor: pointer;
     transition:
       background-color var(--dur-fast) var(--ease-out-soft),
       transform var(--dur-fast) var(--ease-out-soft);
@@ -255,9 +256,5 @@
   .banner__btn:active {
     background: var(--color-ink-active);
     transform: scale(0.97);
-  }
-  .banner__btn:focus-visible {
-    outline: 2px solid var(--color-ink);
-    outline-offset: 2px;
   }
 </style>

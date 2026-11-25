@@ -1,9 +1,10 @@
 <script lang="ts">
-  // The search row — Liquid Tools' "invisible" search (19 px icon + a bare 14 px input, no
-  // box, no ring; 38 px tall) with: filter tokens as chips (Backspace on an empty field
-  // removes the last one), autocomplete after `key:` (↑↓ / Enter / Tab, Esc closes), a clear
-  // button and the settings button. The input is the combobox that owns keyboard focus;
-  // the current card is its `aria-activedescendant`.
+  // The search row — the "invisible" search of Liquid Tools (an icon + a bare 14 px input,
+  // no box) on a 32 px row whose right end holds the settings circle, concentric in the
+  // panel's top-right corner (r = 28 − 12). Filter tokens are 24 px capsule chips (Backspace
+  // on an empty field removes the last one); autocomplete after `key:` (↑↓ / Enter / Tab,
+  // Esc closes) opens a raised list built like a layer menu. The input is the combobox that
+  // owns keyboard focus; the current card is its `aria-activedescendant`.
   import Ico from "$lib/components/Ico.svelte";
   import { settingsOpen } from "$lib/ipc/commands";
   import { errorMessage } from "$lib/ipc/errors";
@@ -161,7 +162,7 @@
 </script>
 
 <div class="searchrow">
-  <Ico name="search" size={19} class="searchrow__icon" />
+  <Ico name="search" size={18} class="searchrow__icon" />
   <div class="field" role="presentation">
     {#each chips as chip, i (chip.raw + i)}
       {@const l = chipLabel(chip)}
@@ -178,7 +179,7 @@
             shelf.focusSearch(false);
           }}
         >
-          <Ico name="x" size={10} />
+          <Ico name="x" size={11} />
         </button>
       </span>
     {/each}
@@ -223,7 +224,7 @@
           shelf.focusSearch(false);
         }}
       >
-        <Ico name="x" size={15} />
+        <Ico name="x" size={14} />
       </button>
     {/if}
     <!-- Capsules use a plain 999px radius — never the squircle utility. -->
@@ -250,7 +251,7 @@
             {#if s.key === "app" && s.icon}
               <img src={s.icon} alt="" />
             {:else}
-              <Ico name={suggestionIcon(s)} size={15} />
+              <Ico name={suggestionIcon(s)} size={16} />
             {/if}
           </span>
           <span class="suggest__label">{suggestionLabel(s)}</span>
@@ -265,50 +266,59 @@
   .searchrow {
     position: relative;
     display: flex;
-    align-items: center;
-    gap: 9px;
     flex: 0 0 auto;
-    height: 38px;
-    padding: 0 2px;
+    align-items: center;
+    gap: 10px;
+    height: var(--h-md);
+    padding-left: 4px;
   }
   .searchrow :global(.searchrow__icon) {
     flex: 0 0 auto;
     color: var(--color-ink-3);
   }
+  /* Chips + input scroll sideways if they overflow; the vertical padding keeps the chips'
+     focus rings inside the scroll box (no clipping). */
   .field {
     display: flex;
     flex: 1 1 auto;
     align-items: center;
     gap: 6px;
     min-width: 0;
-    overflow: hidden;
+    margin-block: -4px;
+    padding-block: 4px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
   }
   .searchrow__input {
     flex: 1 1 auto;
-    min-width: 60px;
+    min-width: 80px;
+    height: var(--h-md);
+    padding: 0;
     border: 0;
     background: transparent;
     color: var(--color-ink);
     font: inherit;
-    font-size: 14px;
+    font-size: var(--text-panel);
     outline: none;
   }
   .searchrow__input::placeholder {
     color: var(--color-ink-3);
   }
 
+  /* Token chip: 24 px capsule; its remove circle (20 px) is inset 2 px — concentric. */
   .chip {
     display: inline-flex;
-    flex: 0 1 auto;
+    flex: 0 0 auto;
     align-items: center;
     gap: 4px;
     min-width: 0;
-    max-width: 220px;
-    height: 26px;
-    padding: 0 4px 0 10px;
+    max-width: 240px;
+    height: var(--h-sm);
+    padding: 0 2px 0 10px;
     border-radius: 999px;
     background: var(--color-track);
-    font-size: 12px;
+    font-size: var(--text-secondary);
     white-space: nowrap;
     animation: pop-select 170ms var(--ease-out-soft);
   }
@@ -328,14 +338,13 @@
     flex: 0 0 auto;
     align-items: center;
     justify-content: center;
-    width: 18px;
-    height: 18px;
+    width: 20px;
+    height: 20px;
     padding: 0;
     border: 0;
     border-radius: 999px;
     background: transparent;
     color: var(--color-ink-3);
-    cursor: pointer;
     transition:
       background-color var(--dur-fast) var(--ease-out-soft),
       color var(--dur-fast) var(--ease-out-soft);
@@ -348,64 +357,62 @@
     background: var(--color-selected);
   }
   .chip__x:focus-visible {
-    outline: 2px solid var(--color-ink);
     outline-offset: 0;
   }
 
-  /* 36 px circles on the track fill (Liquid Tools header button). */
   .hdr {
     display: flex;
     flex: 0 0 auto;
     align-items: center;
-    gap: 6px;
+    gap: 4px;
   }
+  /* 32 px circles; the settings one sits in the panel's corner (12 + 16 = 28). */
   .hdrbtn {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 36px;
-    height: 36px;
+    width: var(--h-md);
+    height: var(--h-md);
     padding: 0;
     border: 0;
     border-radius: 999px;
     background: var(--color-track);
     color: var(--color-ink-2);
-    cursor: pointer;
     transition:
       background-color var(--dur-fast) var(--ease-out-soft),
       color var(--dur-fast) var(--ease-out-soft),
       transform var(--dur-fast) var(--ease-out-soft);
   }
   .hdrbtn--ghost {
-    width: 30px;
-    height: 30px;
     background: transparent;
+    color: var(--color-ink-3);
   }
   .hdrbtn:hover {
     background: var(--color-hover);
     color: var(--color-ink);
   }
+  .hdrbtn--ghost:hover {
+    background: var(--color-track);
+  }
   .hdrbtn:active {
     transform: scale(0.94);
   }
-  .hdrbtn:focus-visible {
-    outline: 2px solid var(--color-ink);
-    outline-offset: 2px;
-  }
 
+  /* Autocomplete: a raised list with the layer-menu geometry (r22 · pad 6 · 32 px capsule
+     rows), aligned under the input. */
   .suggest {
     position: absolute;
-    top: calc(100% + 4px);
-    left: 30px;
+    top: calc(100% + 6px);
+    left: 0;
     z-index: 20;
     display: flex;
     flex-direction: column;
-    gap: 2px;
-    width: min(340px, calc(100% - 40px));
+    width: min(360px, calc(100% - 40px));
     margin: 0;
-    padding: 6px;
-    border-radius: 14px;
-    background: var(--color-paper);
+    padding: var(--pad-layer);
+    border-radius: var(--r-layer);
+    corner-shape: squircle;
+    background: var(--color-raised);
     box-shadow: var(--shadow-pop);
     list-style: none;
     animation: suggest-in var(--dur-base) var(--ease-out-soft);
@@ -418,18 +425,19 @@
   }
   .suggest__item {
     display: flex;
+    flex: none;
     align-items: center;
-    gap: 9px;
-    height: 34px;
-    padding: 0 10px;
-    border-radius: 10px;
+    gap: 10px;
+    height: var(--h-md);
+    padding: 0 12px 0 10px;
+    border-radius: var(--r-layer-in);
     color: var(--color-ink);
     font-size: var(--text-row);
     font-weight: 500;
     cursor: pointer;
   }
   .suggest__item--active {
-    background: var(--color-hover);
+    background: var(--color-track);
   }
   .suggest__icon {
     display: inline-flex;
@@ -438,7 +446,7 @@
     justify-content: center;
     width: 18px;
     height: 18px;
-    color: var(--color-ink-3);
+    color: var(--color-ink-2);
   }
   .suggest__icon img {
     width: 16px;
@@ -461,11 +469,5 @@
     font-size: var(--text-meta);
     text-overflow: ellipsis;
     white-space: nowrap;
-  }
-  @media (prefers-reduced-motion: reduce) {
-    .hdrbtn,
-    .chip__x {
-      transition: none;
-    }
   }
 </style>

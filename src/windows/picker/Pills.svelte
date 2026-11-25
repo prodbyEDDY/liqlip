@@ -1,6 +1,7 @@
 <script lang="ts">
-  // Pills (Liquid Tools strip: 36 px capsules, track → ink when active, quiet counters,
-  // horizontal scroll) — built-ins, then folders. Folders: "+" → inline name field (Enter /
+  // Pills (32 px capsules, control wash → ink when active, quiet counters) — built-ins, then
+  // folders. The row scrolls sideways (wheel included) out to the panel edges; the side(s)
+  // with more pills fade out (mask), and the active pill is kept clear of the fade. Folders: "+" → inline name field (Enter /
   // Esc; "exists" explained inline), double click or the context menu → rename inline, drag a
   // folder pill to reorder (`folder_move`), delete from the context menu with a confirmation
   // (SPEC §3.9). While a card is dragged, Favorites and folders lift as drop targets.
@@ -27,6 +28,31 @@
     strip.scrollLeft += e.deltaY;
     e.preventDefault();
   }
+
+  // ── overflow cues: fade the edge(s) that hide more pills ──
+  let fadeStart = $state(false);
+  let fadeEnd = $state(false);
+  function syncFade() {
+    if (!strip) return;
+    const max = strip.scrollWidth - strip.clientWidth;
+    fadeStart = strip.scrollLeft > 1;
+    fadeEnd = strip.scrollLeft < max - 1;
+  }
+  $effect(() => {
+    if (!strip) return;
+    const el = strip;
+    const ro = new ResizeObserver(syncFade);
+    ro.observe(el);
+    for (const child of el.children) ro.observe(child);
+    syncFade();
+    return () => ro.disconnect();
+  });
+  $effect(() => {
+    void shelf.pills;
+    void shelf.counts;
+    void adding;
+    requestAnimationFrame(syncFade);
+  });
 
   const label = (p: Pill) => (p.builtin ? t(`picker.pill.${p.id}` as TranslationKey) : p.name);
   const errorText = (e: FolderError) => t(`picker.folder.error.${e}` as TranslationKey);
@@ -199,7 +225,16 @@
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="tabs" bind:this={strip} onwheel={onWheel} role="tablist" aria-label={t("picker.pills.label")}>
+<div
+  class="tabs"
+  class:tabs--fade-start={fadeStart}
+  class:tabs--fade-end={fadeEnd}
+  bind:this={strip}
+  onwheel={onWheel}
+  onscroll={syncFade}
+  role="tablist"
+  aria-label={t("picker.pills.label")}
+>
   {#each shelf.pills as pill (pill.id)}
     {@const droppable = drag.active && pill.droppable}
     {@const isRenaming = pill.folderId !== null && shelf.renamingFolder === pill.folderId}
@@ -250,8 +285,8 @@
           }}
           oncontextmenu={(e) => onContext(pill, e)}
         >
-          {#if pill.id === "favorites"}<Ico name="heart" size={13} />{/if}
-          {#if pill.folderId !== null}<Ico name="folder" size={13} />{/if}
+          {#if pill.id === "favorites"}<Ico name="heart" size={14} />{/if}
+          {#if pill.folderId !== null}<Ico name="folder" size={14} />{/if}
           <span class="pill__label">{label(pill)}</span>
           {#if shelf.counts}<span class="pill__count">{pill.count}</span>{/if}
         </button>
@@ -290,21 +325,37 @@
         addError = null;
       }}
     >
-      <Ico name="plus" size={14} />
+      <Ico name="plus" size={15} />
     </button>
   {/if}
 </div>
 
 <style>
+  /* Out to the panel edges (negative margin = the panel padding) so pills scroll under a
+     soft fade instead of being cut at an invisible line; 4 px of vertical padding keeps
+     focus rings and the drop "lift" inside the scroll box. */
   .tabs {
+    --fade: 28px;
     display: flex;
     flex: 0 0 auto;
     flex-wrap: nowrap;
     align-items: center;
     gap: 6px;
-    padding: 12px 0 10px;
+    margin: 6px calc(-1 * var(--pad-panel)) 4px;
+    padding: 4px var(--pad-panel);
     overflow-x: auto;
+    overflow-y: hidden;
     scrollbar-width: none;
+    scroll-padding-inline: calc(var(--pad-panel) + var(--fade));
+  }
+  .tabs--fade-start {
+    mask-image: linear-gradient(to right, transparent 0, #000 var(--fade), #000 100%);
+  }
+  .tabs--fade-end {
+    mask-image: linear-gradient(to right, #000 0, #000 calc(100% - var(--fade)), transparent 100%);
+  }
+  .tabs--fade-start.tabs--fade-end {
+    mask-image: linear-gradient(to right, transparent 0, #000 var(--fade), #000 calc(100% - var(--fade)), transparent 100%);
   }
   .tabwrap {
     position: relative;
@@ -333,23 +384,25 @@
     display: inline-flex;
     flex: none;
     align-items: center;
-    gap: 5px;
-    height: 36px;
-    padding: 0 11px;
+    gap: 6px;
+    height: var(--h-md);
+    padding: 0 12px;
     border: 0;
-    border-radius: var(--radius-pill);
+    border-radius: 999px;
     background: var(--color-track);
     color: var(--color-ink-2);
     font: inherit;
-    font-size: 12px;
+    font-size: var(--text-secondary);
     font-weight: 600;
     white-space: nowrap;
-    cursor: pointer;
     transition:
       background-color var(--dur-fast) var(--ease-out-soft),
       color var(--dur-fast) var(--ease-out-soft),
       transform var(--dur-fast) var(--ease-out-soft),
       opacity var(--dur-fast) var(--ease-out-soft);
+  }
+  .pill:has(:global(.ico)) {
+    padding-left: 10px;
   }
   .pill:hover {
     background: var(--color-hover);
@@ -363,14 +416,10 @@
     background: var(--color-ink);
     color: var(--color-paper);
   }
-  .pill:focus-visible {
-    outline: 2px solid var(--color-ink);
-    outline-offset: 2px;
-  }
   .pill:disabled {
     opacity: 0.45;
   }
-  /* Row count — quiet by design: it informs, never competes with the label. */
+  /* Row count — a quieter tone of the same label, tabular. */
   .pill__count {
     color: var(--color-ink-3);
     font-variant-numeric: tabular-nums;
@@ -378,8 +427,7 @@
   }
   .pill--active .pill__count,
   .pill--dropover .pill__count {
-    color: var(--color-paper);
-    opacity: 0.6;
+    color: color-mix(in srgb, var(--color-paper) 62%, transparent);
   }
   /* Drop target while a card is dragged: droppable pills lift slightly; the one under the
      cursor inverts to ink (the monochrome "armed" state). */
@@ -396,26 +444,29 @@
   }
   .pill--add {
     justify-content: center;
-    width: 36px;
+    width: var(--h-md);
     padding: 0;
     color: var(--color-ink-2);
   }
+  .pill--add:has(:global(.ico)) {
+    padding: 0;
+  }
   .pill-input {
-    width: 140px;
-    height: 36px;
-    padding: 0 12px;
+    width: 160px;
+    height: var(--h-md);
+    padding: 0 14px;
     border: 0;
-    border-radius: var(--radius-pill);
+    border-radius: 999px;
     background: var(--color-track);
     color: var(--color-ink);
     font: inherit;
-    font-size: 12px;
+    font-size: var(--text-secondary);
     outline: none;
   }
-  .pill-input:focus-visible,
+  /* Text entry shows its (concentric) ring whenever it has focus. */
   .pill-input:focus {
-    outline: 2px solid var(--color-ink);
-    outline-offset: 2px;
+    outline: var(--focus-ring);
+    outline-offset: var(--focus-offset);
   }
   .pill-input::placeholder {
     color: var(--color-ink-3);
@@ -425,14 +476,9 @@
     flex: none;
     align-items: center;
     gap: 5px;
-    color: var(--color-ink-2);
-    font-size: var(--text-meta);
+    color: var(--color-ink);
+    font-size: var(--text-secondary);
     font-weight: 500;
     white-space: nowrap;
-  }
-  @media (prefers-reduced-motion: reduce) {
-    .pill {
-      transition: none;
-    }
   }
 </style>

@@ -38,6 +38,7 @@
         icon: "trash",
         keys: "Del",
         danger: true,
+        gapBefore: true,
         run: () => void runAction("delete", ids),
       },
     ];
