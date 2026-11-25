@@ -9,6 +9,8 @@
 //   ?mock-size=5000      number of seeded records (default 300)
 //   ?mock-target=chrome|none|elevated   the paste target the shelf "sees" (default chrome)
 //   ?mock-unimpl=ocr,import             make those (W2) command groups reject "unimplemented"
+//   ?mock-position=center|left|right|top|bottom   shelf position the picker mock lays out (W1-E, system.ts)
+//   ?mock-row=1          centre position as a single row (W1-E, system.ts)
 
 export type Unlisten = () => void;
 
