@@ -4,8 +4,9 @@
 //!
 //! In memory only (lives until exit). Items carry a unique `key` — the same record may be in
 //! the stack twice. A record deleted from history is dropped from the stack on the next stack
-//! operation ([`prune`]: `store.get_for_paste` → `not_found`). `snapshot`/`len` never touch the
-//! database (the tray calls them from any thread, the UI thread included).
+//! operation, and right after a hard delete ("Delete recent", "Clear all") ([`prune`]:
+//! `store.get_for_paste` → `not_found`). `snapshot`/`len` never touch the database (the tray
+//! calls them from any thread, the UI thread included).
 
 use super::compose::file_paths;
 use super::flow::{AfterPaste, Origin};
@@ -133,20 +134,26 @@ fn is_not_found(e: &str) -> bool {
 }
 
 /// Drop items whose record was deleted from history (blocking: store reads). Emits if it
-/// changed anything.
+/// changed anything. Called by every stack operation and right after a hard delete — "Delete
+/// recent" from the tray or the settings, "Clear all" — so the previews of deleted records
+/// leave the stack, its popover and the tray count at once (FIX-13).
 pub fn prune(app: &AppHandle) {
-    let ids = STACK.lock().clip_ids();
-    if ids.is_empty() {
-        return;
+    if prune_from(&app.state::<Store>(), &STACK) {
+        emit(app);
     }
-    let store = app.state::<Store>();
+}
+
+/// [`prune`] without the `AppHandle` (unit-tested): `true` if anything was dropped.
+fn prune_from(store: &Store, stack: &Mutex<StackState>) -> bool {
+    let ids = stack.lock().clip_ids();
+    if ids.is_empty() {
+        return false;
+    }
     let gone: Vec<i64> = ids
         .into_iter()
         .filter(|&id| matches!(store.get_for_paste(id), Err(e) if is_not_found(&e)))
         .collect();
-    if !gone.is_empty() && STACK.lock().retain_clips(|id| !gone.contains(&id)) {
-        emit(app);
-    }
+    !gone.is_empty() && stack.lock().retain_clips(|id| !gone.contains(&id))
 }
 
 /// Append a record to the stack — capture's "collect copies" mode calls it after a
@@ -349,6 +356,30 @@ mod tests {
         assert!(s.retain_clips(|id| id != 20));
         assert_eq!(keys(&s), ["s1", "s3"]);
         assert!(!s.retain_clips(|_| true), "nothing changed");
+    }
+
+    /// FIX-13: after "Delete recent" the stack loses the deleted records at once — every item
+    /// of them, the same record twice included — and keeps the rest in order.
+    #[test]
+    fn prune_after_delete_recent_drops_the_deleted_records() {
+        let t = crate::store::testutil::TestStore::new();
+        t.set_now(100 * 60_000);
+        let old = t.add_text("old note", 10 * 60_000);
+        let fresh = t.add_text("password just copied", 99 * 60_000);
+        let stack = Mutex::new(StackState::new());
+        {
+            let mut s = stack.lock();
+            s.push(fresh, Kind::Text, "password just copied".into());
+            s.push(old, Kind::Text, "old note".into());
+            s.push(fresh, Kind::Text, "password just copied".into());
+        }
+        assert!(!prune_from(&t, &stack), "nothing deleted yet");
+        assert_eq!(t.delete_recent(5).unwrap(), 1);
+        assert!(prune_from(&t, &stack));
+        let items = stack.lock().snapshot().items;
+        assert_eq!(items.iter().map(|i| i.clip_id).collect::<Vec<_>>(), vec![old]);
+        assert!(!prune_from(&t, &stack), "idempotent");
+        assert_eq!(stack.lock().len(), 1);
     }
 
     #[test]
