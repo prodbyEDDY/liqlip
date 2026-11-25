@@ -429,9 +429,16 @@ fn backup_item(
 }
 
 /// `backup_import('merge')`: the backup's live records through the shared import loop
-/// (history older than the retention cut-off is left out, as for Liquid Tools), then its
+/// (history older than the retention cut-off is left out, as for Liquid Tools; with
+/// `skip_secrets` = `privacy.secretPatterns`, texts that look like a secret too), then its
 /// snippets (`Store::merge_snippets`). Settings are not touched.
-pub(crate) fn restore_merge(store: &Store, archive: &Path, cutoff: Option<i64>, progress: Progress<'_>) -> Result<ImportReport, String> {
+pub(crate) fn restore_merge(
+    store: &Store,
+    archive: &Path,
+    cutoff: Option<i64>,
+    skip_secrets: bool,
+    progress: Progress<'_>,
+) -> Result<ImportReport, String> {
     let (mut zip, _manifest) = open_archive(archive)?;
     let tmp = TempDir::new("liqlip-merge-")?;
     extract(&mut zip, tmp.path(), progress)?;
@@ -476,7 +483,7 @@ pub(crate) fn restore_merge(store: &Store, archive: &Path, cutoff: Option<i64>, 
     );
     let mut after = (i64::MIN, i64::MIN);
     let dir = tmp.path().to_path_buf();
-    let report = runner::run(store, &folders, total, progress, || -> Result<Option<Page>, String> {
+    let report = runner::run(store, &folders, total, skip_secrets, progress, || -> Result<Option<Page>, String> {
         let rows: Vec<BackupRow> = {
             let mut st = src.prepare_cached(&page_sql).map_err(err)?;
             let rows = st

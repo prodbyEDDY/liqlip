@@ -1,5 +1,6 @@
 //! "Looks like a secret" (SPEC §2.4 item 3, `settings.privacy.secretPatterns`) — owner:
-//! **W1-B**. Pure logic, unit-tested.
+//! **W1-B**. Pure logic, unit-tested. Used by the capture worker and by the import of
+//! Liquid Tools history / backup `merge` (`import::runner`, FIX-01).
 //!
 //! A text is a secret only when the WHOLE text (after trimming) is one such value, so prose
 //! or code that merely mentions a key is still captured:
@@ -17,7 +18,7 @@
 const MAX_SECRET_BYTES: usize = 16 * 1024;
 
 /// True when the whole (trimmed) text is a card number, an API key or a private-key block.
-pub fn looks_like_secret(text: &str) -> bool {
+pub(crate) fn looks_like_secret(text: &str) -> bool {
     let t = text.trim();
     if t.is_empty() || t.len() > MAX_SECRET_BYTES {
         return false;

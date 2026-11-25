@@ -24,7 +24,7 @@ mod imaging;
 #[cfg(windows)]
 mod listener;
 mod pipeline;
-mod secrets;
+pub(crate) mod secrets; // pub(crate): the import applies the same filter (FIX-01)
 mod snapshot;
 mod state;
 #[cfg(windows)]

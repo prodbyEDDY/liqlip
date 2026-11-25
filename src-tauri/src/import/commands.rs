@@ -70,6 +70,11 @@ fn cutoff(app: &AppHandle, store: &Store) -> Option<i64> {
     store.retention_cutoff(settings::get(app).storage.retention)
 }
 
+/// `privacy.secretPatterns`: imports leave out texts that look like a secret (FIX-01).
+fn skip_secrets(app: &AppHandle) -> bool {
+    settings::get(app).privacy.secret_patterns
+}
+
 /// Local date and time (`GetLocalTime`) for the default file name and the zip entries.
 #[cfg(windows)]
 fn local_now() -> (u16, u16, u16, u16, u16, u16) {
@@ -148,7 +153,7 @@ pub async fn import_lt_probe(app: AppHandle) -> Result<ImportProbe, String> {
 pub async fn import_lt_run(app: AppHandle) -> Result<ImportReport, String> {
     let report = blocking(&app, |app, store| {
         let _busy = Busy::take()?;
-        lt::run(store, &lt_db(app)?, cutoff(app, store), &progress(app))
+        lt::run(store, &lt_db(app)?, cutoff(app, store), skip_secrets(app), &progress(app))
     })
     .await?;
     changed(&app, ClipsChange::Added);
@@ -187,7 +192,7 @@ pub async fn backup_import(app: AppHandle, mode: BackupMode) -> Result<ImportRep
         BackupMode::Merge => {
             let report = blocking(&app, move |app, store| {
                 let _busy = Busy::take()?;
-                backup::restore_merge(store, &src, cutoff(app, store), &progress(app))
+                backup::restore_merge(store, &src, cutoff(app, store), skip_secrets(app), &progress(app))
             })
             .await?;
             changed(&app, ClipsChange::Added);
