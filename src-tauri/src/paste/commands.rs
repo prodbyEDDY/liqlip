@@ -38,10 +38,12 @@ pub async fn text_copy(_app: AppHandle, text: String) -> Result<(), String> {
 }
 
 /// The clipboard's current `CF_UNICODETEXT` (`{clipboard}` in snippets), `None` when there is
-/// no text. Coordinator stub for W3 (FIX-09) — W3-A replaces it with a short, retried read.
+/// no text (FIX-09). One short, retried `OpenClipboard` with a deadline (`capture::clipboard_text`);
+/// text with privacy markers is returned too — pasting the snippet is an explicit user action.
+/// `Err("busy: …")` → the shelf falls back to the newest history record.
 #[tauri::command]
 pub async fn clipboard_text(_app: AppHandle) -> Result<Option<String>, String> {
-    Ok(None)
+    blocking(crate::capture::clipboard_text).await
 }
 
 fn payload(app: &AppHandle, id: i64) -> Result<crate::store::PastePayload, String> {
