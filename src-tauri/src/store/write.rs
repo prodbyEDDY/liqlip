@@ -315,6 +315,9 @@ impl Store {
         media::remove_files(&leftovers);
         let out = result?;
         self.wake(Wake::Inserted);
+        if p.kind == Kind::Image {
+            self.ocr_wake(); // W2-A: a new image may be queued for OCR
+        }
         Ok(out)
     }
 
@@ -379,6 +382,9 @@ impl Store {
                     (tx.last_insert_rowid(), true)
                 }
             };
+            if p.kind == Kind::Image {
+                self.ocr_enqueue_in(&tx, id)?; // W2-A: pending while OCR is on
+            }
             if let Some(png) = &p.png {
                 let dest = self.paths().media_png(id);
                 if created || !dest.exists() {
