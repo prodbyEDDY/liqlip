@@ -2,11 +2,12 @@
 //! from `i18n_native`; actions call the module APIs of §15. The menu, icon and tooltip are
 //! rebuilt by [`refresh`] — call it after anything they show changes (pause state, armed
 //! "skip next copy", stack size, language, summon hotkey, taskbar theme or scale); it is
-//! cheap and callable from any thread.
+//! cheap, callable from any thread and never waits (the rebuild runs on the main thread).
 
 use crate::i18n_native::{self, Key, Lang};
 use crate::model::{ChangeOrigin, ClipsChange, ClipsChanged};
 use crate::{capture, events, logx, paste, picker, settings, store};
+use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::image::Image;
 use tauri::menu::{CheckMenuItem, IsMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -81,8 +82,38 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
-/// Rebuild the menu, icon and tooltip from the current state.
+/// A rebuild is queued on the main thread and has not started yet.
+static REFRESH_QUEUED: AtomicBool = AtomicBool::new(false);
+
+/// Claim the one queued rebuild: `false` when one is already waiting (it will read the
+/// newest state when it runs, so a burst of changes rebuilds once).
+fn claim_refresh(queued: &AtomicBool) -> bool {
+    !queued.swap(true, Ordering::AcqRel)
+}
+
+/// Rebuild the menu, icon and tooltip from the current state. Never waits: every tray/menu
+/// call of Tauri round-trips to the main thread and blocks on the answer (`run_main_thread!`,
+/// no timeout), so a caller holding a lock the main thread wants — `settings_set` runs its
+/// subscribers under the settings write lock — would deadlock with it (W3-A). The rebuild
+/// therefore always runs ON the main thread: inline when called there, queued otherwise.
 pub fn refresh(app: &AppHandle) {
+    if !claim_refresh(&REFRESH_QUEUED) {
+        return;
+    }
+    let app2 = app.clone();
+    let queued = app.run_on_main_thread(move || {
+        // Released before reading the state: a change made from now on queues its own rebuild.
+        REFRESH_QUEUED.store(false, Ordering::Release);
+        rebuild(&app2);
+    });
+    if let Err(e) = queued {
+        REFRESH_QUEUED.store(false, Ordering::Release);
+        logx::warn("tray", &format!("refresh: {e}"));
+    }
+}
+
+/// The rebuild itself (main thread).
+fn rebuild(app: &AppHandle) {
     let Some(tray) = app.tray_by_id(TRAY_ID) else { return };
     let state = TrayState::read(app);
     match build_menu(app, &state) {
@@ -391,6 +422,18 @@ fn local_time_label(_unix_ms: i64) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// W3-A: one rebuild is queued at a time; once it starts (and releases the flag) the next
+    /// change queues another one, so no update is lost and a burst rebuilds once.
+    #[test]
+    fn refresh_queues_one_rebuild_at_a_time() {
+        let queued = AtomicBool::new(false);
+        assert!(claim_refresh(&queued), "first change queues a rebuild");
+        assert!(!claim_refresh(&queued), "a change while it waits rides along");
+        assert!(!claim_refresh(&queued));
+        queued.store(false, Ordering::Release); // the rebuild starts on the main thread
+        assert!(claim_refresh(&queued), "a change after that queues the next one");
+    }
 
     #[test]
     fn chord_hint_compacts_spaces() {
