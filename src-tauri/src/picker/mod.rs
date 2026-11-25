@@ -26,8 +26,9 @@ use geometry::{Dock, Mon, Rect};
 use machine::{Config, Effect, Event, Machine, Phase};
 use parking_lot::{Condvar, Mutex};
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{mpsc, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager, PhysicalPosition, PhysicalSize, WebviewWindow, WindowEvent};
 use win::Hwnd;
 
@@ -175,19 +176,6 @@ pub fn show_settings(app: &AppHandle, section: Option<&str>) {
     }
 }
 
-/// For the paste flow with "keep open" (Alt+Enter, W1-C): focus leaves to the target and
-/// must not close the shelf. Call before focusing the target; blocks ≤ 0.5 s.
-#[allow(dead_code)] // W1-C calls it after the merge (reported, not in §15 yet)
-pub fn keep_open_begin(app: &AppHandle) {
-    dispatch_wait(app, Event::KeepOpen(true), Duration::from_millis(500));
-}
-
-/// After a "keep open" paste: give the shelf its focus back (if still open).
-#[allow(dead_code)] // W1-C calls it after the merge (reported, not in §15 yet)
-pub fn keep_open_end(app: &AppHandle) {
-    dispatch(app, Event::KeepOpen(false));
-}
-
 /// Re-send the shelf's layout/open state to a webview that (re)loaded — e.g. a summon in the
 /// first second after launch, before the page subscribed. Wire from `Builder::on_page_load`
 /// (`PageLoadEvent::Finished`), see the W1-D report snippet.
@@ -272,7 +260,7 @@ fn execute(app: &AppHandle, p: &Picker, fx: Effect) -> Option<Event> {
             let fg = win::foreground().filter(|&f| {
                 !ours.is_some_and(|o| f == o.picker || f == o.hud) && !win::is_shell_tray(f)
             });
-            let target = paste::focus::capture_target(app).or_else(|| paste::focus::current_target(app));
+            let target = paste::focus::capture_target(app);
             let mut s = p.state.lock();
             s.restore_to = fg;
             s.target = target;
@@ -393,21 +381,54 @@ fn reassert_geometry(p: &Picker, w: &WebviewWindow) {
     }
 }
 
-/// `Focused(false)` of an interactive shelf: wait out a drag in progress (OLE drag-out of a
-/// card, a window drag), give the activation a moment, then close — unless focus came back
-/// or went to one of our own windows (a dialog of this process, the settings window).
+/// Last time (ms on `clock_ms`) a keepOpen hand-off or a drag-out was seen in progress. A
+/// drag-out runs a modal loop on the main thread, so the `Focused(false)` it causes can be
+/// delivered only after `dragout::active()` is false again — the poll records the window.
+static GUARD_SEEN_MS: AtomicU64 = AtomicU64::new(0);
+const GUARD_TAIL_MS: u64 = 800;
+
+fn clock_ms() -> u64 {
+    static T0: OnceLock<Instant> = OnceLock::new();
+    T0.get_or_init(Instant::now).elapsed().as_millis() as u64 + 1
+}
+
+/// W1-C: `handoff_active` (keepOpen paste moved focus to the target and back) or
+/// `dragout::active` (modal OLE drag). Records the time for `guard_recent`.
+pub(crate) fn guard_now() -> bool {
+    let on = paste::focus::handoff_active() || paste::dragout::active();
+    if on {
+        GUARD_SEEN_MS.store(clock_ms(), Ordering::Relaxed);
+    }
+    on
+}
+
+fn guard_recent() -> bool {
+    let t = GUARD_SEEN_MS.load(Ordering::Relaxed);
+    t != 0 && clock_ms().saturating_sub(t) < GUARD_TAIL_MS
+}
+
+/// `Focused(false)` of an interactive shelf: wait out a hand-off / drag-out / a plain drag
+/// (button held), give the activation a moment, then close — unless focus came back or went
+/// to one of our own windows (a dialog of this process, the settings window). After a
+/// hand-off or a drag-out the shelf is not closed but becomes passive (W1-C contract).
 fn blur_guard(app: &AppHandle) {
     let Some(p) = PICKER.get() else { return };
     {
         let s = p.state.lock();
-        if !matches!(s.m.phase, Phase::Open { interactive: true, .. }) || s.m.keep_open {
+        if !matches!(s.m.phase, Phase::Open { interactive: true, .. }) {
             return;
         }
     }
+    let mut handed_off = guard_now() || guard_recent();
     let app = app.clone();
     std::thread::spawn(move || {
-        let start = std::time::Instant::now();
-        while win::mouse_buttons_down() && start.elapsed() < Duration::from_secs(15) {
+        let start = Instant::now();
+        while start.elapsed() < Duration::from_secs(15) {
+            let guarded = guard_now();
+            handed_off |= guarded;
+            if !guarded && !win::mouse_buttons_down() {
+                break;
+            }
             std::thread::sleep(Duration::from_millis(30));
         }
         // Let a tray-icon click (its own toggle, delivered on the release) land first.
@@ -425,6 +446,8 @@ fn blur_guard(app: &AppHandle) {
         match fg {
             Some(f) if f == picker => {}
             Some(f) if win::is_own_process(f) => {}
+            // After a hand-off/drag the shelf stays, passive (W1-C: "a click activates it").
+            _ if handed_off => dispatch(&app, Event::Deactivated),
             _ => dispatch(&app, Event::Blur),
         }
     });

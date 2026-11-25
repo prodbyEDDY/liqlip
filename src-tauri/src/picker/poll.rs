@@ -97,6 +97,12 @@ fn run(app: &AppHandle) {
                         tick = TICK_NEAR;
                     }
                 }
+                // A drag-out (modal OLE loop) or a keepOpen hand-off owns the mouse/focus.
+                Phase::Open { .. } if super::guard_now() => {
+                    tick = TICK_OPEN;
+                    pending_click = None;
+                    clicks.reset(buttons);
+                }
                 Phase::Open { mode, interactive } => {
                     tick = TICK_OPEN;
                     if clicks.tick(buttons, dock.panel.contains(x, y)) && !on_own_dialog(x, y) {

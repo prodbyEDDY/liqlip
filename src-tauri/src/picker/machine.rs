@@ -77,8 +77,9 @@ pub enum Event {
     Redock,
     /// Result of `ShowActive` / `Activate`.
     Activated(bool),
-    /// Paste with "keep open": focus leaves to the target and comes back — no blur close.
-    KeepOpen(bool),
+    /// Focus left during a keep-open paste hand-off / a drag-out and did not come back: stay
+    /// open, passive (a click activates it again) — no close, no focus restore.
+    Deactivated,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -125,7 +126,6 @@ pub struct Machine {
     pub gen: u64,
     /// Bumped on every entry into `Open` (the poll resets its click tracker).
     pub open_seq: u64,
-    pub keep_open: bool,
     /// `Open` waiting for `Activated` to announce itself.
     awaiting_open: Option<PickerMode>,
     pub last_close: Option<CloseReason>,
@@ -133,7 +133,7 @@ pub struct Machine {
 
 impl Machine {
     pub fn new(cfg: Config) -> Machine {
-        Machine { phase: Phase::Hidden, cfg, gen: 0, open_seq: 0, keep_open: false, awaiting_open: None, last_close: None }
+        Machine { phase: Phase::Hidden, cfg, gen: 0, open_seq: 0, awaiting_open: None, last_close: None }
     }
 
     fn resting(&self) -> Phase {
@@ -161,7 +161,6 @@ impl Machine {
         self.gen += 1;
         self.phase = Phase::Closing;
         self.awaiting_open = None;
-        self.keep_open = false;
         self.last_close = Some(reason);
         let mut fx = Vec::with_capacity(5);
         if restore {
@@ -203,7 +202,11 @@ impl Machine {
                 self.close(CloseReason::CursorLeft, false)
             }
             (Open { .. }, Event::ClickOutside) => self.close(CloseReason::ClickOutside, true),
-            (Open { interactive: true, .. }, Event::Blur) if !self.keep_open => self.close(CloseReason::Blur, false),
+            (Open { interactive: true, .. }, Event::Blur) => self.close(CloseReason::Blur, false),
+            (Open { mode, interactive: true }, Event::Deactivated) => {
+                self.phase = Open { mode, interactive: false };
+                vec![]
+            }
             (Open { mode, interactive: false }, Event::Focused) if self.awaiting_open.is_none() => {
                 self.phase = Open { mode, interactive: true };
                 vec![]
@@ -242,15 +245,6 @@ impl Machine {
                     Some(m) => vec![Effect::EmitOpen { mode: m, interactive: ok }],
                     None => vec![],
                 }
-            }
-
-            (Open { .. }, Event::KeepOpen(on)) => {
-                self.keep_open = on;
-                if on { vec![] } else { vec![Effect::Activate] }
-            }
-            (_, Event::KeepOpen(_)) => {
-                self.keep_open = false;
-                vec![]
             }
 
             (phase, Event::Config(cfg)) => {
@@ -360,13 +354,14 @@ mod tests {
     }
 
     #[test]
-    fn blur_closes_interactive_without_restore_unless_keep_open() {
+    fn blur_closes_interactive_without_restore_but_a_handoff_only_deactivates() {
         let mut m = Machine::new(cfg(Position::Center, false));
         open_summoned(&mut m);
-        assert_eq!(m.on(Event::KeepOpen(true)), vec![]);
-        assert_eq!(m.on(Event::Blur), vec![]);
-        assert_eq!(m.on(Event::KeepOpen(false)), vec![Activate]);
-        m.on(Event::Activated(true));
+        // keepOpen paste / drag-out took focus away and it did not come back.
+        assert_eq!(m.on(Event::Deactivated), vec![]);
+        assert_eq!(m.phase, Phase::Open { mode: PickerMode::Summon, interactive: false });
+        assert_eq!(m.on(Event::Blur), vec![], "passive now");
+        assert_eq!(m.on(Event::Focused), vec![], "a click re-activates");
         let fx = m.on(Event::Blur);
         assert!(!fx.contains(&RestoreFocus));
         assert_eq!(m.last_close, Some(CloseReason::Blur));

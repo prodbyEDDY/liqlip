@@ -35,6 +35,13 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WM_SYSKEYUP, WM_TIMER,
 };
 
+/// Liqlip's own SendInput (W1-C `paste::input::{EXTRA_INFO_TAG, MASK_VK}`): every injected
+/// event carries this `dwExtraInfo` ("LQLP"), and the unassigned VK 0xE8 masks a bare
+/// Alt/Win release. The hook
+/// ignores both — they are neither the user's chords nor physical modifier state.
+const LIQLIP_EXTRA_INFO: usize = 0x4C51_4C50;
+const LIQLIP_MASK_VK: u32 = 0xE8;
+
 /// Doorbell for the registrar / stop request for the hook thread.
 const WM_WAKE: u32 = WM_APP + 0x4C;
 /// `RegisterHotKey` ids: "An application must specify an id value in the range 0x0000
@@ -472,6 +479,10 @@ unsafe extern "system" fn keyboard_proc(code: i32, wparam: WPARAM, lparam: LPARA
     if code == HC_ACTION as i32 {
         // SAFETY: for HC_ACTION, lParam points to a KBDLLHOOKSTRUCT (LowLevelKeyboardProc docs).
         let kb = unsafe { &*(lparam.0 as *const KBDLLHOOKSTRUCT) };
+        if kb.dwExtraInfo == LIQLIP_EXTRA_INFO || kb.vkCode == LIQLIP_MASK_VK {
+            // SAFETY: pass our own synthetic input on unchanged.
+            return unsafe { CallNextHookEx(None, code, wparam, lparam) };
+        }
         let msg = wparam.0 as u32;
         let pressed = msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN;
         let released = msg == WM_KEYUP || msg == WM_SYSKEYUP;

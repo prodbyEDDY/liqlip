@@ -14,7 +14,7 @@ mod combo;
 #[cfg(windows)]
 mod native;
 
-use crate::model::{HotkeySettings, HudKind, PasteReason, PasteResult, SettingsError, SettingsErrorCode};
+use crate::model::{HotkeySettings, HudKind, SettingsError, SettingsErrorCode};
 use crate::{capture, events, logx, paste, picker};
 use parking_lot::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -115,15 +115,13 @@ fn start_dispatcher(app: &AppHandle) {
 fn run_action(app: &AppHandle, action: HotkeyAction) {
     match action {
         HotkeyAction::Summon => picker::summon(app),
-        HotkeyAction::StackNext => match paste::stack::paste_next(app) {
-            // The HUD is the only feedback on this path (no shelf). paste_next may show it
-            // too; a repeated show of the same kind only extends it.
-            Ok(o) if o.result == PasteResult::Failed && o.reason == Some(PasteReason::StackEmpty) => {
-                picker::hud::show(app, HudKind::StackEmpty, None);
+        // Blocking (≤ ~1.6 s) — this is the action's own thread. On the hotkey path
+        // paste_next itself shows the HUD for an empty stack / focus_lost / elevated (W1-C).
+        HotkeyAction::StackNext => {
+            if let Err(e) = paste::stack::paste_next(app) {
+                logx::warn("hotkeys", &format!("stack next: {e}"));
             }
-            Ok(_) => {}
-            Err(e) => logx::warn("hotkeys", &format!("stack next: {e}")),
-        },
+        }
         HotkeyAction::PauseToggle => match capture::toggle_pause(app) {
             Ok(st) => {
                 let kind = if st.paused_until.is_some() { HudKind::Paused } else { HudKind::Resumed };
