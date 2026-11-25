@@ -359,10 +359,11 @@ fn read_snapshot<C: ClipboardApi + ?Sized>(
     p.put(|r| r.markers_checked = true);
 
     // 4. Content, only what is stored, by priority.
-    if has(CF_HDROP) || api.available(CF_HDROP) {
-        if !cfg.types.file {
-            return ReadStatus::Skipped(SkipReason::TypeDisabled);
-        }
+    // "Files" off and the copy carries files: only real text is still stored (Total Commander
+    // puts the paths as text too) — no image; a files-only copy stays skipped (W4, FIX-11).
+    let has_files = has(CF_HDROP) || api.available(CF_HDROP);
+    let files_off = has_files && !cfg.types.file;
+    if has_files && !files_off {
         if !p.phase() {
             return ReadStatus::Cancelled;
         }
@@ -389,7 +390,7 @@ fn read_snapshot<C: ClipboardApi + ?Sized>(
         (CF_DIBV5, ImageSource::Dib, dib_ok(CF_DIBV5)),
         (CF_DIB, ImageSource::Dib, dib_ok(CF_DIB) || has(CF_BITMAP)),
     ];
-    let image_wanted = cfg.types.image && candidates.iter().any(|c| c.2);
+    let image_wanted = !files_off && cfg.types.image && candidates.iter().any(|c| c.2);
 
     let mut text_ok = false;
     let has_text = has(CF_UNICODETEXT) || has(CF_TEXT) || has(CF_OEMTEXT) || api.available(CF_UNICODETEXT);
@@ -413,6 +414,9 @@ fn read_snapshot<C: ClipboardApi + ?Sized>(
                 });
             }
         }
+    }
+    if files_off && !text_ok {
+        return ReadStatus::Skipped(SkipReason::TypeDisabled);
     }
     // HTML goes with text (rich copy) and with an image (browser "Copy image": `<img>` +
     // SourceURL); RTF only with text.
@@ -873,6 +877,46 @@ mod tests {
         assert_eq!(f.paths, vec!["C:\\a.txt", "C:\\B"]);
         assert_eq!(f.drop_effect, 2);
         assert!(r.text.is_none(), "text is not read when files are present");
+    }
+
+    /// W4, FIX-11: with the "Files" type off, a copy that carries files AND real text (Total
+    /// Commander, some editors) is stored as that text; a files-only copy is still skipped,
+    /// and the files are never read.
+    #[test]
+    fn files_off_keeps_the_text_of_a_files_copy() {
+        let mut c = (*cfg()).clone();
+        c.types.file = false;
+        let c = Arc::new(c);
+        let paths = Some(vec!["C:\\a.txt".to_string(), "C:\\B".to_string()]);
+        let cb = FakeClipboard::new();
+        cb.set(
+            vec![
+                (IDS.drop_effect, 1u32.to_le_bytes().to_vec()),
+                (CF_UNICODETEXT, utf16z("C:\\a.txt\r\nC:\\B")),
+                (IDS.html, b"Version:0.9\r\n<p>C:\\a.txt</p>".to_vec()),
+            ],
+            paths.clone(),
+            owner("c:\\apps\\totalcmd64.exe"),
+        );
+        let r = snapshot(snap(&cb, &c));
+        assert!(r.files.is_none());
+        assert_eq!(r.text.as_deref(), Some("C:\\a.txt\r\nC:\\B"));
+        assert!(r.html.is_some(), "a text record keeps its rich formats");
+        assert_eq!(cb.take_reads(), vec![CF_UNICODETEXT, IDS.html], "CF_HDROP is never read");
+
+        // Files only (Explorer): skipped as before, nothing read.
+        cb.set(vec![(IDS.drop_effect, 1u32.to_le_bytes().to_vec())], paths.clone(), owner("c:\\windows\\explorer.exe"));
+        assert_eq!(skipped(snap(&cb, &c)), SkipReason::TypeDisabled);
+        assert!(cb.take_reads().is_empty());
+
+        // Blank text is not real text; an image next to the files is not taken either.
+        cb.set(vec![(CF_UNICODETEXT, utf16z(" \r\n"))], paths.clone(), None);
+        assert_eq!(skipped(snap(&cb, &c)), SkipReason::TypeDisabled);
+        let png = super::super::imaging::encode_png(1, 1, &[1, 2, 3, 255]).unwrap();
+        cb.take_reads();
+        cb.set(vec![(IDS.png, png)], paths, None);
+        assert_eq!(skipped(snap(&cb, &c)), SkipReason::TypeDisabled);
+        assert!(cb.take_reads().is_empty(), "the image is not read");
     }
 
     #[test]
