@@ -97,4 +97,16 @@ windows = { version = "0.62", features = [
     "Win32_UI_HiDpi",
     # W1-D: QueryDisplayConfig / DisplayConfigGetDeviceInfo (monitor friendly names).
     "Win32_Devices_Display",
+    # W2-A OCR: Windows.Media.Ocr (OcrEngine/OcrResult/OcrLine), SoftwareBitmap +
+    # BitmapPixelFormat (Graphics_Imaging), DataWriter → IBuffer for
+    # SoftwareBitmap::CreateCopyFromBuffer (Storage_Streams), Language for the recognizer
+    # language (Globalization; also gates OcrEngine's language members), and
+    # RoInitialize/RoUninitialize for the worker threads (Win32_System_WinRT). Foundation is
+    # implied by the WinRT namespaces; SetThreadPriority comes from Win32_System_Threading.
+    "Foundation",
+    "Media_Ocr",
+    "Graphics_Imaging",
+    "Storage_Streams",
+    "Globalization",
+    "Win32_System_WinRT",
 ] }

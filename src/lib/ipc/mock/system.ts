@@ -9,10 +9,14 @@
 // `clip_paste`/`text_paste` emit `picker:close`; Alt+V in the tab toggles the shelf like the
 // global hotkey. Layout = `settings.picker.position/centerRow`, overridable per tab with
 // `?mock-position=center|left|right|top|bottom` and `?mock-row=1` (centre "one row").
+//
+// OCR (W2-A): a mock queue over the seeded images (see the OCR block below);
+// `?mock-ocr=nolang` plays a PC without OCR language packs.
 import type {
   AppMeta,
   BackupMode,
   CaptureStatus,
+  ClipsChanged,
   ImportProbe,
   ImportProgress,
   ImportReport,
@@ -191,6 +195,132 @@ function progress<T>(event: string, total: number, make: (done: number) => T, on
 
 const IMPORT_REPORT: ImportReport = { imported: 1187, skipped: 53, folders: 3, errors: 0 };
 
+// OCR (W2-A) — mirrors src-tauri/src/ocr (ARCHITECTURE §5a): the queue is the `pending`
+// images; "recognising" one takes OCR_STEP_MS, writes `done` + text and emits
+// `clips:changed { origin: 'user', change: 'updated', ids }`; a reindex sends
+// `ocr:progress` from {0, total} to done == total ({0, 0} without images) and is never
+// doubled; OCR turned off stops the queue (texts stay). `?mock-ocr=nolang` plays a PC
+// without OCR language packs (`available: false`, reindex/recognition → "failed").
+
+const OCR_LANGUAGES = ["en-US", "ru-RU"];
+const OCR_STEP_MS = flags.latency ? 160 : 1;
+/** Deterministic "recognised" texts for seeded images; some images have no text (""). */
+const OCR_SAMPLES = [
+  "Total due: $1,240.00\nInvoice #2026-118\nPay by 30 Nov 2026",
+  "Ошибка 0x80070005: отказано в доступе\nПовторите попытку или обратитесь к администратору",
+  "Build succeeded · 0 warnings · 12.4 s",
+  "",
+  "Meeting notes — Q4 roadmap\nShip OCR search · Import from Liquid Tools · Installer",
+  "Пароль Wi-Fi гостевой сети: см. на ресепшене\nЭтаж 3, переговорная «Север»",
+  "",
+  "SELECT id, title FROM clips WHERE kind = 'image' ORDER BY copied_at DESC;",
+];
+
+const ocrNoLang = urlParam("mock-ocr") === "nolang";
+let ocrReindex: { done: number; total: number } | null = null;
+let ocrTimer: ReturnType<typeof setTimeout> | undefined;
+
+const liveImages = () => db().clips.filter((c) => c.kind === "image" && c.deletedAt === null);
+const ocrPending = () => liveImages().filter((c) => c.ocr === "pending").length;
+const ocrSample = (id: number) => OCR_SAMPLES[id % OCR_SAMPLES.length];
+
+function emitOcrChanged(ids: number[]): void {
+  mockEmit<ClipsChanged>("clips:changed", { origin: "user", change: "updated", ids });
+}
+
+/** One queue step: the newest pending image becomes `done`; reindex progress follows. */
+function ocrStep(): void {
+  ocrTimer = undefined;
+  if (!currentSettings().ocr.enabled || ocrNoLang) return; // stopped; resumes on settings:changed
+  const next = liveImages()
+    .filter((c) => c.ocr === "pending")
+    .sort((a, b) => b.copiedAt - a.copiedAt || b.id - a.id)[0];
+  if (next) {
+    next.ocr = "done";
+    next.ocrText = next.ocrText ?? ocrSample(next.id);
+    emitOcrChanged([next.id]);
+  }
+  if (ocrReindex) {
+    const remaining = ocrPending();
+    if (next) ocrReindex.done += 1;
+    ocrReindex.total = Math.max(ocrReindex.total, ocrReindex.done + remaining);
+    if (remaining === 0) {
+      mockEmit<OcrProgress>("ocr:progress", { done: ocrReindex.total, total: ocrReindex.total });
+      ocrReindex = null;
+    } else {
+      mockEmit<OcrProgress>("ocr:progress", { ...ocrReindex });
+    }
+  }
+  if (ocrPending() > 0) ocrTimer = setTimeout(ocrStep, OCR_STEP_MS);
+}
+
+function ocrPump(): void {
+  if (ocrTimer === undefined && ocrPending() > 0 && currentSettings().ocr.enabled && !ocrNoLang) {
+    ocrTimer = setTimeout(ocrStep, OCR_STEP_MS);
+  }
+}
+
+let ocrListening = false;
+function ocrListen(): void {
+  if (ocrListening) return;
+  ocrListening = true;
+  // OCR turned back on → never-queued images join the queue and it resumes (Rust: catch-up).
+  let enabled = currentSettings().ocr.enabled;
+  mockListen<Settings>("settings:changed", (s) => {
+    if (s.ocr.enabled && !enabled) {
+      for (const c of liveImages()) if (c.ocr === "none") c.ocr = "pending";
+      ocrPump();
+    }
+    enabled = s.ocr.enabled;
+  });
+}
+
+function ocrStatus(): OcrStatus {
+  guard("ocr", "ocr_status");
+  ocrListen();
+  ocrPump();
+  return ocrNoLang ? { available: false, languages: [], pending: ocrPending() } : { available: true, languages: [...OCR_LANGUAGES], pending: ocrPending() };
+}
+
+function ocrReindexCmd(): void {
+  guard("ocr", "ocr_reindex");
+  ocrListen();
+  if (!currentSettings().ocr.enabled) throw fail("invalid", "text recognition is turned off");
+  if (ocrReindex) {
+    mockEmit<OcrProgress>("ocr:progress", { ...ocrReindex });
+    return;
+  }
+  if (ocrNoLang) throw fail("failed", "no OCR language is installed");
+  for (const c of liveImages()) c.ocr = "pending";
+  const total = ocrPending();
+  if (total === 0) {
+    mockEmit<OcrProgress>("ocr:progress", { done: 0, total: 0 });
+    return;
+  }
+  ocrReindex = { done: 0, total };
+  mockEmit<OcrProgress>("ocr:progress", { done: 0, total });
+  clearTimeout(ocrTimer);
+  ocrTimer = setTimeout(ocrStep, OCR_STEP_MS);
+}
+
+async function clipOcr({ id }: Args): Promise<string> {
+  guard("ocr", "clip_ocr");
+  const find = () => db().clips.find((x) => x.id === id && x.deletedAt === null);
+  const c = find();
+  if (!c) throw fail("not_found", `clip ${String(id)}`);
+  if (c.kind !== "image") throw fail("invalid", `clip ${String(id)} is not an image`);
+  if (c.ocr === "done" && c.ocrText !== null) return c.ocrText;
+  if (!currentSettings().ocr.enabled) throw fail("invalid", "text recognition is turned off");
+  if (ocrNoLang) throw fail("failed", "no OCR language is installed");
+  // Recognised "now", outside the queue (the real one takes ~0.1–2 s).
+  if (flags.latency) await new Promise((r) => setTimeout(r, 350));
+  if (!find()) throw fail("not_found", `clip ${String(id)}`); // deleted meanwhile → dropped
+  c.ocr = "done";
+  c.ocrText = c.ocrText ?? ocrSample(c.id);
+  emitOcrChanged([c.id]);
+  return c.ocrText;
+}
+
 // ── router table ─────────────────────────────────────────────────────────────
 
 export const systemHandlers: Record<string, (args: Args) => unknown> = {
@@ -238,22 +368,9 @@ export const systemHandlers: Record<string, (args: Args) => unknown> = {
   open_path: () => undefined,
   pick_exe: () => "C:\\Program Files\\Example App\\example.exe",
 
-  ocr_status: (): OcrStatus => {
-    guard("ocr", "ocr_status");
-    return { available: true, languages: ["en-US", "ru-RU"], pending: 0 };
-  },
-  ocr_reindex: () => {
-    guard("ocr", "ocr_reindex");
-    const total = db().clips.filter((c) => c.kind === "image" && c.deletedAt === null).length;
-    progress<OcrProgress>("ocr:progress", Math.max(1, total), (done) => ({ done, total: Math.max(1, total) }), () => {});
-  },
-  clip_ocr: ({ id }) => {
-    guard("ocr", "clip_ocr");
-    const c = db().clips.find((x) => x.id === id && x.deletedAt === null);
-    if (!c) throw fail("not_found", `clip ${String(id)}`);
-    if (c.kind !== "image") throw fail("invalid", "not an image");
-    return c.ocrText ?? "";
-  },
+  ocr_status: ocrStatus,
+  ocr_reindex: ocrReindexCmd,
+  clip_ocr: clipOcr,
 
   import_lt_probe: (): ImportProbe => {
     guard("import", "import_lt_probe");

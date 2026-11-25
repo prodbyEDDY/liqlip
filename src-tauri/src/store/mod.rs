@@ -20,10 +20,11 @@ mod folders;
 mod lifecycle;
 mod maint;
 mod media;
+pub(crate) mod ocr; // W2-A: OCR queue (ARCHITECTURE §5a)
 mod schema;
 mod snippets;
 #[cfg(test)]
-mod testutil;
+pub(crate) mod testutil; // pub(crate): the OCR worker tests (W2-A) reuse the harness
 mod write;
 
 use crate::model::{ClipMeta, Format, Kind};
@@ -147,6 +148,8 @@ pub struct Store {
     undo: Mutex<lifecycle::UndoBook>,
     /// Wake-up channel of the background thread (set by [`init`]; `None` in tests).
     maint: Mutex<Option<mpsc::Sender<maint::Wake>>>,
+    /// W2-A: queue new images for OCR + wake the recognizer (`store/ocr.rs`).
+    ocr: ocr::OcrHook,
 }
 
 impl Store {
@@ -167,6 +170,7 @@ impl Store {
             clock,
             undo: Mutex::new(lifecycle::UndoBook::default()),
             maint: Mutex::new(None),
+            ocr: ocr::OcrHook::default(),
         })
     }
 
