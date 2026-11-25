@@ -1448,8 +1448,21 @@ export interface ImportReport { imported: number; skipped: number; folders: numb
 `lib.rs:198–226`); в WebView2 адрес `http://liq.localhost/<path>`:
 `/thumb/<id>?v=<n>` · `/media/<id>?v=<n>` · `/icon/<appId>?v=<n>` (версия у всех трёх — W1-A: после
 пересоздания базы id могут совпасть, и без версии WebView2 показал бы чужую картинку из кэша) —
-чтение файла в `spawn_blocking`,
-`Cache-Control: immutable` (версия в query), 404 для отсутствующих.
+чтение файла в `spawn_blocking`, 404 для отсутствующих.
+
+**Кэш** (W4, FIX-14; `store::cache_control(path)`, тест): `/thumb` и `/media` — `Cache-Control:
+no-store`: это содержимое буфера, и превью удалённой (в том числе «Удалить недавнее», приватной)
+картинки не должно оседать в дисковом HTTP-кэше WebView2 (`%LOCALAPPDATA%\com.liqlip.app\EBWebView`).
+`/icon` — `public, max-age=31536000, immutable` (иконки приложений — не содержимое, версия в query);
+всё неизвестное — `no-store`. Лишних запросов это не добавляет: в пределах страницы Chromium
+переиспользует уже загруженную картинку, а сетка шелфа виртуализирована (в DOM только экран ± 300 px),
+и карточка, пересозданная при прокрутке назад, получает новый `<img>` с тем же URL. Проверено в Chromium
+156 (встроенный браузер, тот же движок Blink, что у WebView2) на тестовом сервере с `no-store`: 300
+разных картинок загружены, удалены из DOM, через 5 с созданы снова — 0 повторных запросов, все `<img>`
+`complete` сразу (HTML: «list of available images» — переиспользование в документе, даже когда HTTP
+кэшировать не разрешает). Заново картинка запрашивается только новой страницей (перезагрузка окна) —
+это и есть цель `no-store`. Id записей не переиспользуются (`AUTOINCREMENT`), так что удалённую картинку
+в памяти страницы новая запись не «унаследует».
 
 ### 9.9. Уточнения контракта (W0, 2026-11-26)
 
@@ -1713,6 +1726,7 @@ impl Store {
 }
 pub fn init(app: &AppHandle);                                // фон: ретенция, чистка, subscribe(storage.*)
 pub fn serve_uri(app: &AppHandle, path: &str) -> Option<(String /*mime*/, Vec<u8>)>; // схема liq, §9.8
+pub fn cache_control(path: &str) -> &'static str;            // её Cache-Control, §9.8 (W4, FIX-14)
 
 pub struct NewClip {            // всё уже посчитано захватом
     kind: Kind, hash: String /*content::*hash*/, preview: String /*content::make_preview*/,
