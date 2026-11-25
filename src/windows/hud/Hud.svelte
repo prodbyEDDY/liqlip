@@ -71,7 +71,7 @@
     overflow: hidden;
     user-select: none;
   }
-  /* The window is larger than the capsule (picker/geometry.rs HUD_SIZE 400×112): the
+  /* The window is larger than the capsule (picker/geometry.rs HUD_SIZE 440×112): the
      transparent margin (36 px above/below, ≥ 32 px at the sides) holds --shadow-pop, so the
      shadow is never cut by the window edge. The capsule is 40 px tall, centred; its icon
      circle (32 px) and a trailing keycap (24 px) are inset so they stay concentric with the

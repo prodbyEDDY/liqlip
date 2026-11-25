@@ -1022,8 +1022,8 @@ SetWindowPos», [SetWindowLongPtrW](https://learn.microsoft.com/windows/win32/ap
 SWP_NOACTIVATE)` и прячется `ShowWindow(SW_HIDE)`; tao `show()` не вызывается (`ShowWindow(SW_SHOW)`
 «Activates the window»). tao считает HUD скрытым — согласованно: флаги tao после создания не
 трогаются. Позиция (`hud_rect`): капсула по центру под курсором (над ним у нижнего края), в `rcWork`
-монитора курсора; окно 400×112 логических (прозрачное поле под `--shadow-pop`; `lib.rs` создаёт
-320×56 — размер задаётся при каждом показе). Порядок: `hud:show` → позиция/размер → показ без
+монитора курсора; окно 440×112 логических (W2-F: длинные русские фразы с сочетанием) (прозрачное поле под `--shadow-pop`; `lib.rs` создаёт
+440×112 = `HUD_SIZE`, размер задаётся и при каждом показе). Порядок: `hud:show` → позиция/размер → показ без
 активации → перепроверка геометрии; автоскрытие через 1.66 с после последнего показа (фронт начинает
 выход на 1.4 с); повторный показ того же тоста только продлевает его. Кто показывает: вставка —
 `copied` (focus_lost/нет цели) и `elevated`; очередь на пути хоткея — `stack_empty`; хоткеи паузы и
@@ -1296,7 +1296,7 @@ export interface ImportReport { imported: number; skipped: number; folders: numb
 | `settings:changed` ⚑ | `Settings` | settings → все |
 | `settings:navigate` | `{ section: string }` | picker (`settings_open`) → settings |
 | `hotkeys:captured` | `{ combo: string }` | hotkeys → settings |
-| `hud:show` | `{ kind: 'copied'\|'stack_empty'\|'paused'\|'elevated'\|'resumed'\|'skip_next'; text?: string }` (`resumed`/`skip_next` — W1-D, аддитивно) | picker/paste/hotkeys → hud |
+| `hud:show` | `{ kind: 'copied'\|'stack_empty'\|'paused'\|'elevated'\|'resumed'\|'skip_next'; text?: string }` (`resumed`/`skip_next` — W1-D, аддитивно; `text` — подпись чипа сочетания `{keys}`, напр. «Shift+Insert», W2-F; нет — «Ctrl+V») | picker/paste/hotkeys → hud |
 | `ocr:progress` | `{ done: number; total: number }` | ocr → settings |
 | `import:progress` | `{ phase: string; done: number; total: number }` | import → settings |
 | `theme://changed` ⚑ | `'light'\|'dark'` | theme → все |
@@ -1608,6 +1608,7 @@ pub fn pause(app: &AppHandle, minutes: Option<i64>) -> Result<CaptureStatus, Str
 pub fn resume(app: &AppHandle) -> Result<CaptureStatus, String>;  // ← трей
 pub fn toggle_pause(app: &AppHandle) -> Result<CaptureStatus, String>; // ← хоткей PauseToggle
 pub fn ignore_next(app: &AppHandle) -> Result<CaptureStatus, String>;  // ← трей, хоткей IgnoreNext
+pub fn cancel_ignore_next(app: &AppHandle) -> Result<CaptureStatus, String>; // ← трей: повторный клик по отмеченному пункту (W2-F)
 pub fn app_icon_data_url(exe: &str) -> Option<String>;           // ← paste (TargetInfo.iconUrl); не блокирует: промах → None + фоновое извлечение
 pub mod classify { pub fn classify_text(text: &str) -> (Kind, ClipMeta); }   // ← store
 // добавлено W1-B (аддитивно):

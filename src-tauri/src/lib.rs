@@ -247,7 +247,7 @@ fn build_windows(app: &AppHandle, current: &model::Settings) -> tauri::Result<()
         .resizable(false)
         .focusable(false)
         .visible(false)
-        .inner_size(400.0, 112.0) // W1-D: HUD capsule + shadow bleed
+        .inner_size(440.0, 112.0) // = picker::geometry::HUD_SIZE: HUD capsule + shadow bleed
         .build()?;
     hud.set_ignore_cursor_events(true)?;
 

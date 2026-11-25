@@ -23,7 +23,7 @@ pub const DWELL_MS: u64 = 200;
 
 /// HUD window (logical px). Larger than the capsule: the transparent margin holds
 /// `--shadow-pop` (0 12px 38px) without clipping; the capsule is centred in it.
-pub const HUD_SIZE: (f64, f64) = (400.0, 112.0);
+pub const HUD_SIZE: (f64, f64) = (440.0, 112.0); // fits "Окно администратора — нажмите Ctrl+Shift+V" (W2-F)
 /// Capsule height in `src/windows/hud/Hud.svelte` (logical px).
 const HUD_CAPSULE_H: f64 = 40.0;
 /// Gap between the cursor hotspot and the capsule (logical px).
@@ -494,7 +494,7 @@ mod tests {
         let work = Rect::new(0, 0, 1920, 1032);
         let r = hud_rect((960, 500), work, 1.0);
         // Capsule (40 px, centred in 112) starts 18 px under the hotspot.
-        assert_eq!(r, Rect::new(960 - 200, 500 + 18 - 36, 400, 112));
+        assert_eq!(r, Rect::new(960 - 220, 500 + 18 - 36, 440, 112));
         // Near the bottom → the capsule ends 18 px above the cursor.
         let r = hud_rect((960, 1020), work, 1.0);
         assert_eq!(r.bottom - 36, 1020 - 18);
@@ -503,7 +503,7 @@ mod tests {
         // Another monitor at 150 %.
         let w2 = Rect::new(1920, 0, 3840, 2088);
         let r = hud_rect((5700, 100), w2, 1.5);
-        assert_eq!((r.width(), r.height()), (600, 168));
+        assert_eq!((r.width(), r.height()), (660, 168));
         assert_eq!(r.right, 1920 + 3840);
         assert_eq!(r.top, 100 + 27 - 54);
     }
