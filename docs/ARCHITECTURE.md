@@ -1248,7 +1248,7 @@ pub fn pause(app: &AppHandle, minutes: Option<i64>) -> Result<CaptureStatus, Str
 pub fn resume(app: &AppHandle) -> Result<CaptureStatus, String>;  // ← трей
 pub fn toggle_pause(app: &AppHandle) -> Result<CaptureStatus, String>; // ← хоткей PauseToggle
 pub fn ignore_next(app: &AppHandle) -> Result<CaptureStatus, String>;  // ← трей, хоткей IgnoreNext
-pub fn app_icon_data_url(exe: &str) -> Option<String>;           // ← paste (TargetInfo.iconUrl), apps_running
+pub fn app_icon_data_url(exe: &str) -> Option<String>;           // ← paste (TargetInfo.iconUrl); не блокирует: промах → None + фоновое извлечение
 pub mod classify { pub fn classify_text(text: &str) -> (Kind, ClipMeta); }   // ← store
 // добавлено W1-B (аддитивно):
 pub fn stop();                                                     // ← lib.rs RunEvent::Exit: снять listener, остановить потоки
