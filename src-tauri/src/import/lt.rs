@@ -18,7 +18,8 @@
 //! `created_at` = `copied_at`, `source_app` (an exe file stem) → app `<stem>.exe`, icons from
 //! `app_icon` data URLs (Liquid Tools stores them on screenshot rows), `html` (raw CF_HTML
 //! with header) → the HTML format without header + `SourceURL`. Texts that look like a
-//! secret are left out when `privacy.secretPatterns` is on (`runner`, FIX-01).
+//! secret are left out when `privacy.secretPatterns` is on (`runner`, FIX-01), and so are
+//! records copied from an app on `privacy.ignoredApps` (W3).
 
 use super::runner::{self, Page, Progress, PAGE};
 use super::tmp::TempDir;
@@ -550,12 +551,14 @@ pub(crate) fn probe(db: &Path, cutoff: Option<i64>) -> Result<ImportProbe, Strin
     Ok(ImportProbe { found, path: found.then(|| db.to_string_lossy().into_owned()), clips, favorites, folders })
 }
 
-/// `import_lt_run`. `skip_secrets` = `settings.privacy.secretPatterns` (see `runner`).
+/// `import_lt_run`. `skip_secrets` = `settings.privacy.secretPatterns`, `ignored_apps` =
+/// `settings.privacy.ignoredApps` (see `runner`).
 pub(crate) fn run(
     store: &Store,
     db: &Path,
     cutoff: Option<i64>,
     skip_secrets: bool,
+    ignored_apps: &[String],
     progress: Progress<'_>,
 ) -> Result<ImportReport, String> {
     if !db.is_file() {
@@ -568,7 +571,7 @@ pub(crate) fn run(
     let favs = lt.favorite_ranks(cutoff)?;
     let icons = lt.app_icons();
     let mut after = (i64::MIN, i64::MIN);
-    runner::run(store, &folders, total, skip_secrets, progress, || -> Result<Option<Page>, String> {
+    runner::run(store, &folders, total, skip_secrets, ignored_apps, progress, || -> Result<Option<Page>, String> {
         let rows = lt.page(cutoff, after)?;
         let Some(last) = rows.last() else { return Ok(None) };
         after = (last.ts, last.id);

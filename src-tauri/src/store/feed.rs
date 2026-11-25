@@ -23,6 +23,11 @@ pub(crate) const PAGE_DEFAULT: i64 = 40;
 pub(crate) const PAGE_MAX: i64 = 200;
 /// At most this many search / exclusion terms are used.
 const TERMS_MAX: usize = 32;
+/// A term is cut to this many characters: a whole document pasted into the search box would
+/// otherwise become an FTS phrase of millions of trigrams, holding the store lock (and
+/// with it capture and paste) for seconds. The cut term still matches every record that
+/// contains the full one.
+const TERM_MAX_CHARS: usize = 256;
 /// Trigram tokenizer: shorter substrings never match (fts5.html §4.3.5).
 const TRIGRAM_MIN_CHARS: usize = 3;
 /// Total time `clip_detail` spends checking file paths.
@@ -182,13 +187,15 @@ impl Cursor {
 }
 
 /// Split free text into search terms: whitespace separates, `"…"` keeps a phrase (an
-/// unclosed quote runs to the end). Blank terms dropped, duplicates (case-insensitive)
-/// dropped, at most [`TERMS_MAX`].
+/// unclosed quote runs to the end). Control characters count as spaces (a NUL would end an
+/// FTS5 string early — "unterminated string"). Blank terms dropped, duplicates
+/// (case-insensitive) dropped, at most [`TERMS_MAX`], each cut to [`TERM_MAX_CHARS`].
 pub(crate) fn parse_terms(s: &str) -> Vec<String> {
     let mut raw: Vec<String> = Vec::new();
     let mut cur = String::new();
     let mut quoted = false;
     for ch in s.chars() {
+        let ch = if ch.is_control() { ' ' } else { ch };
         if ch == '"' {
             raw.push(std::mem::take(&mut cur));
             quoted = !quoted;
@@ -199,9 +206,30 @@ pub(crate) fn parse_terms(s: &str) -> Vec<String> {
         }
     }
     raw.push(cur);
+    finish_terms(raw)
+}
+
+/// Exclusions (`FeedQuery.exclude`): each entry is ONE word or phrase — the shelf sends
+/// `-"two words"` as the entry `two words` — so it is kept whole (surrounding quotes and
+/// control characters dropped), never re-split into words that would each exclude.
+pub(crate) fn exclude_terms(entries: &[String]) -> Vec<String> {
+    let raw = entries.iter().map(|e| {
+        let e: String = e.chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
+        e.trim().trim_matches('"').to_string()
+    });
+    finish_terms(raw)
+}
+
+fn finish_terms(raw: impl IntoIterator<Item = String>) -> Vec<String> {
     let mut seen = std::collections::HashSet::new();
     raw.into_iter()
-        .map(|t| t.trim().to_string())
+        .map(|t| {
+            let t = t.trim();
+            match t.char_indices().nth(TERM_MAX_CHARS) {
+                Some((cut, _)) => t[..cut].trim_end().to_string(),
+                None => t.to_string(),
+            }
+        })
         .filter(|t| !t.is_empty() && seen.insert(t.to_lowercase()))
         .take(TERMS_MAX)
         .collect()
@@ -268,8 +296,7 @@ pub(crate) fn build_feed(q: &FeedQuery, order: Order, cursor: Option<&Cursor>, f
         p.push(Value::Text(t.clone()));
         p.push(Value::Text(t));
     }
-    let excluded: Vec<String> = parse_terms(&q.exclude.join(" "));
-    let (ex_long, ex_short) = split_terms(excluded);
+    let (ex_long, ex_short) = split_terms(exclude_terms(&q.exclude));
     if !ex_long.is_empty() {
         w.push("c.id NOT IN (SELECT rowid FROM clips_fts WHERE clips_fts MATCH ?)".into());
         p.push(Value::Text(ex_long.iter().map(|t| fts_quote(t)).collect::<Vec<_>>().join(" OR ")));
@@ -642,8 +669,76 @@ mod tests {
         assert_eq!(all, sorted, "search keeps the feed order");
     }
 
+    /// W3: the shelf sends `-"two words"` as ONE exclude entry; it excludes the phrase, not
+    /// every record that has either word (the mock always worked this way).
+    #[test]
+    fn an_excluded_phrase_is_one_term() {
+        let t = TestStore::new();
+        let phrase = t.add_text("draft report for Monday", 1_000);
+        let draft = t.add_text("draft only", 2_000);
+        let report = t.add_text("report only", 3_000);
+        let mut query = q("");
+        query.exclude = vec!["draft report".into()];
+        let mut got = ids(&t.clips_list(&query, false).unwrap());
+        got.sort();
+        assert_eq!(got, vec![draft, report]);
+        // Quoted entries and short phrases too.
+        query.exclude = vec!["\"only\"".into()];
+        assert_eq!(ids(&t.clips_list(&query, false).unwrap()), vec![phrase]);
+        query.exclude = vec!["y q".into()];
+        assert_eq!(ids(&t.clips_list(&query, false).unwrap()).len(), 3, "\"y q\" is in none of them (\"y\" alone is)");
+    }
+
+    /// W3: no character a user can type or paste makes the search fail — FTS5 syntax, quotes,
+    /// SQL wildcards, control characters (a NUL used to end the FTS string: "unterminated
+    /// string"), lone surrogates are impossible in Rust strings, emoji, combining marks.
+    #[test]
+    fn search_never_fails_on_special_characters() {
+        let t = TestStore::new();
+        let hit = t.add_text("price: 100% * 2 = \"ok\" (NEAR) AND [x]{y} ^z -w 'q' \\path\\ ё́ 🙂 a\u{0}b", 1_000);
+        t.add_text("plain", 2_000);
+        t.snippet_save(&SnippetInput { id: None, name: "s".into(), body: "100% AND".into(), keyword: None }).unwrap();
+        let hostile = [
+            "\"", "\"\"", "\"\"\"", "\" OR \"", "*", "**", "^", "-", "--", ":", "col:", "NEAR(", "NEAR(a b, 2)", "AND",
+            "OR NOT", "(", ")", "()", "{", "}", "[", "]", "%", "_", "%_%", "'", "''", "\\", "\\\\", ";", "--;", "\u{0}",
+            "a\u{0}b", "abc\u{0}def", "\u{1}\u{2}\u{1f}", "\t\r\n", "\u{7f}", "\u{200b}\u{200b}\u{200b}", "🙂🙂🙂", "ё́",
+            "\u{feff}abc", "x\"y\"z", "\"unclosed", "a\"", "0x00", "%00", "NULL", "' OR 1=1 --",
+        ];
+        for h in hostile {
+            let mut query = q(h);
+            assert!(t.clips_list(&query, false).is_ok(), "text {h:?}");
+            query.text = String::new();
+            query.exclude = vec![h.to_string()];
+            assert!(t.clips_list(&query, false).is_ok(), "exclude {h:?}");
+            assert!(t.snippets_list(h).is_ok(), "snippets {h:?}");
+        }
+        // The special characters are searched literally.
+        for needle in ["100%", "* 2", "\"ok\"", "(NEAR)", "[x]{y}", "\\path\\", "🙂", "a\u{0}b"] {
+            assert_eq!(ids(&t.clips_list(&q(needle), false).unwrap()), vec![hit], "{needle:?}");
+        }
+    }
+
+    /// W3: a pasted wall of text is cut to the first 256 characters per term — it still finds
+    /// the record and does not hold the store lock for seconds.
+    #[test]
+    fn a_huge_search_term_is_cut() {
+        let t = TestStore::new();
+        let body: String = (0..20_000).map(|i| char::from(b'a' + (i % 26) as u8)).collect();
+        let id = t.add_text(&body, 1_000);
+        t.add_text("other", 2_000);
+        let started = std::time::Instant::now();
+        assert_eq!(ids(&t.clips_list(&q(&body), false).unwrap()), vec![id]);
+        assert!(started.elapsed() < Duration::from_secs(5), "{:?}", started.elapsed());
+        let terms = parse_terms(&body);
+        assert_eq!(terms[0].chars().count(), TERM_MAX_CHARS);
+        assert_eq!(exclude_terms(&[body.clone()])[0].chars().count(), TERM_MAX_CHARS);
+    }
+
     #[test]
     fn parse_terms_rules() {
+        assert_eq!(parse_terms("a\u{0}b c"), vec!["a", "b", "c"], "control characters separate");
+        assert_eq!(parse_terms("\"x\u{0}y\""), vec!["x y"]);
+        assert_eq!(exclude_terms(&["  \"two words\" ".into(), "Two Words".into(), "".into()]), vec!["two words"]);
         assert_eq!(parse_terms("  a  b\tc "), vec!["a", "b", "c"]);
         assert_eq!(parse_terms("\"one two\" three"), vec!["one two", "three"]);
         assert_eq!(parse_terms("x \"open quote"), vec!["x", "open quote"]);
@@ -815,7 +910,7 @@ mod plans {
             ("retention oldest", plan(&t, RETENTION_OLDEST_SQL, &[Value::Integer(500)]), "COVERING INDEX idx_clips_history"),
             ("retention totals", plan(&t, RETENTION_TOTALS_SQL, &[]), "COVERING INDEX idx_clips_history"),
             ("purge", plan(&t, PURGE_SQL, &[Value::Integer(5), Value::Integer(500)]), "idx_clips_deleted (deleted_at<?)"),
-            ("delete recent", plan(&t, RECENT_SQL, &[Value::Integer(5)]), "idx_clips_deleted"),
+            ("delete recent", plan(&t, RECENT_SQL, &[Value::Integer(5), Value::Integer(500)]), "idx_clips_deleted"),
             ("hash lookup", plan(&t, "SELECT id FROM clips WHERE hash = ?1", &[Value::Text("x".into())]), "sqlite_autoindex_clips"),
         ];
         for (name, p, needle) in &cases {

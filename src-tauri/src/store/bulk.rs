@@ -26,6 +26,73 @@ use std::time::Duration;
 pub(crate) const SCHEMA_VERSION: i64 = schema::VERSION;
 /// Prefix of the directory the current data is moved into by a `replace` restore.
 pub(crate) const ASIDE_PREFIX: &str = "backup-before-restore-";
+/// Written (with the aside directory's name) before a `replace` restore moves anything and
+/// removed when it has finished or rolled back: found at start-up, it means the process died
+/// mid-swap, and [`recover_interrupted_restore`] puts the previous data back (W3).
+pub(crate) const RESTORE_MARKER: &str = "restore.pending";
+/// Prefix of the restore staging folder inside the data directory (`import::backup`).
+pub(crate) const STAGING_PREFIX: &str = "restore-staging-";
+
+/// The live files a `replace` restore swaps, by name: the database trio, then the media.
+fn live_entries(p: &media::Paths) -> [(PathBuf, &'static str); 5] {
+    [
+        (p.db.clone(), "liqlip.db"),
+        (p.wal(), "liqlip.db-wal"),
+        (p.data.join("liqlip.db-shm"), "liqlip.db-shm"),
+        (p.media.clone(), "media"),
+        (p.icons.clone(), "icons"),
+    ]
+}
+
+/// Start-up (`Store::open`, before the database is opened): finish what a `replace` restore
+/// interrupted by a crash or power loss left behind. With [`RESTORE_MARKER`] present, every
+/// entry already moved into the aside folder goes back to its place (the database with its
+/// own `-wal`/`-shm` — a restored database's sidecars are dropped — then `media`, `icons`),
+/// the marker and the emptied folder are removed. Without it nothing is touched. Leftover
+/// staging folders (only ever useful during a restore) are removed either way. A failed
+/// move keeps the marker, so the next start tries again; the data stays in the aside folder.
+pub(crate) fn recover_interrupted_restore(p: &media::Paths) {
+    if let Ok(rd) = std::fs::read_dir(&p.data) {
+        for e in rd.flatten() {
+            if e.file_name().to_string_lossy().starts_with(STAGING_PREFIX) {
+                remove_path(&e.path());
+            }
+        }
+    }
+    let marker = p.data.join(RESTORE_MARKER);
+    let Ok(raw) = std::fs::read_to_string(&marker) else { return };
+    let name = raw.trim();
+    let aside = p.data.join(name);
+    if !name.starts_with(ASIDE_PREFIX) || name.contains(['\\', '/']) || !aside.is_dir() {
+        let _ = std::fs::remove_file(&marker); // nothing was moved yet (or a foreign file)
+        return;
+    }
+    logx::warn("store", "an interrupted restore was found; putting the previous data back");
+    let live = live_entries(p);
+    let db_aside = aside.join("liqlip.db").exists();
+    let mut ok = true;
+    for (i, (path, entry)) in live.iter().enumerate() {
+        let from = aside.join(entry);
+        let in_db_group = i < 3;
+        if from.exists() || (in_db_group && db_aside) {
+            if path.exists() {
+                remove_path(path);
+            }
+        }
+        if from.exists() {
+            if let Err(e) = rename_retry(&from, path) {
+                logx::warn("store", &format!("restore recovery: {entry}: {e}"));
+                ok = false;
+            }
+        }
+    }
+    if ok {
+        let _ = std::fs::remove_file(&marker);
+        if let Err(e) = std::fs::remove_dir(&aside) {
+            logx::warn("store", &format!("restore recovery: aside folder kept: {e}"));
+        }
+    }
+}
 
 /// One record of an import source (Liquid Tools, a `.liqlip` backup), hashed and measured
 /// with the same `content.rs` functions as a capture.
@@ -174,6 +241,7 @@ fn normalize(mut item: ImportItem, now: i64) -> Result<Ready, String> {
                 c.preview = file_name(&paths[0]).to_string();
             }
             c.preview = content::make_preview(c.preview.trim());
+            c.meta.dir = content::file_dir(&paths[0]); // FIX-08, same rule as the capture insert
             c.text = Some(paths.join("\n"));
             c.file_count = Some(paths.len() as i64);
             let blob = FilesBlob { drop_effect: if f.drop_effect == 0 { 1 } else { f.drop_effect }, paths };
@@ -220,6 +288,14 @@ fn normalize(mut item: ImportItem, now: i64) -> Result<Ready, String> {
     item.title = item.title.as_deref().map(|t| truncate_chars(&no_controls(t), TITLE_MAX_CHARS)).filter(|t| !t.is_empty());
     item.copy_count = item.copy_count.max(1);
     item.use_count = item.use_count.max(0);
+    // Only images have an OCR state, and only the four known values (a backup is input).
+    let image = item.clip.kind == Kind::Image;
+    if !image || !(super::ocr::STATE_NONE..=super::ocr::STATE_ERROR).contains(&item.ocr_state) {
+        item.ocr_state = super::ocr::STATE_NONE;
+    }
+    if !image {
+        item.ocr_text = None;
+    }
     item.app_icon = item.app_icon.filter(|b| is_png(b) && b.len() <= 1024 * 1024);
     Ok(Ready { item, files_blob, staged_png: None, staged_thumb: None })
 }
@@ -245,6 +321,15 @@ fn remove_path(p: &Path) {
             logx::warn("store", &format!("restore: remove failed: {e}"));
         }
     }
+}
+
+/// Write `bytes` and flush them to the disk before returning (the marker must survive the
+/// very power loss it is there for).
+fn write_durable(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut f = std::fs::File::create(path)?;
+    f.write_all(bytes)?;
+    f.sync_all()
 }
 
 impl Store {
@@ -669,14 +754,10 @@ impl Store {
         let now = self.now();
         let p = &self.paths;
         let shm = p.data.join("liqlip.db-shm");
-        let live: [(PathBuf, &str); 5] = [
-            (p.db.clone(), "liqlip.db"),
-            (p.wal(), "liqlip.db-wal"),
-            (shm.clone(), "liqlip.db-shm"),
-            (p.media.clone(), "media"),
-            (p.icons.clone(), "icons"),
-        ];
-        let aside = p.data.join(format!("{ASIDE_PREFIX}{now}"));
+        let live = live_entries(p);
+        let aside_name = format!("{ASIDE_PREFIX}{now}");
+        let aside = p.data.join(&aside_name);
+        let marker = p.data.join(RESTORE_MARKER);
         let mut conn = self.lock();
         // Close the live connection (checkpoints and removes -wal/-shm) behind a placeholder.
         let placeholder = Connection::open_in_memory().map_err(db_err)?;
@@ -689,6 +770,8 @@ impl Store {
         let mut moved_in: Vec<PathBuf> = Vec::new();
         let attempt = (|| -> Result<Connection, String> {
             std::fs::create_dir_all(&aside).map_err(|e| format!("failed: create {}: {e}", aside.display()))?;
+            // Before anything moves: a crash from here on is undone at the next start.
+            write_durable(&marker, aside_name.as_bytes()).map_err(|e| format!("failed: write {RESTORE_MARKER}: {e}"))?;
             for (path, name) in &live {
                 if path.exists() {
                     let to = aside.join(name);
@@ -722,6 +805,9 @@ impl Store {
         match attempt {
             Ok(new) => {
                 *conn = new;
+                // Ids taken before now name records of the old database (OCR jobs, store/ocr.rs).
+                self.generation.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let _ = std::fs::remove_file(&marker);
                 drop(conn);
                 *self.undo.lock() = UndoBook::default();
                 // Keep only the newest copy of the replaced data.
@@ -765,10 +851,12 @@ impl Store {
                 match (restore_err, schema::open_or_recover(p, now)) {
                     (None, Ok(old)) => {
                         *conn = old;
+                        let _ = std::fs::remove_file(&marker);
                         let _ = std::fs::remove_dir_all(&aside);
                         Err(e)
                     }
                     (why, reopen) => {
+                        // The marker stays: the next start retries moving the data back.
                         if let Ok(c) = reopen {
                             *conn = c;
                         }
@@ -1199,5 +1287,94 @@ mod tests {
         let token = t.clear(ClearScope::History).unwrap().unwrap();
         t.replace_with(&staging, n).unwrap();
         assert!(t.undo(&token).unwrap().is_none());
+    }
+
+    /// W3: a `replace` restore cut short by a crash (simulated by a panic at each step) is
+    /// undone at the next start — the previous data comes back from the aside folder.
+    #[test]
+    fn interrupted_restore_is_undone_at_the_next_start() {
+        for step in ["aside", "moved", "opened"] {
+            let t = TestStore::new();
+            let old = t.add_text("precious", 1_000);
+            let img = t.add_image(30, 30, 2_000, true);
+            let (staging, n) = staging_from(&t, &["intruder"]);
+            std::fs::create_dir_all(t.dir().join(format!("{STAGING_PREFIX}9"))).unwrap();
+            let crashed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _ = t.replace_with_hook(&staging, n, &|s| if s == step { panic!("power loss at {s}") } else { Ok(()) });
+            }));
+            assert!(crashed.is_err(), "{step}");
+            assert!(t.dir().join(RESTORE_MARKER).exists(), "{step}: the marker survives the crash");
+            let t = t.reopen();
+            assert_eq!(row::<String>(&t, "SELECT text FROM clips WHERE id = ?1", old), "precious", "{step}");
+            assert_eq!(t.counts().unwrap().all, 2, "{step}: no restored record left");
+            assert!(t.paths().media_png(img).exists(), "{step}: media back");
+            assert!(!t.dir().join(RESTORE_MARKER).exists(), "{step}");
+            let leftovers: Vec<String> = std::fs::read_dir(t.dir())
+                .unwrap()
+                .flatten()
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .filter(|n| n.starts_with(ASIDE_PREFIX) || n.starts_with(STAGING_PREFIX))
+                .collect();
+            assert!(leftovers.is_empty(), "{step}: {leftovers:?}");
+            t.add_text("still writable", 3_000);
+        }
+    }
+
+    /// Without the marker nothing is touched: an older aside copy is not "restored".
+    #[test]
+    fn recovery_without_a_marker_keeps_the_current_data() {
+        let t = TestStore::new();
+        t.add_text("current", 1_000);
+        let (staging, n) = staging_from(&t, &["restored"]);
+        t.replace_with(&staging, n).unwrap();
+        assert!(!t.dir().join(RESTORE_MARKER).exists(), "removed after a successful restore");
+        let t = t.reopen();
+        let texts: Vec<String> = {
+            let c = t.lock();
+            let mut st = c.prepare("SELECT text FROM clips WHERE kind = 'text'").unwrap();
+            st.query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect()
+        };
+        assert_eq!(texts, vec!["restored"]);
+        // A stale marker naming nothing usable is just dropped.
+        let t = t.close();
+        std::fs::write(t.dir().join(RESTORE_MARKER), "..\\elsewhere").unwrap();
+        let t = t.open();
+        assert!(!t.dir().join(RESTORE_MARKER).exists());
+        assert_eq!(t.counts().unwrap().all, 2);
+    }
+
+    /// W3: a successful swap bumps the generation (ids taken before name other records).
+    #[test]
+    fn replace_bumps_the_generation_only_on_success() {
+        let t = TestStore::new();
+        t.add_text("x", 1_000);
+        let g = t.generation();
+        let (staging, n) = staging_from(&t, &["y"]);
+        assert!(t.replace_with(&staging, n + 1).is_err());
+        assert_eq!(t.generation(), g, "a rolled-back restore keeps the old database");
+        let (staging, n) = staging_from(&t, &["z"]);
+        t.replace_with(&staging, n).unwrap();
+        assert_eq!(t.generation(), g + 1);
+    }
+
+    /// FIX-08 on import; a backup's OCR state is input — clamped, images only.
+    #[test]
+    fn import_fills_the_file_folder_and_clamps_ocr_state() {
+        let t = TestStore::new();
+        let mut session = ImportSession::default();
+        let mut files = item(files_clip(&["D:\\Work\\Q3\\plan.xlsx", "D:\\Work\\Q3\\notes.txt"], 1_000));
+        files.ocr_state = 2;
+        files.ocr_text = Some("not an image".into());
+        let mut img = item(image_clip(12, 12, 2_000, false));
+        img.ocr_state = 9;
+        t.import_batch(vec![files, img], &mut session).unwrap();
+        let (meta, st, ot): (String, i64, Option<String>) = t
+            .lock()
+            .query_row("SELECT meta, ocr_state, ocr_text FROM clips WHERE kind = 'file'", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap();
+        assert!(meta.contains(r#""dir":"D:\\Work\\Q3""#), "{meta}");
+        assert_eq!((st, ot), (0, None));
+        let st: i64 = t.lock().query_row("SELECT ocr_state FROM clips WHERE kind = 'image'", [], |r| r.get(0)).unwrap();
+        assert_eq!(st, 0, "unknown OCR state → none (the catch-up queues it)");
     }
 }

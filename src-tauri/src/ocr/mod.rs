@@ -234,7 +234,7 @@ where
     if let Err(e) = &outcome {
         logx::warn("ocr", &format!("clip {id} (direct) failed after {ms} ms: {}", e.chars().take(120).collect::<String>()));
     }
-    match store.ocr_finish(id, outcome.as_deref().map_err(|_| ()), OcrWrite::Direct) {
+    match store.ocr_finish_job(&job, outcome.as_deref().map_err(|_| ()), OcrWrite::Direct) {
         Ok(true) => sink.changed(vec![id]),
         Ok(false) => return Err(format!("not_found: clip {id}")),
         Err(e) => logx::warn("ocr", &format!("clip {id} (direct) write: {e}")),

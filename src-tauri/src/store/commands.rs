@@ -41,6 +41,14 @@ fn changed(app: &AppHandle, change: ClipsChange, ids: Option<Vec<i64>>) {
     events::clips_changed(app, &ClipsChanged { origin: ChangeOrigin::User, change, ids });
 }
 
+/// After a hard delete (delete recent, clear all): drop paste-stack items of records that are
+/// gone right away, so their previews do not linger in memory, in the stack popover or in
+/// the tray count until the stack is next touched (W3). Blocking store reads → its own task.
+fn prune_stack(app: &AppHandle) {
+    let app = app.clone();
+    drop(tauri::async_runtime::spawn_blocking(move || crate::paste::stack::prune(&app)));
+}
+
 /// One page of the feed (filters, free text, opaque cursor).
 #[tauri::command]
 pub async fn clips_list(app: AppHandle, q: FeedQuery) -> Result<Page, String> {
@@ -142,6 +150,7 @@ pub async fn clips_delete_recent(app: AppHandle, minutes: i64) -> Result<i64, St
     let n = ids.len() as i64;
     if n > 0 {
         changed(&app, ClipsChange::Deleted, Some(ids));
+        prune_stack(&app);
     }
     Ok(n)
 }
@@ -151,6 +160,9 @@ pub async fn clips_delete_recent(app: AppHandle, minutes: i64) -> Result<i64, St
 pub async fn clips_clear(app: AppHandle, scope: ClearScope) -> Result<ClearResult, String> {
     let undo_token = blocking(&app, move |s| s.clear(scope)).await?;
     changed(&app, ClipsChange::Reset, None);
+    if scope == ClearScope::All {
+        prune_stack(&app);
+    }
     Ok(ClearResult { undo_token })
 }
 

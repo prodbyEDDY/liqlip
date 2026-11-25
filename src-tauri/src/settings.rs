@@ -11,7 +11,7 @@ use crate::model::{
     Retention, Settings, SettingsError, SettingsErrorCode, SettingsResult, StackSettings,
     StorageSettings, ThemePref, WindowSettings,
 };
-use crate::{autostart, events, fsx, i18n_native, logx, theme};
+use crate::{autostart, events, i18n_native, logx, theme};
 use parking_lot::{Mutex, RwLock};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -96,11 +96,16 @@ impl SettingsStore {
     /// file itself is only rewritten on the next change.
     pub fn load(data_dir: &Path) -> SettingsStore {
         let path = data_dir.join(FILE);
-        let settings = match std::fs::read(&path) {
+        let settings = match read_retrying(&path) {
             Ok(raw) => {
                 let (s, clean) = parse_lenient(&raw);
                 if !clean {
                     logx::warn("settings", "settings.json had invalid fields; defaults used for them");
+                    // The next change rewrites the file from what was understood: keep the
+                    // original for the user (one copy, overwritten next time).
+                    if let Err(e) = std::fs::write(data_dir.join(INVALID_COPY), &raw) {
+                        logx::warn("settings", &format!("keeping a copy of settings.json failed: {e}"));
+                    }
                 }
                 s
             }
@@ -123,8 +128,40 @@ impl SettingsStore {
             std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
         }
         let json = serde_json::to_vec_pretty(s).map_err(|e| e.to_string())?;
-        fsx::write_atomic(&self.path, &json)
+        write_durable(&self.path, &json)
     }
+}
+
+/// A copy of a `settings.json` that did not fully parse, kept before it is rewritten.
+const INVALID_COPY: &str = "settings.json.invalid";
+
+/// Read the file, retrying a transient failure (an antivirus or a sync tool holding it) a
+/// few times: giving up too early would start on the defaults and the next change would
+/// overwrite the user's real file with them. `NotFound` is final at once.
+fn read_retrying(path: &Path) -> std::io::Result<Vec<u8>> {
+    let mut last = None;
+    for delay in [0u64, 50, 150, 300] {
+        std::thread::sleep(std::time::Duration::from_millis(delay));
+        match std::fs::read(path) {
+            Ok(raw) => return Ok(raw),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Err(e),
+            Err(e) => last = Some(e),
+        }
+    }
+    Err(last.unwrap_or_else(|| std::io::Error::other("read failed")))
+}
+
+/// Atomic AND durable replace (W3): `<file>.tmp` is written and flushed to the disk
+/// (`sync_all` → FlushFileBuffers) before it is renamed over the target. Without the flush, a
+/// power loss right after the rename can leave an empty `settings.json` — every setting,
+/// the user's ignored apps included, would silently fall back to the defaults.
+fn write_durable(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    use std::io::Write;
+    let tmp = path.with_extension("json.tmp");
+    let mut f = std::fs::File::create(&tmp).map_err(|e| e.to_string())?;
+    f.write_all(bytes).and_then(|_| f.sync_all()).map_err(|e| e.to_string())?;
+    drop(f);
+    std::fs::rename(&tmp, path).map_err(|e| e.to_string())
 }
 
 /// Current settings (a clone; cheap — read lock only).
@@ -536,6 +573,30 @@ mod tests {
         let fields: Vec<_> = errors.iter().map(|e| e.field.as_str()).collect();
         assert_eq!(fields, vec!["storage.maxSizeMb", "privacy.ignoredApps"]);
         assert!(errors.iter().all(|e| e.code == SettingsErrorCode::Invalid));
+    }
+
+    /// W3: the save is atomic and durable (no temp file left), and a file that did not fully
+    /// parse is kept as `settings.json.invalid` before the next change rewrites it.
+    #[test]
+    fn save_is_durable_and_a_broken_file_is_kept() {
+        let dir = std::env::temp_dir().join(format!("liqlip-settings-test-{}-{:?}", std::process::id(), std::thread::current().id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = SettingsStore::load(&dir);
+        assert_eq!(*store.current.read(), Settings::default(), "no file → defaults");
+        assert!(!dir.join(INVALID_COPY).exists());
+        let mut s = Settings::default();
+        s.privacy.ignored_apps.push("vault.exe".into());
+        store.save(&s).unwrap();
+        assert!(!dir.join("settings.json.tmp").exists(), "no temp file left");
+        assert_eq!(SettingsStore::load(&dir).current.read().privacy.ignored_apps, s.privacy.ignored_apps);
+        assert!(!dir.join(INVALID_COPY).exists(), "a clean file is not copied");
+        std::fs::write(dir.join(FILE), br#"{"privacy": {"ignoredApps": "oops"}, "picker": {"hints": false}}"#).unwrap();
+        let loaded = SettingsStore::load(&dir);
+        assert!(!loaded.current.read().picker.hints, "valid fields are kept");
+        assert_eq!(std::fs::read(dir.join(INVALID_COPY)).unwrap(), std::fs::read(dir.join(FILE)).unwrap());
+        assert!(read_retrying(&dir.join("missing.json")).unwrap_err().kind() == std::io::ErrorKind::NotFound);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

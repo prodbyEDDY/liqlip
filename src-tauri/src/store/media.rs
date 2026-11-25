@@ -230,20 +230,17 @@ impl Store {
         let (what, id) = (parts.next()?, parts.next()?);
         let id: i64 = id.trim_end_matches('/').parse().ok().filter(|id: &i64| *id > 0)?;
         let png = |bytes: Vec<u8>| Some(("image/png".to_string(), bytes));
+        let live_image = || -> Option<bool> {
+            let conn = self.lock();
+            let found = conn
+                .query_row("SELECT 1 FROM clips WHERE id = ?1 AND kind = 'image' AND deleted_at IS NULL", [id], |_| Ok(()))
+                .optional()
+                .ok()?;
+            Some(found.is_some())
+        };
         match what {
             "thumb" => {
-                let is_image = {
-                    let conn = self.lock();
-                    conn.query_row(
-                        "SELECT 1 FROM clips WHERE id = ?1 AND kind = 'image' AND deleted_at IS NULL",
-                        [id],
-                        |_| Ok(()),
-                    )
-                    .optional()
-                    .ok()?
-                    .is_some()
-                };
-                if !is_image {
+                if !live_image()? {
                     return None;
                 }
                 let thumb = self.paths().thumb_png(id);
@@ -256,6 +253,12 @@ impl Store {
                     Ok(bytes) => {
                         if let Err(e) = fsx::write_atomic(&thumb, &bytes) {
                             logx::warn("store", &format!("thumbnail {id}: write failed: {e}"));
+                        }
+                        // Deleted while the thumbnail was being built (e.g. "delete recent"):
+                        // its files are already gone — don't leave this one behind (W3).
+                        if live_image() != Some(true) {
+                            remove_files(&[thumb]);
+                            return None;
                         }
                         png(bytes)
                     }

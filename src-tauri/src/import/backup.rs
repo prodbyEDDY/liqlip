@@ -13,7 +13,7 @@
 use super::runner::{self, Page, Progress, PAGE};
 use super::tmp::TempDir;
 use crate::model::{ClipMeta, ImportReport, Kind};
-use crate::store::bulk::{parse_files_blob, ImportItem, SnippetRow, SCHEMA_VERSION};
+use crate::store::bulk::{parse_files_blob, ImportItem, SnippetRow, SCHEMA_VERSION, STAGING_PREFIX};
 use crate::store::{ClipFiles, NewClip, SourceApp, Store};
 use rusqlite::{Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
@@ -26,8 +26,6 @@ use zip::{CompressionMethod, ZipArchive, ZipWriter};
 
 pub(crate) const FORMAT: &str = "liqlip-backup";
 pub(crate) const FORMAT_VERSION: u32 = 1;
-/// Prefix of the restore staging folder inside the data directory.
-const STAGING_PREFIX: &str = "restore-staging-";
 /// `manifest.json` / `settings.json` larger than this are not read.
 const JSON_MAX: u64 = 4 * 1024 * 1024;
 /// A media / icon entry larger than this is refused.
@@ -287,9 +285,28 @@ fn check_db(db: &Path) -> Result<(i64, i64, i64), String> {
     let all = count(&c, "SELECT count(*) FROM clips").map_err(|_| damaged())?;
     let live = count(&c, "SELECT count(*) FROM clips WHERE deleted_at IS NULL").map_err(|_| damaged())?;
     let folders = count(&c, "SELECT count(*) FROM folders").map_err(|_| damaged())?;
-    // The other tables a restore relies on.
-    for t in ["apps", "clip_formats", "snippets"] {
-        count(&c, &format!("SELECT count(*) FROM {t}")).map_err(|_| damaged())?;
+    // Ours in shape, not just in version (W3): every column the store reads, the search
+    // indexes and their triggers. A foreign file with `user_version = 1` would otherwise
+    // replace the database and leave the app failing on every query.
+    for sql in [
+        "SELECT id, kind, title, preview, text, hash, size, char_count, word_count, line_count, width, height,
+           file_count, app_id, created_at, copied_at, copy_count, used_at, use_count, favorite, fav_order,
+           folder_id, deleted_at, ocr_text, ocr_state, meta FROM clips LIMIT 0",
+        "SELECT id, exe, name, icon_path FROM apps LIMIT 0",
+        "SELECT id, name, position, created_at FROM folders LIMIT 0",
+        "SELECT clip_id, format, data, path, size FROM clip_formats LIMIT 0",
+        "SELECT id, name, body, keyword, position, created_at, updated_at, use_count FROM snippets LIMIT 0",
+    ] {
+        c.prepare(sql).map_err(|_| damaged())?;
+    }
+    let search = count(
+        &c,
+        "SELECT count(*) FROM sqlite_schema WHERE name IN ('clips_fts', 'snippets_fts', 'clips_fts_ai',
+           'clips_fts_ad', 'clips_fts_au', 'snippets_fts_ai', 'snippets_fts_ad', 'snippets_fts_au')",
+    )
+    .map_err(|_| damaged())?;
+    if search != 8 {
+        return Err(damaged());
     }
     Ok((all, live, folders))
 }
@@ -430,13 +447,15 @@ fn backup_item(
 
 /// `backup_import('merge')`: the backup's live records through the shared import loop
 /// (history older than the retention cut-off is left out, as for Liquid Tools; with
-/// `skip_secrets` = `privacy.secretPatterns`, texts that look like a secret too), then its
+/// `skip_secrets` = `privacy.secretPatterns`, texts that look like a secret too; records from
+/// `ignored_apps` = `privacy.ignoredApps` too), then its
 /// snippets (`Store::merge_snippets`). Settings are not touched.
 pub(crate) fn restore_merge(
     store: &Store,
     archive: &Path,
     cutoff: Option<i64>,
     skip_secrets: bool,
+    ignored_apps: &[String],
     progress: Progress<'_>,
 ) -> Result<ImportReport, String> {
     let (mut zip, _manifest) = open_archive(archive)?;
@@ -483,7 +502,7 @@ pub(crate) fn restore_merge(
     );
     let mut after = (i64::MIN, i64::MIN);
     let dir = tmp.path().to_path_buf();
-    let report = runner::run(store, &folders, total, skip_secrets, progress, || -> Result<Option<Page>, String> {
+    let report = runner::run(store, &folders, total, skip_secrets, ignored_apps, progress, || -> Result<Option<Page>, String> {
         let rows: Vec<BackupRow> = {
             let mut st = src.prepare_cached(&page_sql).map_err(err)?;
             let rows = st

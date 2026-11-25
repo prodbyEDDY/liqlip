@@ -225,7 +225,7 @@ fn lt_import_maps_everything_and_reimport_adds_nothing() {
     let phases = std::sync::Mutex::new(Vec::<(String, i64, i64)>::new());
     let record = |p: &str, d: i64, t: i64| phases.lock().unwrap().push((p.to_string(), d, t));
     let s = &kit.store;
-    let r = lt::run(s, &fx.db, kit.cutoff(), true, &record).unwrap();
+    let r = lt::run(s, &fx.db, kit.cutoff(), true, &[], &record).unwrap();
     assert_eq!((r.imported, r.skipped, r.folders, r.errors), (16, 1, 5, 2), "{r:?}");
     let phases = phases.into_inner().unwrap();
     assert_eq!(phases.first().map(|p| p.0.as_str()), Some("folders"));
@@ -315,7 +315,7 @@ fn lt_import_maps_everything_and_reimport_adds_nothing() {
 
     // Re-import: nothing new, nothing bumped.
     let copied_before: i64 = kit.one("SELECT sum(copied_at) FROM clips", []);
-    let r2 = lt::run(s, &fx.db, kit.cutoff(), true, &quiet()).unwrap();
+    let r2 = lt::run(s, &fx.db, kit.cutoff(), true, &[], &quiet()).unwrap();
     assert_eq!((r2.imported, r2.skipped, r2.folders, r2.errors), (0, 17, 0, 2), "{r2:?}");
     assert_eq!(kit.one::<i64>("SELECT sum(copied_at) FROM clips", []), copied_before);
     assert_eq!(kit.one::<i64>("SELECT copy_count FROM clips WHERE id = ?1", [hello]), 2);
@@ -338,7 +338,7 @@ fn lt_running_with_a_pending_write_is_read_without_touching_it() {
     let before = fingerprint(fx.dir.path());
     let p = lt::probe(&fx.db, kit.cutoff()).unwrap();
     assert_eq!(p.clips, 19, "only committed rows");
-    let r = lt::run(&kit.store, &fx.db, kit.cutoff(), true, &quiet()).unwrap();
+    let r = lt::run(&kit.store, &fx.db, kit.cutoff(), true, &[], &quiet()).unwrap();
     assert_eq!(r.imported, 16);
     assert_eq!(fingerprint(fx.dir.path()), before, "the writer's files are untouched");
     writer.execute_batch("ROLLBACK;").unwrap();
@@ -357,7 +357,7 @@ fn lt_wal_database_with_an_open_writer() {
     assert!(dir.path().join("clipboard.db-wal").exists());
     let before = fingerprint(dir.path());
     assert_eq!(lt::probe(&db, kit.cutoff()).unwrap().clips, 1);
-    let r = lt::run(&kit.store, &db, kit.cutoff(), true, &quiet()).unwrap();
+    let r = lt::run(&kit.store, &db, kit.cutoff(), true, &[], &quiet()).unwrap();
     assert_eq!(r.imported, 1);
     assert_eq!(fingerprint(dir.path()), before, "no -shm written, nothing checkpointed");
     drop(writer);
@@ -373,7 +373,7 @@ fn lt_bad_files_give_clear_errors() {
     let other = dir.path().join("other.db");
     Connection::open(&other).unwrap().execute_batch("CREATE TABLE t (x); INSERT INTO t VALUES (1);").unwrap();
     assert_eq!(lt::probe(&other, None).unwrap_err(), "invalid: unknown Liquid Tools database format");
-    assert!(lt::run(&kit.store, &dir.path().join("missing.db"), None, true, &quiet()).unwrap_err().starts_with("not_found:"));
+    assert!(lt::run(&kit.store, &dir.path().join("missing.db"), None, true, &[], &quiet()).unwrap_err().starts_with("not_found:"));
     // An old Liquid Tools database without the additive columns still imports.
     let old = dir.path().join("old.db");
     let c = Connection::open(&old).unwrap();
@@ -386,7 +386,7 @@ fn lt_bad_files_give_clear_errors() {
     c.execute("INSERT INTO clipboard_entries (kind, title, preview, created_at) VALUES ('text', 't', 'v1 row', ?1)", [T - 1])
         .unwrap();
     drop(c);
-    let r = lt::run(&kit.store, &old, kit.cutoff(), true, &quiet()).unwrap();
+    let r = lt::run(&kit.store, &old, kit.cutoff(), true, &[], &quiet()).unwrap();
     assert_eq!((r.imported, r.folders), (1, 0));
 }
 
@@ -413,19 +413,55 @@ fn lt_import_leaves_secrets_out() {
     drop(c);
 
     let on = Kit::new();
-    let r = lt::run(&on.store, &db, on.cutoff(), true, &quiet()).unwrap();
+    let r = lt::run(&on.store, &db, on.cutoff(), true, &[], &quiet()).unwrap();
     assert_eq!((r.imported, r.skipped, r.errors), (1, 2, 0), "{r:?}");
     assert_eq!(texts(&on.store), vec![phrase.clone()]);
     // The probe still counts them, so imported + skipped + errors = probe.clips.
     assert_eq!(lt::probe(&db, on.cutoff()).unwrap().clips, 3);
     // A second run skips them again (nothing slips in through the dedup path).
-    let r = lt::run(&on.store, &db, on.cutoff(), true, &quiet()).unwrap();
+    let r = lt::run(&on.store, &db, on.cutoff(), true, &[], &quiet()).unwrap();
     assert_eq!((r.imported, r.skipped), (0, 3));
     assert_eq!(on.store.counts().unwrap().all, 1);
 
     let off = Kit::new();
-    let r = lt::run(&off.store, &db, off.cutoff(), false, &quiet()).unwrap();
+    let r = lt::run(&off.store, &db, off.cutoff(), false, &[], &quiet()).unwrap();
     assert_eq!((r.imported, r.skipped, r.errors), (3, 0, 0), "{r:?}");
+}
+
+/// W3: records Liquid Tools took from an app on `privacy.ignoredApps` (a password manager)
+/// are not imported — the capture would have refused them; they count as skipped.
+#[test]
+fn lt_import_leaves_ignored_apps_out() {
+    let dir = TempDir::new("liqlip-lt-ignored-").unwrap();
+    let db = dir.path().join("clipboard.db");
+    let c = Connection::open(&db).unwrap();
+    c.execute_batch(LT_SCHEMA).unwrap();
+    ins(&c, Row { kind: "text", preview: "hunter2-from-keepass", source: Some("KeePass"), at: T - 3_000, ..Default::default() });
+    ins(&c, Row { kind: "text", preview: "vault entry", source: Some("Vault"), at: T - 2_500, pinned: true, ..Default::default() });
+    ins(&c, Row { kind: "text", preview: "meeting notes", source: Some("Code"), at: T - 2_000, ..Default::default() });
+    ins(&c, Row { kind: "text", preview: "no source", at: T - 1_000, ..Default::default() });
+    drop(c);
+    let kit = Kit::new();
+    let ignored = vec!["keepass.exe".to_string(), "C:\\Tools\\Vault.exe".to_string()];
+    let r = lt::run(&kit.store, &db, kit.cutoff(), true, &ignored, &quiet()).unwrap();
+    assert_eq!((r.imported, r.skipped, r.errors), (2, 2, 0), "{r:?}");
+    assert_eq!(texts(&kit.store), vec!["meeting notes".to_string(), "no source".to_string()]);
+    assert_eq!(lt::probe(&db, kit.cutoff()).unwrap().clips, 4, "imported + skipped + errors = probe");
+}
+
+#[test]
+fn ignore_rule_matches_like_the_capture() {
+    use super::runner::is_ignored;
+    let list = vec!["keepass.exe".to_string(), "bitwarden".to_string(), "C:/Tools/Vault.exe".to_string()];
+    assert!(is_ignored("c:\\program files\\keepass\\KeePass.exe", &list), "file name");
+    assert!(is_ignored("d:\\apps\\bitwarden.exe", &list), "bare stem");
+    assert!(is_ignored("c:\\tools\\vault.exe", &list), "full path, / ≡ \\");
+    assert!(!is_ignored("d:\\other\\vault.exe", &list), "another folder: another app");
+    assert!(is_ignored("vault.exe", &list), "a bare Liquid Tools name matches a full-path entry");
+    assert!(is_ignored("KEEPASS.EXE", &list));
+    assert!(!is_ignored("notepad.exe", &list));
+    assert!(!is_ignored("c:\\x\\keepassxc.exe", &list));
+    assert!(!is_ignored("c:\\x\\a.exe", &["  ".to_string()]), "blank entry");
 }
 
 // ── backups ─────────────────────────────────────────────────────────────────
@@ -579,7 +615,7 @@ fn merge_adds_without_duplicates() {
     b.store
         .snippet_save(&SnippetInput { id: None, name: "Sig".into(), body: "Regards".into(), keyword: None })
         .unwrap();
-    let r = backup::restore_merge(&b.store, &dest, b.store.retention_cutoff(crate::model::Retention::Month3), true, &quiet()).unwrap();
+    let r = backup::restore_merge(&b.store, &dest, b.store.retention_cutoff(crate::model::Retention::Month3), true, &[], &quiet()).unwrap();
     assert_eq!((r.imported, r.skipped, r.folders, r.errors), (4, 1, 1, 0), "{r:?}");
     assert_eq!(b.store.counts().unwrap().all, 5);
     // The existing "Hello" keeps its time, gains favorite (and keeps its own title = none).
@@ -610,7 +646,7 @@ fn merge_adds_without_duplicates() {
     assert_eq!(b.store.snippets_list("").unwrap().len(), 1);
     assert_eq!(b.one::<i64>("SELECT count(*) FROM clips WHERE text = 'deleted secret'", []), 0);
     // A second merge adds nothing.
-    let r2 = backup::restore_merge(&b.store, &dest, None, true, &quiet()).unwrap();
+    let r2 = backup::restore_merge(&b.store, &dest, None, true, &[], &quiet()).unwrap();
     assert_eq!((r2.imported, r2.skipped, r2.folders), (0, 5, 0));
 }
 
@@ -628,12 +664,12 @@ fn merge_leaves_secrets_out() {
     export_to(&a, &dest);
 
     let on = Kit::new();
-    let r = backup::restore_merge(&on.store, &dest, None, true, &quiet()).unwrap();
+    let r = backup::restore_merge(&on.store, &dest, None, true, &[], &quiet()).unwrap();
     assert_eq!((r.imported, r.skipped, r.errors), (1, 2, 0), "{r:?}");
     assert_eq!(texts(&on.store), vec![phrase.clone()]);
 
     let off = Kit::new();
-    let r = backup::restore_merge(&off.store, &dest, None, false, &quiet()).unwrap();
+    let r = backup::restore_merge(&off.store, &dest, None, false, &[], &quiet()).unwrap();
     assert_eq!((r.imported, r.skipped), (3, 0));
 }
 
@@ -679,7 +715,20 @@ fn invalid_backups_are_refused_clearly() {
     assert_eq!(backup::restore_replace(&kit.store, &empty, &quiet()).unwrap_err(), "invalid: the backup has no database");
     let junk_db = write_zip("f.liqlip", &[("manifest.json", manifest(backup::FORMAT, 1, 1)), ("clipboard.db", vec![0u8; 4096])]);
     assert_eq!(backup::restore_replace(&kit.store, &junk_db, &quiet()).unwrap_err(), "invalid: the backup database is damaged");
-    assert!(backup::restore_merge(&kit.store, &junk_db, None, true, &quiet()).unwrap_err().starts_with("invalid:"));
+    assert!(backup::restore_merge(&kit.store, &junk_db, None, true, &[], &quiet()).unwrap_err().starts_with("invalid:"));
+    // W3: a SQLite file with our version number but not our shape is refused too.
+    let foreign_db = dir.join("foreign.db");
+    {
+        let c = Connection::open(&foreign_db).unwrap();
+        c.execute_batch(
+            "CREATE TABLE clips (id INTEGER PRIMARY KEY, deleted_at INTEGER); CREATE TABLE folders (id INTEGER);
+             CREATE TABLE apps (id INTEGER); CREATE TABLE clip_formats (clip_id INTEGER); CREATE TABLE snippets (id INTEGER);
+             INSERT INTO clips (id) VALUES (1); PRAGMA user_version = 1;",
+        )
+        .unwrap();
+    }
+    let shaped = write_zip("h.liqlip", &[("manifest.json", manifest(backup::FORMAT, 1, 1)), ("clipboard.db", std::fs::read(&foreign_db).unwrap())]);
+    assert_eq!(backup::restore_replace(&kit.store, &shaped, &quiet()).unwrap_err(), "invalid: the backup database is damaged");
     // Path tricks in entry names are ignored, never written outside the staging folder.
     let evil = write_zip(
         "g.liqlip",
