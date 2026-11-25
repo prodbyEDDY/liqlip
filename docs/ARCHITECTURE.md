@@ -1371,7 +1371,7 @@ export interface ImportReport { imported: number; skipped: number; folders: numb
   (чипы токенов, автодополнение), `Pills`, `Grid` (виртуализация — перенос `layout.ts` Liquid
   Tools + 2D-навигация), `CardShell`/`cards/*` (перенос), `CardActions` (3 + ⋯), `Footer`
   (подсказки, цель, пауза, очередь), `EmptyState`/скелетоны. Чистая логика — в `.ts` с тестами:
-  `query.ts` (токены → `FeedQuery`), `layout.ts`, `gridNav.ts`, `transforms.ts`, `snippetExpand.ts`,
+  `query.ts` (токены → `FeedQuery`), `layout.ts`, `gridNav.ts`, `transforms.ts`, развёртка сниппетов — `src/lib/snippets/expand.ts` + `overlays/snippetText.ts`,
   `format.ts`/`preview.ts`.
   Как сделано в W1-E (компоненты, состояние, клавиатура, точки расширения для W2-C, мок шелфа,
   «Замер») — реверс-док [`picker.md`](picker.md).
