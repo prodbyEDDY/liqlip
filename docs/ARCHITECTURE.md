@@ -128,96 +128,93 @@ Alt+Tab, а tao пересчитывает `GWL_EXSTYLE` из своих фла�
 
 ## 4. Данные
 
+> Замер §4: 2026-11-26 (W1-A: хранилище реализовано целиком — `src-tauri/src/store/`;
+> `cargo test` 76/76, из них 53 теста хранилища, включая проверку планов запросов; нативно не
+> запускалось, стенда на 50 000 записей нет — решение Eddy).
+
 ### 4.1. Файлы
 
 ```
 %APPDATA%\com.liqlip.app\
-  liqlip.db (+ -wal, -shm)     SQLite
-  media\<id>.png               полноразмерные картинки
-  media\thumbs\<id>.png        превью 360 px по длинной стороне
+  liqlip.db (+ -wal, -shm)     SQLite (WAL)
+  liqlip.db.check              маркер: в работе встретился SQLITE_CORRUPT → на следующем старте quick_check
+  liqlip.db.corrupt-<ms>       битая база, отодвинутая при открытии (+ media.corrupt-<ms>, icons.corrupt-<ms>)
+  media\<id>.png               полноразмерные картинки и PNG-альтернатива текстовых записей (Excel)
+  media\thumbs\<id>.png        превью ≤ 360 px по длинной стороне (только image)
+  media\.staging-*.png         временные файлы вставки (переименовываются в <id>.png в транзакции)
   icons\<appId>.png            иконки приложений-источников (одна на exe)
   settings.json                Settings (§9.4), с полем version
   logs\liqlip.log              без содержимого буфера
 ```
 
+Имена файлов выводятся **только из id**, а id не переиспользуются (`AUTOINCREMENT`), поэтому файл
+можно удалять после коммита удаления строки, не боясь задеть новую запись. Пути в
+`clip_formats.path` / `apps.icon_path` (`media\<id>.png`, `icons\<id>.png`) — справочные.
+
 ### 4.2. Схема SQLite v1 (`PRAGMA user_version = 1`)
 
-Новое приложение — схема своя (неприкосновенность схемы Liquid Tools здесь не действует, но
-после релиза v1 эта схема меняется **только миграциями**).
+Новое приложение — схема своя; после релиза v1 она меняется **только миграциями** (шаг на
+версию, каждый в своей транзакции, `store/schema.rs::migrate`). Авторитетная копия SQL —
+`store/schema.rs::V1`; здесь — по существу.
+
+**Соединение** (`schema::open_db`, на каждое открытие): `busy_timeout = 3000` →
+`auto_vacuum = INCREMENTAL` (только у пустой базы — до первой таблицы) → `journal_mode = WAL` →
+`synchronous = NORMAL` · `foreign_keys = ON` · `secure_delete = FAST` ·
+`journal_size_limit = 16 МБ` → функция `liq_icontains` → (маркер `.check` → `quick_check`) →
+миграции → ремонт инварианта `fav_order` → `PRAGMA optimize = 0x10002`. Одно соединение под
+`parking_lot::Mutex` (без отравления); команды работают через `spawn_blocking`.
 
 ```sql
-PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;
-PRAGMA busy_timeout = 3000; PRAGMA foreign_keys = ON;
-
-CREATE TABLE apps (
-  id        INTEGER PRIMARY KEY,
-  exe       TEXT NOT NULL UNIQUE,      -- полный путь в нижнем регистре
-  name      TEXT NOT NULL,             -- FileDescription или имя файла без .exe
-  icon_path TEXT                       -- icons\<id>.png или NULL
-);
-
-CREATE TABLE folders (
-  id         INTEGER PRIMARY KEY,
-  name       TEXT NOT NULL UNIQUE COLLATE NOCASE,
-  position   REAL NOT NULL,            -- ручной порядок (дробные вставки)
-  created_at INTEGER NOT NULL
-);
-
+CREATE TABLE apps (id INTEGER PRIMARY KEY AUTOINCREMENT, exe TEXT NOT NULL UNIQUE /*lower*/,
+                   name TEXT NOT NULL, icon_path TEXT);
+CREATE TABLE folders (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+                      position REAL NOT NULL, created_at INTEGER NOT NULL);
 CREATE TABLE clips (
-  id          INTEGER PRIMARY KEY,
-  kind        TEXT NOT NULL,           -- text|link|code|color|contact|image|file
-  title       TEXT,                    -- пользовательское имя (NULL = авто)
-  preview     TEXT NOT NULL,           -- ≤ 512 символов для карточки
-  text        TEXT,                    -- полный текст (text/link/code/color/contact), пути файлов через \n
-  hash        TEXT NOT NULL UNIQUE,    -- хэш содержимого (глобальная дедупликация)
-  size        INTEGER NOT NULL DEFAULT 0, -- байты, которые хранит Liqlip (НЕ размер внешних файлов)
-  char_count  INTEGER, word_count INTEGER, line_count INTEGER,
-  width       INTEGER, height INTEGER, -- картинки
-  file_count  INTEGER,                 -- файлы
-  app_id      INTEGER REFERENCES apps(id) ON DELETE SET NULL,
-  created_at  INTEGER NOT NULL,        -- мс, первое копирование
-  copied_at   INTEGER NOT NULL,        -- мс, последнее копирование (порядок ленты)
-  copy_count  INTEGER NOT NULL DEFAULT 1,
-  used_at     INTEGER,                 -- мс, последняя вставка/копия из Liqlip
-  use_count   INTEGER NOT NULL DEFAULT 0,
-  favorite    INTEGER NOT NULL DEFAULT 0,
-  fav_order   REAL,                    -- ручной порядок в «Избранном»
-  folder_id   INTEGER REFERENCES folders(id) ON DELETE SET NULL,
-  deleted_at  INTEGER,                 -- мягкое удаление (окно отмены), чистится в фоне
-  ocr_text    TEXT,                    -- W2
-  ocr_state   INTEGER NOT NULL DEFAULT 0, -- 0 не нужно/нет, 1 ждёт, 2 готово, 3 ошибка
-  meta        TEXT                     -- JSON: ClipMeta (§9.2)
+  id INTEGER PRIMARY KEY AUTOINCREMENT,  -- id не переиспользуются: очередь вставки, кэш webview, файлы
+  kind TEXT NOT NULL, title TEXT, preview TEXT NOT NULL, text TEXT,
+  hash TEXT NOT NULL UNIQUE,             -- content::content_hash / image_hash (§15)
+  size INTEGER NOT NULL DEFAULT 0,       -- text + все clip_formats (вкл. полный PNG); превью не в счёт
+  char_count, word_count, line_count, width, height, file_count INTEGER,
+  app_id INTEGER REFERENCES apps(id) ON DELETE SET NULL,
+  created_at INTEGER NOT NULL, copied_at INTEGER NOT NULL, copy_count INTEGER NOT NULL DEFAULT 1,
+  used_at INTEGER, use_count INTEGER NOT NULL DEFAULT 0,
+  favorite INTEGER NOT NULL DEFAULT 0, fav_order REAL,
+  folder_id INTEGER REFERENCES folders(id) ON DELETE SET NULL,
+  deleted_at INTEGER, ocr_text TEXT, ocr_state INTEGER NOT NULL DEFAULT 0, meta TEXT /*ClipMeta JSON*/
 );
 CREATE INDEX idx_clips_feed     ON clips(copied_at DESC, id DESC) WHERE deleted_at IS NULL;
-CREATE INDEX idx_clips_kind     ON clips(kind, copied_at DESC)    WHERE deleted_at IS NULL;
-CREATE INDEX idx_clips_folder   ON clips(folder_id, copied_at DESC);
-CREATE INDEX idx_clips_fav      ON clips(favorite, fav_order);
-CREATE INDEX idx_clips_app      ON clips(app_id, copied_at DESC);
-
-CREATE TABLE clip_formats (           -- богатые форматы для «Вставить как…»
-  clip_id INTEGER NOT NULL REFERENCES clips(id) ON DELETE CASCADE,
-  format  TEXT NOT NULL,               -- html|rtf|png|files
-  data    BLOB,                        -- html/rtf/список файлов+DropEffect (≤ 2 МБ)
-  path    TEXT,                        -- для png — media\<id>.png
-  size    INTEGER NOT NULL,
-  PRIMARY KEY (clip_id, format)
-);
-
-CREATE TABLE snippets (
-  id INTEGER PRIMARY KEY, name TEXT NOT NULL, body TEXT NOT NULL,
-  keyword TEXT UNIQUE,                 -- зарезервировано под v2 (авторасширение)
-  position REAL NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
-  use_count INTEGER NOT NULL DEFAULT 0
-);
-
--- полнотекстовый поиск (external content); W1-A проверяет, что bundled SQLite собран с FTS5
--- и tokenizer 'trigram' доступен (SQLite ≥ 3.34); иначе — fallback LIKE с пометкой в отчёте
-CREATE VIRTUAL TABLE clips_fts USING fts5(
-  title, text, ocr_text, content='clips', content_rowid='id', tokenize='trigram'
-);
--- + триггеры AFTER INSERT/UPDATE/DELETE на clips для синхронизации clips_fts
-CREATE VIRTUAL TABLE snippets_fts USING fts5(name, body, content='snippets', content_rowid='id', tokenize='trigram');
+CREATE INDEX idx_clips_favfirst ON clips(favorite DESC, copied_at DESC, id DESC) WHERE deleted_at IS NULL;
+CREATE INDEX idx_clips_kind     ON clips(kind, copied_at DESC, id DESC, deleted_at) WHERE deleted_at IS NULL;
+CREATE INDEX idx_clips_folder   ON clips(folder_id, copied_at DESC, id DESC);   -- полный: и для FK
+CREATE INDEX idx_clips_app      ON clips(app_id, copied_at DESC, id DESC);      -- полный: и для FK
+CREATE INDEX idx_clips_history  ON clips(copied_at, id, size, favorite, folder_id, deleted_at)
+  WHERE deleted_at IS NULL AND favorite = 0 AND folder_id IS NULL;              -- ретенция (INDEXED BY)
+CREATE INDEX idx_clips_deleted  ON clips(deleted_at, copied_at) WHERE deleted_at IS NOT NULL;
+CREATE TABLE clip_formats (clip_id INTEGER NOT NULL REFERENCES clips(id) ON DELETE CASCADE,
+  format TEXT NOT NULL /*html|rtf|png|files*/, data BLOB, path TEXT, size INTEGER NOT NULL,
+  PRIMARY KEY (clip_id, format));
+CREATE TABLE snippets (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, body TEXT NOT NULL,
+  keyword TEXT UNIQUE, position REAL NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+  use_count INTEGER NOT NULL DEFAULT 0);
+CREATE INDEX idx_snippets_position ON snippets(position, id);
+CREATE VIRTUAL TABLE clips_fts USING fts5(title, text, ocr_text, content='clips', content_rowid='id',
+  tokenize='trigram');
+INSERT INTO clips_fts(clips_fts, rank) VALUES ('secure-delete', 1);
+-- триггеры clips_fts_ai (AFTER INSERT), clips_fts_ad (AFTER DELETE → 'delete' со старыми значениями),
+-- clips_fts_au (AFTER UPDATE OF title, text, ocr_text → 'delete' + insert): подъём copied_at,
+-- счётчики и флаги текст не перетокенизируют (lang_createtrigger: UPDATE OF срабатывает, только
+-- если колонка есть в SET)
+CREATE VIRTUAL TABLE snippets_fts USING fts5(name, body, content='snippets', content_rowid='id',
+  tokenize='trigram');   -- + 'secure-delete' + те же три триггера по name, body
 ```
+
+Отличия от плана W0: `AUTOINCREMENT` на всех таблицах; индекс `idx_clips_fav` не нужен
+(планировщик берёт `idx_clips_favfirst (favorite=?)` + маленькую сортировку); добавлены
+`idx_clips_favfirst`, `idx_clips_history`, `idx_clips_deleted`, `idx_snippets_position`;
+`idx_clips_kind` несёт `deleted_at` хвостом (покрывает счётчики — планировщик не считает условие
+частичного индекса выполненным для покрытия); `idx_clips_folder`/`idx_clips_app` с `id` и полные
+(обслуживают и `ON DELETE SET NULL`). `clip_formats` 'files' — JSON `{dropEffect, paths}`; 'png' есть
+у каждой картинки (единый список форматов и путь для вставки).
 
 **Хэш** (W0, `src-tauri/src/content.rs`, §15): XXH3-128 (`xxhash-rust`), 32 hex-символа, от
 `"liqlip:1\0" ‖ семейство ‖ "\0" ‖ каноническое содержимое`. Семейство, а не точный `kind`
@@ -225,62 +222,290 @@ CREATE VIRTUAL TABLE snippets_fts USING fts5(name, body, content='snippets', con
 версии поднимал старую запись, а не плодил двойник. Канон: текст — как есть (после усечения до 2 МБ);
 картинка — `width u32 LE ‖ height u32 LE ‖ RGBA8` (пиксели, а не байты PNG — не зависит от версии
 энкодера); файлы — пути в нижнем регистре, отсортированы, через `\n`. Значение закреплено тестом
-`content::tests::hash_is_stable` — менять формат после релиза нельзя.
+`content::tests::hash_is_stable` — менять формат после релиза нельзя. Хранилище своего хэша не
+заводит: при усечении текста > 2 МБ / списка > 2 000 путей и при правке/создании текста оно зовёт
+те же функции `content.rs`.
 
-**Правила:**
-- Вставка новой записи с существующим `hash` → `copied_at = now, copy_count += 1`, если запись
-  была мягко удалена — воскресить (`deleted_at = NULL`). Это «поднять наверх».
-- Мягкое удаление: `deleted_at = now`; все листинги фильтруют `deleted_at IS NULL`; чистка
-  (жёсткое удаление + файлы) — фоном для записей старше 2 минут после удаления.
-- `undoToken` — непрозрачная строка: список id + тип операции (удаление/перенос/очистка) +
-  предыдущие значения; живёт 2 минуты в памяти.
-- **Ретенция** (на старте, раз в час, после вставки записи с порогом «не чаще раза в 30 с»,
-  при сохранении настроек): удаляются только `favorite = 0 AND folder_id IS NULL` по
-  возрасту (`copied_at`), затем по числу (оставить новейшие N), затем по суммарному
-  `size` (+ размер медиа). Сниппеты не участвуют.
+**Правила (как реализовано):**
+- **Вставка из захвата** (`write.rs::insert_clip`, одна транзакция `IMMEDIATE`): `apps` upsert по exe
+  (`INSERT … ON CONFLICT(exe) DO UPDATE … RETURNING`; непустое имя из захвата обновляет старое,
+  пустое — оставляет; новое без имени — имя файла без `.exe`); запись с тем же `hash` (в том числе мягко
+  удалённая) → `copied_at = max(copied_at, new)`, `copy_count + 1`, `deleted_at = NULL`, источник —
+  последний, `kind` — новая классификация, `meta` — слияние полей (новое побеждает, где оно есть);
+  богатые форматы новой копии заменяют одноимённые старые; файлы картинки дописываются, только если
+  их нет. Иначе новая строка. PNG и превью пишутся **до** захвата блокировки во временный файл
+  `media\.staging-*` и в транзакции переименовываются в `<id>.png` (большая картинка не держит БД);
+  сбой → откат + удаление записанного. `size` пересчитывается из того, что реально сохранено.
+  Валидация: пустой текст / картинка без валидного PNG / файлы без путей / пустой хэш → `invalid`;
+  картинка > 64 МП → `invalid`; html/rtf > 2 МБ — отбрасываются (запись сохраняется); размеры
+  картинки берутся из заголовка PNG. После вставки — сигнал фоновому потоку (ретенция с порогом).
+- **Мягкое удаление** (`clips_delete`, всё или ничего): `deleted_at = now`; все листинги, `liq`-схема,
+  `get_for_paste`, детали фильтруют `deleted_at IS NULL`; фоновая чистка удаляет строки старше
+  2 минут жёстко вместе с файлами.
+- **`undoToken`** — непрозрачная строка-ключ (`u<seq>.<ms>`); данные (id, тип, прежние значения)
+  в памяти, TTL 2 мин, токен срабатывает один раз. Операции: удаление и «Очистить историю»
+  (возврат строк, ещё помеченных **этим** `deleted_at`), перенос в папку (прежняя папка каждой
+  записи; удалённая с тех пор папка → без папки), удаление папки (строка папки с тем же id; если имя
+  занято — «Имя 2»; участники возвращаются в неё, при `withClips` — и из удаления). Событие отмены:
+  удаление → `added`, папка → `updated`, очистка → `reset`.
+- **Удалить недавнее** (`clips_delete_recent`, трей): жёстко, без undo, всё с `copied_at ≥ now − N мин`
+  — избранное, папки и уже мягко удалённые тоже (подтверждает UI). Приватное действие: на его время
+  `secure_delete = ON`, затем `PRAGMA incremental_vacuum` (до конца — по одной странице за шаг) и
+  `PRAGMA wal_checkpoint(TRUNCATE)`; FTS — с `secure-delete`, так что токены пароля не остаются в
+  индексе.
+- **Очистить**: `history` — мягко всё, кроме избранного и папок (undo, событие `reset`); `all` — жёстко
+  все записи и папки (сниппеты и `apps` остаются), FTS очищается одной командой `'delete-all'` (триггер
+  удаления снимается и возвращается в той же транзакции), файлы удаляются, токены отмены сбрасываются,
+  приватный режим как у «удалить недавнее»; `undoToken: null`.
+- **Ретенция** (`lifecycle.rs::run_retention`): только «история» — живые записи с
+  `favorite = 0 AND folder_id IS NULL` (избранное, папки, сниппеты не трогаются **и не считаются** в
+  лимиты); по возрасту (`copied_at`; месяцы = 30 дней: 1d/1w/1m/3m/6m/1y = 1/7/30/90/180/365 дней) →
+  оставить новейшие `maxEntries` → удалять старейшие, пока сумма `size` истории не влезет в
+  `maxSizeMb`. Жёстко с файлами, пачками по 500 строк на транзакцию (захват и UI не ждут). Запуск: на
+  старте, раз в час, после вставки (не чаще раза в 30 с), сразу при смене `settings.storage`
+  (`settings::subscribe` только шлёт сигнал). Событие `clips:changed {origin:'retention',
+  change:'deleted', ids}` (ids — если ≤ 1 000).
+- **Избранное**: новое — в конец ручного порядка (`max(fav_order) + 1`, в порядке переданных id);
+  перенос — дробная середина между соседями, при зазоре < 1e-6 — перенумерация 1, 2, 3…; у каждого
+  избранного `fav_order` не NULL (ремонт на открытии). Папки — тот же алгоритм по `position`.
+- **Правка текста** (`clip_update_text`): только текстовые виды; новый хэш (`content_hash`), превью,
+  метрики, классификация (`capture::classify::classify_text`); **все** богатые форматы (html, rtf и
+  PNG-альтернатива с её файлом) сбрасываются — они больше не соответствуют тексту; совпадение с
+  другой живой записью → `invalid: duplicate`, с мягко удалённой — та удаляется жёстко.
+- **`auto_vacuum = INCREMENTAL`** (решение): включён в v1 (задать можно только до первой таблицы).
+  Свободные страницы возвращаются ОС `incremental_vacuum` после приватных действий, после крупной
+  ретенции (≥ 100 записей) и раз в час, если свободно ≥ 1 024 страниц (4 МБ). `VACUUM` не делается.
+- **Восстановление**: файл, который не открывается как база (`SQLITE_NOTADB`/`SQLITE_CORRUPT`), или
+  чужая SQLite-база без нашей версии отодвигаются вместе с `media\`/`icons\` (`*.corrupt-<ms>`) и
+  создаются заново; ошибка `SQLITE_CORRUPT` во время работы оставляет маркер `liqlip.db.check` →
+  следующий старт делает `quick_check`. База **новее** сборки (`user_version > 1`) не открывается
+  (`failed: …`, старт прерывается) — данные не уничтожаются.
 
 ### 4.3. Порядок ленты и курсор
 
 - По умолчанию: `ORDER BY copied_at DESC, id DESC`.
-- `favoritesFirst`: `ORDER BY favorite DESC, copied_at DESC, id DESC`.
-- Пилюля «Избранное»: `ORDER BY fav_order ASC, id ASC`.
-- Поиск с текстом: тот же порядок (предсказуемость важнее релевантности), матчинг через
-  `clips_fts MATCH`.
-- Курсор — **непрозрачная строка** (base64 от значений ключа сортировки последней строки);
-  фронт её не разбирает. Страница — 40 записей.
+- `favoritesFirst` (из настроек, читается на каждый `clips_list`): `ORDER BY favorite DESC,
+  copied_at DESC, id DESC` — во всех пилюлях, кроме «Избранного».
+- Пилюля «Избранное» (`filter.favorites: true`): `ORDER BY fav_order ASC, id ASC`.
+- Поиск с текстом: тот же порядок (предсказуемость важнее релевантности).
+- Курсор — **непрозрачная строка**: base64url от `r1:<copied_at>:<id>` / `f1:<fav>:<copied_at>:<id>` /
+  `m1:<биты f64 fav_order>:<id>`; keyset-условие row-value (`(copied_at, id) < (?, ?)` и т. п.).
+  Мусор или курсор **другого** порядка (например, `favoritesFirst` переключили между страницами) →
+  `invalid: cursor` (фронт начинает ленту заново). Пустая строка = первая страница.
+- `limit`: ≤ 0 → 40, больше 200 → 200; выбирается `limit + 1` строка — `nextCursor` есть, только если
+  дальше есть данные.
+- Фильтры §9.3 сочетаются через AND; пустой `kinds`/`appIds` = без фильтра; `favorites: false` = без
+  фильтра; `since`/`until` — по `copied_at`, включительно.
+- `thumbUrl` = `http://liq.localhost/thumb/<id>?v=<created_at>` (только image), `imageUrl` =
+  `http://liq.localhost/media/<id>?v=<created_at>`, `iconUrl` = `http://liq.localhost/icon/<id>?v=<8 hex
+  от exe>` (только если иконка есть) — `?v=` защищает кэш webview после пересоздания базы.
+- `formats`: text-виды — `text` + имеющиеся `html`, `rtf`, `png`; image — `png`; file — `files`, `text`.
+
+### 4.4. Поиск
+
+- Свободный текст режется на термы: пробелы разделяют, `"…"` держит фразу (незакрытая кавычка — до
+  конца); пустые и повторы (без учёта регистра) отбрасываются, не больше 32 термов. **Все** термы
+  должны совпасть (AND), каждый — как подстрока.
+- Терм ≥ 3 символов → `clips_fts MATCH` (title, text, ocr_text — полный текст, а не превью): каждый терм —
+  строка FTS5 в кавычках с удвоением `"` (fts5.html §3.1), так что `AND`, `NEAR`, `*`, `:`, `(`, `-`
+  пользователя — просто символы. trigram регистронезависим и для кириллицы (зонд W0 + тесты).
+- Терм < 3 символов trigram обслужить не может (fts5.html §4.3.5) → `liq_icontains(preview|title, терм)`:
+  своя SQL-функция (rusqlite `functions`), регистронезависимая по Unicode (`LIKE`/`lower()` SQLite
+  сворачивают только ASCII). Ищет по превью (≤ 512 символов) и заголовку.
+- `exclude` — те же правила: длинные одним `NOT IN (… MATCH "a" OR "b")`, короткие — `NOT liq_icontains`.
+- Сниппеты (`snippets_list`) — то же по `snippets_fts` (name, body), короткие термы — по name/body.
+
+### 4.5. Медиа и схема `liq`
+
+`store::serve_uri(app, path)` (`media.rs::serve_path`): `/thumb/<id>` — только живая запись `image`;
+нет файла превью → строится из `media\<id>.png` (≤ 360 px по длинной стороне, аспект сохранён,
+`image::DynamicImage::thumbnail`; картинка меньше — отдаётся как есть; > 64 МП — отказ) и
+записывается; `/media/<id>` — живая запись со строкой `clip_formats` 'png'; `/icon/<appId>` — приложение
+с `icon_path`. Иначе `None` (404). MIME `image/png`. Чтение БД — короткая блокировка, файлы — без неё.
+`set_app_icon(app_id, png)`: проверка сигнатуры PNG и размера (≤ 1 МБ), `icons\<id>.png` атомарно,
+`apps.icon_path`. `InsertOutcome.app_icon_missing` = нет `icon_path` или файла.
+
+### 4.6. Фоновый поток (`maint.rs`, `store::init`)
+
+Поток `liqlip-store`, сигналы по каналу (`Wake::Inserted` — после вставки, `Wake::Settings` — смена
+`storage.*`): каждые 30 с — истёкшие токены, чистка мягко удалённых (> 2 мин), маркер повреждения;
+ретенция — на старте, раз в час, после вставки (≥ 30 с от прошлой), по смене настроек; раз в час —
+`PRAGMA optimize` и `incremental_vacuum` при ≥ 4 МБ свободных страниц; на старте — уборка сирот
+(файлы `media`/`thumbs`/`icons` без строки, `.staging-*` старше часа; каталоги читаются **до** запроса
+к БД, поэтому файл свежей вставки не удаляется).
+
+### 4.7. Индексы и планы запросов
+
+Тест `store::feed::plans::hot_statements_use_indexes` проверяет `EXPLAIN QUERY PLAN` (≤ 300 строк, без
+стенда) и требует отсутствия голого `SCAN clips`:
+
+| Запрос | План |
+|---|---|
+| лента (первая страница / с курсором) | `SCAN c USING INDEX idx_clips_feed` / `SEARCH … idx_clips_feed (copied_at<?)` — без сортировки |
+| `favoritesFirst` + курсор | `SEARCH … idx_clips_favfirst ((favorite,copied_at)<(?,?))` |
+| пилюля «Избранное» | `SEARCH … idx_clips_favfirst (favorite=?)` + сортировка избранных |
+| тип (один / несколько) | `SEARCH … idx_clips_kind (kind=? AND copied_at<?)` (несколько — + сортировка) |
+| папка / приложения | `SEARCH … idx_clips_folder (folder_id=? AND copied_at<?)` / `idx_clips_app (app_id=?…)` |
+| `since`/`until` | `SEARCH … idx_clips_feed (copied_at>? AND copied_at<?)` |
+| поиск FTS | `SCAN clips_fts VIRTUAL TABLE` → `SEARCH c USING INTEGER PRIMARY KEY` + сортировка; с типом — `idx_clips_kind` + bloom-фильтр |
+| короткий терм / исключения | `SCAN c USING INDEX idx_clips_feed` (по порядку ленты до заполнения страницы) |
+| счётчики | `SCAN clips USING COVERING INDEX idx_clips_kind` + `idx_clips_favfirst (favorite=?)`; папки — `idx_clips_folder (folder_id=?)` |
+| ретенция (возраст / старейшие / итоги) | `COVERING INDEX idx_clips_history` (`INDEXED BY`) |
+| чистка / удалить недавнее | `idx_clips_deleted (deleted_at<?)` / `idx_clips_feed (copied_at>?)` ∪ `idx_clips_deleted` |
+| дедупликация | `sqlite_autoindex_clips_1 (hash=?)` |
+
+Известные пределы (по построению, без стенда): поиск с частым термом собирает все совпадения FTS и
+сортирует их (≈ число совпадений); короткий терм без совпадений проходит всю ленту по индексу
+(превью ≤ 512 символов); после реальных данных `PRAGMA optimize` (раз в час) соберёт статистику для
+планировщика.
 
 ## 5. Захват (`capture/`)
 
+> Замер: 2026-11-26 (W1-B: реализовано целиком; `cargo test` — 65 тестов модуля зелёные, включая
+> стенд 10 копий/с × 10 с: 100/100, задержка копия → запись p50 38 мс, max 47 мс; нативно не
+> запускалось — живая проверка по чек-листу в отчёте W1-B).
+
 ```
-listener-поток (скрытое message-only окно, AddClipboardFormatListener)
-   └─ WM_CLIPBOARDUPDATE → дебаунс 30 мс → snapshot (один OpenClipboard, ретраи 10×/25 мс)
-        1. приватность: Clipboard Viewer Ignore · ExcludeClipboardContentFromMonitorProcessing ·
-           CanIncludeInClipboardHistory=0 · CanUploadToCloudClipboard=0  → выход
-        2. пауза / «пропустить следующее» / self-copy guard → выход
-        3. владелец: GetClipboardOwner → GetWindowThreadProcessId → exe (fallback: foreground)
-           → игнор-лист → выход
-        4. перечислить форматы (EnumClipboardFormats), прочитать ТОЛЬКО нужные, по приоритету:
-           CF_HDROP(+Preferred DropEffect) → текст(CF_UNICODETEXT)+HTML Format+RTF → PNG/DIBV5/DIB
-           (если есть и текст, и картинка: Office/Excel диапазон → text + png в clip_formats;
-            картинка — основной вид, только если текста нет или это явный image-источник)
-        5. закрыть буфер как можно раньше
-   └─ отправка в worker-очередь (канал)
-worker-поток:
-   классификация (classify.rs) → «похоже на секрет» → тумблеры типов → кодирование PNG,
-   превью-файл, метрики (символы/слова/строки) → store.insert_clip(NewClip) → событие
-   clips:changed{origin:"capture"} → (W2) OCR-очередь → ретенция (с порогом)
+listener-поток `liqlip-clip-listener` — message-only окно (HWND_MESSAGE) + AddClipboardFormatListener
+   └─ WM_CLIPBOARDUPDATE → LoopMsg::Notify в канал (оконная процедура больше ничего не делает)
+capture-поток `liqlip-clip-capture`
+   ├─ дебаунс: 30 мс тишины, но не позже 120 мс от первого события (поток событий не «голодает»)
+   ├─ GetClipboardSequenceNumber: уже обработан → дубль; свой (mark_own_write) → выход
+   ├─ пауза → выход; «пропустить следующее» → выход + capture:status (номер помечается обработанным)
+   ├─ проба владельца: SendMessageTimeoutW(owner, WM_NULL, SMTO_ABORTIFHUNG|SMTO_BLOCK, 250 мс)
+   │   не ответил → повтор (без OpenClipboard: зависшего не просим рендерить)
+   └─ снимок на отдельном reader-потоке (новый на каждый снимок), ожидание ≤ 1 с на формат, ≤ 3 с всего:
+        1. OpenClipboard(NULL): 10 попыток × 25 мс
+        2. номер (свой → выход); владелец GetClipboardOwner → GetWindowThreadProcessId →
+           QueryFullProcessImageNameW (полный путь, lower); нет владельца → активное окно;
+           владелец — окно Liqlip → выход; игнор-лист → выход. Содержимое ещё не читалось
+        3. EnumClipboardFormats; маркеры (если privacy.respectMarkers):
+           ExcludeClipboardContentFromMonitorProcessing · Clipboard Viewer Ignore — по наличию;
+           CanIncludeInClipboardHistory · CanUploadToCloudClipboard — DWORD 0 → выход
+           (нечитаемый/короче 4 байт — тоже 0: приватность по умолчанию)
+        4. ТОЛЬКО нужные форматы: CF_HDROP (+Preferred DropEffect, ≤ 2000 путей) — и всё;
+           иначе CF_UNICODETEXT (≤ 2 МБ + 1 единица UTF-16) → HTML Format (при тексте или картинке)
+           → RTF (при тексте); HTML/RTF > 2 МБ отбрасываются целиком → картинка (если тип image
+           включён): PNG → CF_DIBV5 → CF_DIB (+ синтез из CF_BITMAP); размер — из заголовка
+           ДО копирования, > 64 МП не копируется
+        5. номер ещё раз (рендер delayed-формата во время чтения может его поднять) → CloseClipboard
+           (guard: закрывается на любом пути, включая панику)
+   └─ занят / владелец не отвечает → повторы через 100, 250, 500, 1000, 2000 мс, затем пропуск с логом
+worker-поток `liqlip-clip-worker` (буфер уже закрыт)
+   повторная проверка self-copy → основной вид → классификация (classify.rs) → «похоже на секрет»
+   (secrets.rs) → тумблеры storage.types → усечение 2 МБ → content::content_hash / image_hash →
+   превью, метрики (content.rs) → PNG + миниатюра 360 px (imaging.rs) → Store::insert_clip →
+   clips:changed{origin:capture, added|updated} → режим сбора: paste::stack::push(id) →
+   app_icon_missing: иконка 64×64 → Store::set_app_icon
 ```
 
-- Таймаут чтения одного формата ≤ 1 с (зависшее приложение-источник с delayed rendering не
-  вешает поток; формат пропускается, в лог).
-- Иконка приложения: извлекается один раз на exe (`SHGetFileInfoW` → `GetIconInfo` →
-  `GetDIBits` → PNG; COM на worker-потоке) — перенос из Liquid Tools
-  `src-tauri/src/screenshot/mod.rs` (~строки 1001–1224).
-- **Self-copy guard** — Liqlip, кладя данные в буфер, запоминает `GetClipboardSequenceNumber()`
-  сразу после своей записи; listener игнорирует обновление с этим номером (надёжнее, чем
-  отпечатки содержимого в Liquid Tools).
-- Режим «собирать в очередь»: после успешной вставки записи worker добавляет её id в очередь
-  (`paste::stack::push`).
+**Файлы:** `mod.rs` (API §15, потоки + супервизор, `AppSink`), `listener.rs` (окно),
+`snapshot.rs` (алгоритм снимка против шва `ClipboardApi`, reader-поток с дедлайнами, фейковый
+буфер для тестов), `win32.rs` (реализация шва, владелец, FileDescription), `pipeline.rs` (capture-цикл,
+worker, `build_clip`, стенд), `formats.rs` (разбор CF_UNICODETEXT/CF_HTML/DWORD/заголовков PNG и DIB),
+`imaging.rs` (декод PNG/DIB крейтом `image`, нормализация, PNG, миниатюра), `classify.rs`,
+`secrets.rs`, `state.rs` (пауза/пропуск/сбор/свои номера), `icons.rs`, `apps.rs`, `commands.rs`.
+Вся логика, кроме тонких Win32-обёрток, тестируется на буфере в памяти — системный буфер тесты
+не трогают.
+
+**Зависший источник (delayed rendering) — как и почему безопасно.** `GetClipboardData` для
+отложенного формата шлёт владельцу `WM_RENDERFORMAT` и ждёт, пока *мы* держим буфер открытым
+(learn.microsoft.com «Clipboard Operations → Delayed Rendering»); отменить вызов нельзя. Поэтому:
+(1) до `OpenClipboard` владелец проверяется `WM_NULL` с `SMTO_ABORTIFHUNG` — зависшего (или занятого
+дольше 250 мс) не просим рендерить, а повторяем позже; (2) сам снимок идёт на отдельном коротком
+потоке, capture-цикл ждёт ≤ 1 с на формат (отсчёт от начала каждого вызова) и ≤ 3 с на снимок;
+по таймауту формат и все следующие отбрасываются, уже прочитанное используется **только** если
+проверки приватности завершились (иначе запись не создаётся); (3) брошенный поток не убивается
+(`TerminateThread` портит состояние user32/кучи): он не держит общих блокировок (результат — под
+мьютексом, который берётся лишь между вызовами), при возврате вызова видит флаг отмены, пропускает
+остальное и закрывает буфер; (4) пока он жив (`reader_busy`), новый снимок не начинается — повтор
+по лестнице. Худший случай — источник завис именно во время рендера: буфер занят нашим потоком до
+ответа/смерти владельца (как у любого читателя буфера), но Liqlip не висит и следующий снимок
+пройдёт сразу после освобождения (тест `hung_delayed_render_does_not_block_the_next_copy`).
+
+**Решения:**
+- **Текст + картинка** (Excel/Office): основной — текст, картинка → `NewClip.png` («Вставить как…
+  PNG»; только если тип image включён, иначе не читается вовсе). Картинка основная, если текста нет
+  (пробельный текст = нет) или HTML-фрагмент — один `<img>` без видимого текста (браузерное
+  «Копировать изображение»); нераскодируемая картинка при наличии текста → запись-текст.
+- **Self-copy:** `mark_own_write(seq)` кладёт номер в кольцо из 64 последних; проверка — в
+  capture-цикле до чтения, внутри снимка и ещё раз в worker (если `mark_own_write` проиграл гонку
+  дебаунсу). Плюс страховка: владелец буфера — окно процесса Liqlip → пропуск. Если владельца нет,
+  а впереди окно Liqlip (`echo x | clip` при открытых настройках) — это не «свой», источник неизвестен.
+- **Дедупликация событий** — по номеру последовательности (кольцо 32 обработанных, включая номер
+  перед закрытием); содержимое на старте приложения не захватывается. Дедупликация записей —
+  глобальная, по хэшу, в Store (подъём наверх).
+- **Игнор-лист:** запись совпадает с именем файла (`keepass.exe`), с именем без `.exe`
+  (`bitwarden`) или с полным путём; без учёта регистра (Unicode), `/` ≡ `\`.
+- **Классификация** (SPEC §2.1): цвет — только `#rgb/#rgba/#rrggbb/#rrggbbaa` или `rgb()/rgba()/
+  hsl()/hsla()` (запятые или CSS4-пробелы с `/ alpha`, проценты, `deg/turn`; вне диапазона — не
+  цвет); `meta.color` — HEX `#RRGGBB(AA)` в верхнем регистре, `rgb(…)`/`rgba(…, a)`, `hsl(…)`/
+  `hsla(…, a)` целыми (альфа сохраняется, в моке — отбрасывается). Ссылка — одна строка без пробелов:
+  `http/https/ftp/file://` или `www.` (тогда `meta.url = https://…`), `meta.host` как `URL.host`
+  (с портом, в нижнем регистре). Контакт — email или телефон целиком (7–15 цифр, `+` или
+  разделители; даты, IPv4 и числа с разрядами `1 000 000` — не телефон). Код — ≥ 2 признаков из
+  {отступы ≥ 2 строк, токены кода ≥ 2 строк, плотность пунктуации ≥ 5 %} (одна строка — терминатор
+  `; { }` + `( = {`). Для rich-копии без ссылки `meta.url/host` берутся из `SourceURL` CF_HTML.
+- **«Похоже на секрет»** (только текст целиком после trim, ≤ 16 КБ): карта 13–19 цифр (группы через
+  один пробел/дефис) + Луна + первая цифра 2–6 (отсекает IMEI/ID на 0/1/7–9); ключи с префиксами SPEC
+  `sk-`, `ghp_`, `gho_`, `github_pat_`, `xoxb-/xoxa-/xoxp-`, `AKIA`+16, `AIza`+35 с алфавитом и длиной
+  эмитента и обязательно буквами *и* цифрами (отсекает `sk-learn-…`); PEM-блок `BEGIN … PRIVATE KEY`
+  (и `PGP PRIVATE KEY BLOCK`) с совпадающим `END`.
+- **Лимиты SPEC §2.3:** текст читается до 2 МБ + 1 единица и усекается `content::truncate_text`
+  (`meta.truncated`); > 2000 файлов — первые 2000 (лог); картинка > 64 МП — не сохраняется (лог);
+  HTML/RTF > 2 МБ — отбрасываются (запись остаётся).
+- **Картинки:** PNG и DIB декодируются в RGBA8 (`image` с фичей `bmp`:
+  `BmpDecoder::new_without_file_header`, маски V4/V5 по learn.microsoft.com «Bitmap Header Types»;
+  32 bpp BI_RGB — непрозрачные); полностью прозрачный результат → непрозрачный (писатели с нулевой
+  альфой). Хэш — по пикселям (`image_hash`): одна и та же картинка из PNG и из DIB — одна запись.
+  Хранимый PNG перекодируется из RGBA, миниатюра ≤ 360 px (`imageops::thumbnail`; если картинка уже
+  меньше — копия PNG).
+- **Размер записи** — только байты Liqlip: текст + HTML + RTF + PNG (+ миниатюра); для файлов —
+  длина списка путей (размер внешних файлов не читается, к ФС worker не обращается).
+- **Пауза** — в памяти (после перезапуска запись идёт): 1…525 600 мин или до возобновления;
+  авто-возобновление — поток-таймер, спит шагами ≤ 30 с по настенным часам (после сна ноутбука
+  возобновляется вовремя), устаревший таймер (была новая пауза/возобновление) ничего не делает.
+  Скопированное во время паузы не захватывается и после неё. «Пропустить следующее» тратится на
+  ближайшее внешнее изменение (свои записи и дубли не в счёт). Каждое изменение состояния →
+  `events::capture_status` + `tray::refresh`.
+- **Иконки:** `SHDefExtractIconW` 64 px → иначе `SHGetFileInfoW(SHGFI_ICON|SHGFI_LARGEICON)` →
+  `GetIconInfo`/`GetDIBits` → RGBA (альфа из AND-маски, если её нет в цвете) → 64×64 PNG; COM
+  STA на время вызова; кэш в памяти на exe (и промах тоже, ≤ 512); в Store — при
+  `InsertOutcome.app_icon_missing`. `app_icon_data_url` при промахе кэша **блокирует** на время
+  извлечения (единицы–десятки мс, один раз на exe).
+- **Имя приложения** — `FileDescription` (`GetFileVersionInfoW`/`VerQueryValueW`, языки из
+  `\VarFileInfo\Translation` + запасные 0409/04B0, 0409/04E4), иначе имя файла без `.exe`; кэш.
+- **`apps_running`** — `EnumWindows`: видимые, без владельца, не tool-окна (кроме `WS_EX_APPWINDOW`),
+  с заголовком, не cloaked (DWM); UWP — процесс дочернего окна `ApplicationFrameHost`; без Liqlip,
+  по одному на exe (полный путь, lower), сортировка по имени; на blocking-пуле.
+- **Надёжность потоков:** каждый поток в супервизоре (паника/ошибка → лог → перезапуск через 1…30 с,
+  каналы сохраняются); снимок и запись обёрнуты `catch_unwind` поштучно; оконная процедура не
+  паникует (`try_with`/`try_borrow`). `capture::stop()` (на `RunEvent::Exit`) → `RemoveClipboardFormatListener`
+  + `DestroyWindow` + остановка циклов.
+- **Логи** — только причины/размеры/виды/время (`skipped: privacy marker`, `image 9000×8000
+  exceeds 64 MP`), ни строки содержимого, ни имён файлов, ни заголовков окон.
+
+**API модуля сверх §15 (аддитивно, для координатора):** `capture::stop()` (выход),
+`capture::set_collect(app, bool)` (команда `capture_set_collect`), `capture::running_apps()`
+(команда `apps_running`), `capture::clipboard_sequence()` (номер для `mark_own_write` без своей
+Win32-обвязки). Контракт IPC (§9) не менялся.
+
+**Тесты** (`cargo test capture::`, 65): классификация (цвета/ссылки/контакты/код/края), секреты
+(карты/ключи/PEM/ложные), CF_HTML и заголовки, состояние (пауза, таймер, пропуск, свои номера),
+снимок на фейковом буфере (один OpenClipboard, только нужные форматы, приоритеты, маркеры — 7 случаев
+вкл. Bitwarden и битый DWORD, игнор-лист, свой процесс, занятый буфер, лимиты, зависший формат и
+зависший маркер), worker (`build_clip`: поля, секреты, тумблеры, усечение, Excel текст+PNG, «Копировать
+изображение», дедуп PNG≡DIB, файлы), конвейер (старт, дубли событий, self-copy, пауза, пропуск,
+режим сбора, повторы при занятом буфере и неотвечающем владельце, игнор/маркеры, зависший рендер,
+поток событий), Win32-обёртки (зарегистрированные форматы, свой exe, FileDescription, иконка
+explorer.exe 64×64, listener — `WM_CLIPBOARDUPDATE`, отправленное самому себе, и остановка,
+`apps_running`), **стенд** `bench_10_copies_per_second_for_10_seconds`: 100 записей за 10 с из
+другого потока → 100/100 по порядку, все хэши разные, задержка p50 38 мс / max 47 мс (норма SPEC §7 —
+≤ 300 мс).
+
+**Не проверено нативно (риски):** реальные `WM_RENDERFORMAT`-задержки Office и поведение
+`SMTO_ABORTIFHUNG` с занятыми, но живыми источниками; точное поведение номера последовательности
+при рендере (документировано, что он растёт); маски CF_DIBV5 от разных писателей.
 
 ## 6. Вставка (`paste/`)
 
@@ -725,7 +950,9 @@ export interface ImportReport { imported: number; skipped: number; folders: numb
 
 `register_asynchronous_uri_scheme_protocol("liq", …)` (по образцу `ltthumb` Liquid Tools,
 `lib.rs:198–226`); в WebView2 адрес `http://liq.localhost/<path>`:
-`/thumb/<id>?v=<n>` · `/media/<id>` · `/icon/<appId>` — чтение файла в `spawn_blocking`,
+`/thumb/<id>?v=<n>` · `/media/<id>?v=<n>` · `/icon/<appId>?v=<n>` (версия у всех трёх — W1-A: после
+пересоздания базы id могут совпасть, и без версии WebView2 показал бы чужую картинку из кэша) —
+чтение файла в `spawn_blocking`,
 `Cache-Control: immutable` (версия в query), 404 для отсутствующих.
 
 ### 9.9. Уточнения контракта (W0, 2026-11-26)
@@ -979,6 +1206,28 @@ pub struct PastePayload { id: i64, kind: Kind, text: Option<String>, html: Optio
 Метрики и хэш считает **захват** (и store — для `clip_update_text`/`clip_create_text`) одними и теми
 же функциями `content.rs`; классификацию для `clip_create_text` store берёт у `capture::classify`.
 
+**Реализовано W1-A (2026-11-26)** — сигнатуры выше не менялись; поведение (подробно — §4.2–4.6):
+- `insert_clip` нормализует `NewClip`: текст > 2 МБ и список > 2 000 путей режет и **перехэширует**
+  функциями `content.rs`; html/rtf > 2 МБ отбрасывает; ширину/высоту картинки берёт из заголовка PNG;
+  пустое превью строит сам; метрики, если захват их не дал, — `content::text_metrics`. **`size`
+  пересчитывается** из реально сохранённого (text + все `clip_formats`, включая полный PNG) — поле
+  `NewClip.size` справочное. Ошибки: `invalid: …` (пустой текст, картинка без PNG / > 64 МП, файлы без
+  путей, пустой хэш), `busy`/`failed` (БД, диск). Подъём существующей: `copied_at = max(…)`,
+  `copy_count + 1`, воскрешение, источник и `kind` — новые, `meta` — слияние. После — сигнал ретенции.
+- `set_app_icon`: PNG (сигнатура) ≤ 1 МБ → `icons\<id>.png`; нет приложения → `not_found`.
+- `get_for_paste`: несуществующая, мягко или жёстко удалённая → `not_found: clip <id>` (как и все
+  обращения по id: `clip_detail`, `clip_rename`, `clip_update_text`, `clips_delete`, избранное, папка;
+  на этом префиксе вставка чистит очередь); html — UTF-8 `String`, rtf — байты, files — из
+  `clip_formats` (или из `text`); `png_path` — **абсолютный** путь (`Paths` приводит каталог данных к
+  абсолютному) и только если файл на месте (иначе и `formats` без `png`).
+- `mark_used`: неизвестные/удалённые id пропускаются; `bump` → `copied_at = max(copied_at, now)`.
+- `delete_recent`: число удалённых; мягко удалённые в окне тоже; вызывающий эмитит `deleted` (трей —
+  без `ids`, команда — с `ids`).
+- `init`: фоновый поток `liqlip-store` + `settings::subscribe` (только сигнал на смену `storage.*`).
+- Команды store эмитят `clips:changed {origin:'user'}` сами, после успеха; правки папок и сниппетов —
+  `{change:'updated'}` без `ids` (единственный межоконный сигнал: пилюли папок и счётчик сниппетов
+  должны обновиться, если правка была в другом окне).
+
 **capture (W1-B)** — `src-tauri/src/capture/{mod,classify}.rs`
 
 ```rust
@@ -991,6 +1240,11 @@ pub fn toggle_pause(app: &AppHandle) -> Result<CaptureStatus, String>; // ← х
 pub fn ignore_next(app: &AppHandle) -> Result<CaptureStatus, String>;  // ← трей, хоткей IgnoreNext
 pub fn app_icon_data_url(exe: &str) -> Option<String>;           // ← paste (TargetInfo.iconUrl), apps_running
 pub mod classify { pub fn classify_text(text: &str) -> (Kind, ClipMeta); }   // ← store
+// добавлено W1-B (аддитивно):
+pub fn stop();                                                     // ← lib.rs RunEvent::Exit: снять listener, остановить потоки
+pub fn set_collect(app: &AppHandle, on: bool) -> Result<CaptureStatus, String>; // режим сбора в очередь
+pub fn running_apps() -> Vec<RunningApp>;                          // ← apps_running (blocking-пул)
+pub fn clipboard_sequence() -> u32;                                // GetClipboardSequenceNumber для mark_own_write
 ```
 Захват после `insert_clip` эмитит `clips:changed { origin: 'capture', change: created ? 'added' :
 'updated', ids }`, в режиме сбора зовёт `paste::stack::push`, при смене состояния —

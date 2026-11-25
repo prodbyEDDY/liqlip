@@ -198,6 +198,8 @@ pub fn run() {
 
     app.run(|app, event| {
         if let RunEvent::Exit = event {
+            // W1-B: RemoveClipboardFormatListener + stop the capture threads.
+            capture::stop();
             if let Some(win) = app.get_webview_window(events::SETTINGS) {
                 save_settings_bounds(&win);
             }
