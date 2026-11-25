@@ -1,7 +1,7 @@
 // Mock of capture, picker/window, hotkey-recording, about, OCR and import commands
 // (owner: W1-E; W0 baseline). OCR/import (W2) are implemented here so the settings UI can
-// be built; `?mock-unimpl=ocr,import` makes them reject "unimplemented" like the real
-// app until W2.
+// be built (`import_*` / `backup_*` follow the real W2-B commands); `?mock-unimpl=ocr,import`
+// makes them reject "unimplemented".
 //
 // Shelf window in a browser tab (W1-E): there is no hotkey and no Rust window, so the mock
 // plays `picker::summon` — the shelf's first `picker_target` call (made on mount, after its
@@ -13,6 +13,7 @@ import type {
   AppMeta,
   BackupMode,
   CaptureStatus,
+  ClipsChanged,
   ImportProbe,
   ImportProgress,
   ImportReport,
@@ -189,7 +190,48 @@ function progress<T>(event: string, total: number, make: (done: number) => T, on
   setTimeout(step, 250);
 }
 
-const IMPORT_REPORT: ImportReport = { imported: 1187, skipped: 53, folders: 3, errors: 0 };
+// Import / backup (W2-B): the same phases, events and report shapes as the Rust commands
+// (ARCHITECTURE §16): `import:progress` folders → clips (backups: media → clips), then
+// `clips:changed { origin: 'import', change: 'added' }` (replace: 'reset') without ids. The
+// mock has no file dialogs: export "saves" `Documents\Liqlip-<today>.liqlip`, restore
+// pretends a backup was picked. `?mock-unimpl=import` rejects all four as "unimplemented";
+// `?mock-error=1` makes the probe fail like an unreadable database.
+const LT_PROBE: ImportProbe = {
+  found: true,
+  path: "C:\\Users\\me\\AppData\\Roaming\\com.liquidtools.app\\clipboard\\clipboard.db",
+  clips: 1240,
+  favorites: 32,
+  folders: 3,
+};
+// imported + skipped + errors = probe.clips; a re-run imports 0 and skips the rest.
+const IMPORT_REPORT: ImportReport = { imported: 1185, skipped: 53, folders: 3, errors: 2 };
+let ltImported = false;
+let importBusy = false;
+
+/** Phases one after another (`[phase, total]`), then `done()`; `busy:` while one runs. */
+function phased<T>(phases: [string, number][], done: () => T): Promise<T> {
+  if (importBusy) return Promise.reject(fail("busy", "an import or a backup is already running"));
+  importBusy = true;
+  return new Promise<T>((resolve) => {
+    const next = (i: number) => {
+      if (i >= phases.length) {
+        importBusy = false;
+        resolve(done());
+        return;
+      }
+      const [phase, total] = phases[i];
+      mockEmit<ImportProgress>("import:progress", { phase, done: 0, total });
+      progress<ImportProgress>("import:progress", total, (n) => ({ phase, done: n, total }), () => next(i + 1));
+    };
+    next(0);
+  });
+}
+
+function today(): string {
+  const d = new Date(now());
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
 
 // ── router table ─────────────────────────────────────────────────────────────
 
@@ -257,28 +299,52 @@ export const systemHandlers: Record<string, (args: Args) => unknown> = {
 
   import_lt_probe: (): ImportProbe => {
     guard("import", "import_lt_probe");
-    if (flags.error) throw fail("busy", "mock-error");
-    return {
-      found: true,
-      path: "C:\\Users\\me\\AppData\\Roaming\\com.liquidtools.app\\clipboard\\clipboard.db",
-      clips: 1240,
-      favorites: 32,
-      folders: 3,
-    };
+    if (flags.error) throw fail("failed", "mock-error");
+    return { ...LT_PROBE };
   },
   import_lt_run: () => {
     guard("import", "import_lt_run");
-    return new Promise<ImportReport>((resolve) => {
-      progress<ImportProgress>("import:progress", 1240, (done) => ({ phase: "clips", done, total: 1240 }), () => resolve({ ...IMPORT_REPORT }));
-    });
+    const report: ImportReport = ltImported
+      ? { imported: 0, skipped: LT_PROBE.clips - IMPORT_REPORT.errors, folders: 0, errors: IMPORT_REPORT.errors }
+      : { ...IMPORT_REPORT };
+    return phased<ImportReport>(
+      [
+        ["folders", LT_PROBE.folders],
+        ["clips", LT_PROBE.clips],
+      ],
+      () => {
+        ltImported = true;
+        mockEmit<ClipsChanged>("clips:changed", { origin: "import", change: "added" });
+        return report;
+      },
+    );
   },
   backup_export: () => {
     guard("import", "backup_export");
-    return "C:\\Users\\me\\Documents\\Liqlip backup 2026-11-26.liqlip";
+    return phased<string>(
+      [
+        ["clips", 1],
+        ["media", 120],
+      ],
+      () => `C:\\Users\\me\\Documents\\Liqlip-${today()}.liqlip`,
+    );
   },
   backup_import: ({ mode }) => {
     guard("import", "backup_import");
-    const m = mode as BackupMode;
-    return { ...IMPORT_REPORT, skipped: m === "merge" ? 410 : 0 };
+    const merge = (mode as BackupMode) === "merge";
+    const phases: [string, number][] = merge
+      ? [
+          ["media", 120],
+          ["folders", 3],
+          ["clips", 1240],
+        ]
+      : [
+          ["media", 120],
+          ["clips", 1],
+        ];
+    return phased<ImportReport>(phases, () => {
+      mockEmit<ClipsChanged>("clips:changed", { origin: "import", change: merge ? "added" : "reset" });
+      return merge ? { imported: 830, skipped: 410, folders: 1, errors: 0 } : { imported: 1240, skipped: 0, folders: 3, errors: 0 };
+    });
   },
 };
