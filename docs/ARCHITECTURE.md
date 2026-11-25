@@ -693,7 +693,8 @@ PNG (media\<id>.png) → image: декод → наложение на белы�
 
 > Замер: 2026-11-26 (W1-C, ветка `w1/paste`): модуль реализован целиком; `cargo test` — 49 тестов
 > чистой логики модуля (73 в крейте); нативно не запускалось (PQ-02) — фокус и ввод проверяются по
-> чек-листу из отчёта W1-C на INT-1.
+> чек-листу из отчёта W1-C на INT-1. W2-F: HUD называет сочетание вставки цели (FIX-07, §6.6);
+> тесты модуля по-прежнему без привязки к таймингам (проверено параллельными прогонами).
 
 Файлы: `focus.rs` (цель) · `uipi.rs` (уровни целостности) · `writer.rs` (транзакция буфера + байтовые
 форматы) · `input.rs` (`SendInput`) · `compose.rs` (записи → содержимое буфера) · `flow.rs` (шаги
@@ -838,6 +839,10 @@ sub-authority SID метки (low 0x1000 · medium 0x2000 · high 0x3000 · syst
 - Исход: `pasted`; `copied` + `no_target | elevated | focus_lost`; `failed` + `clipboard_busy |
   not_found | stack_empty`; `partial` (аддитивно в контракт, W1-C) — к `pasted/copied`, если часть
   записей пропущена.
+- **HUD называет сочетание цели** (FIX-07, W2-F): тосты `copied` и `elevated` при известной цели
+  получают в `HudShow.text` сочетание, которое вставляет в этом приложении (`input::resolve_chord` →
+  `input::chord_label`: «Ctrl+V» / «Shift+Insert» / «Ctrl+Shift+V»), — то же, что ушло бы в
+  `SendInput`; без цели `text` нет, и HUD пишет «Ctrl+V».
 
 ### 6.7. Очередь вставки (`stack.rs`)
 
@@ -879,7 +884,7 @@ Enter после вставки; пустая очередь → `failed/stack_e
 
 - Нативно не проверено (PQ-02): фокус, UIPI, `SendInput`, drag-out — по чек-листу W1-C на INT-1.
 - Приложения, которые сами уводят фокус после активации (редко), дадут `focus_lost` — данные в
-  буфере, HUD подсказывает Ctrl+V.
+  буфере, HUD подсказывает сочетание вставки этого приложения.
 - `keepOpen`: возврат активации шелфу зависит от правил foreground Windows (см. 6.6).
 - Внутри окна-цели фокус возвращается в тот элемент, который приложение само восстанавливает при
   активации (как при Alt+Tab).
@@ -1024,8 +1029,11 @@ SWP_NOACTIVATE)` и прячется `ShowWindow(SW_HIDE)`; tao `show()` не в
 `copied` (focus_lost/нет цели) и `elevated`; очередь на пути хоткея — `stack_empty`; хоткеи паузы и
 пропуска — `paused`/`resumed`/`skip_next`. Фронт — `src/windows/hud/` (капсула 999px, `--shadow-pop`,
 иконка + текст, `{keys}` → чип `Kbd`, вход 190 мс liquid, выход 170 мс, reduced-motion без
-движения; превью `/hud.html?kind=copied|elevated|stack_empty|paused|resumed|skip_next`, `&text=`,
-`?demo=1`).
+движения; превью `/hud.html?kind=copied|elevated|stack_empty|paused|resumed|skip_next`,
+`&text=Shift%2BInsert`, `?demo=1`). **`HudShow.text`** (уточнено W2-F, FIX-07) — подпись чипа
+`{keys}`: сочетание вставки целевого приложения (§6.6); нет `text` — `hud.pasteKeys` («Ctrl+V»).
+У тостов без `{keys}` `text` не показывается (раньше `text` заменял всё сообщение; так его никто
+не использовал). `toast.ts::keysLabel` + `tests/hudToast.test.mjs`.
 
 ### 7.8. Команды и требования к фронту шелфа (W1-E)
 

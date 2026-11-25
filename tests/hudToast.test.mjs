@@ -20,6 +20,13 @@ test("segments split on {keys}", () => {
   ]);
 });
 
+test("the key chip names the target's paste chord, else the default (FIX-07)", () => {
+  assert.equal(hud.keysLabel({ kind: "copied", text: "Shift+Insert" }, "Ctrl+V"), "Shift+Insert");
+  assert.equal(hud.keysLabel({ kind: "elevated", text: "Ctrl+Shift+V" }, "Ctrl+V"), "Ctrl+Shift+V");
+  assert.equal(hud.keysLabel({ kind: "copied" }, "Ctrl+V"), "Ctrl+V");
+  assert.equal(hud.keysLabel({ kind: "copied", text: "  " }, "Ctrl+V"), "Ctrl+V");
+});
+
 test("a repeated show of the visible toast only extends it", () => {
   const copied = { kind: "copied" };
   assert.equal(hud.isSameToast(copied, true, { kind: "copied" }), true);

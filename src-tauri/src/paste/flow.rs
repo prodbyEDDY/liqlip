@@ -220,10 +220,10 @@ pub fn run(app: &AppHandle, job: Job<'_>) -> RunResult {
                     }
                 }
             }
-            Step::Hud(kind) => crate::picker::hud::show(app, kind, None),
+            Step::Hud(kind) => hud(app, kind, &job),
             Step::HudIfNotPasted => match miss {
-                Some(Miss::FocusLost) => crate::picker::hud::show(app, HudKind::Copied, None),
-                Some(Miss::Blocked) => crate::picker::hud::show(app, HudKind::Elevated, None),
+                Some(Miss::FocusLost) => hud(app, HudKind::Copied, &job),
+                Some(Miss::Blocked) => hud(app, HudKind::Elevated, &job),
                 None => {}
             },
         }
@@ -239,6 +239,18 @@ pub fn run(app: &AppHandle, job: Job<'_>) -> RunResult {
         &format!("{:?} {:?} → {:?}/{:?} in {} ms", job.origin, route, result.result, result.reason, started.elapsed().as_millis()),
     );
     RunResult::Done(result)
+}
+
+/// `HudShow.text` of a toast that asks the user to paste ("copied / administrator window —
+/// press {keys}"): the chord that pastes in the target app (`input::resolve_chord`: the
+/// per-app setting, then the built-ins, then Ctrl+V), FIX-07. `None` — no target, or a toast
+/// without keys — and the HUD says Ctrl+V.
+fn hud_keys(kind: HudKind, has_target: bool, chord: PasteChord) -> Option<String> {
+    (has_target && matches!(kind, HudKind::Copied | HudKind::Elevated)).then(|| input::chord_label(chord).to_string())
+}
+
+fn hud(app: &AppHandle, kind: HudKind, job: &Job<'_>) {
+    crate::picker::hud::show(app, kind, hud_keys(kind, job.target.is_some(), job.chord));
 }
 
 fn bring_to_front(hwnd: isize) -> bool {
@@ -372,6 +384,19 @@ mod tests {
         assert_eq!(plan(SHELF, Route::NoTarget, true), vec![Write, HideShelf, Hud(HudKind::Copied)]);
         assert_eq!(plan(SHELF, Route::NoTarget, false), vec![Write]);
         assert_eq!(plan(Origin::Foreground, Route::NoTarget, true), vec![Write, Hud(HudKind::Copied)]);
+    }
+
+    /// FIX-07: the HUD names the chord of the target app, not always Ctrl+V.
+    #[test]
+    fn hud_names_the_chord_of_the_target() {
+        assert_eq!(hud_keys(HudKind::Copied, true, PasteChord::ShiftInsert).as_deref(), Some("Shift+Insert"));
+        assert_eq!(hud_keys(HudKind::Elevated, true, PasteChord::CtrlShiftV).as_deref(), Some("Ctrl+Shift+V"));
+        assert_eq!(hud_keys(HudKind::Copied, true, PasteChord::CtrlV).as_deref(), Some("Ctrl+V"));
+        assert_eq!(hud_keys(HudKind::Copied, false, PasteChord::ShiftInsert), None, "no target → the HUD's Ctrl+V");
+        assert_eq!(hud_keys(HudKind::StackEmpty, true, PasteChord::ShiftInsert), None, "a toast without keys");
+        // The chord comes from the same resolver as the input (per-app setting → built-in).
+        let mintty = input::resolve_chord("c:\\program files\\git\\usr\\bin\\mintty.exe", &[]);
+        assert_eq!(hud_keys(HudKind::Copied, true, mintty).as_deref(), Some("Shift+Insert"));
     }
 
     #[test]
