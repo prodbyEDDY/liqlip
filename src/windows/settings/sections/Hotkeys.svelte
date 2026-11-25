@@ -67,7 +67,7 @@
                 <span class="keys__chord">
                   {#each chord as k, j (j)}
                     {#if j > 0}<span class="keys__plus">+</span>{/if}
-                    {#if k.startsWith("@")}<span class="keys__word">{cap(k)}</span>{:else}<Kbd>{k}</Kbd>{/if}
+                    {#if k.startsWith("@")}<span class="keys__word">{cap(k)}</span>{:else}<Kbd size="sm">{k}</Kbd>{/if}
                   {/each}
                 </span>
               {/each}
@@ -82,8 +82,7 @@
 
 <style>
   .ref {
-    padding: 6px 4px;
-    background: var(--s-tile);
+    padding: 0;
   }
   .keys {
     width: 100%;
@@ -91,26 +90,27 @@
     border-spacing: 0;
   }
   .keys th {
-    padding: 8px 12px;
-    font-size: var(--text-micro);
-    font-weight: 700;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    text-align: left;
+    padding: 10px 12px 6px;
     color: var(--color-ink-3);
+    font-size: var(--text-micro);
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-align: left;
+    text-transform: uppercase;
   }
   .keys td {
-    padding: 7px 12px;
+    padding: 6px 12px;
     vertical-align: middle;
   }
+  /* Zebra rows: a faint wash, rounded like the tile's inner edge (r12 = 16 − 4). */
   .keys tbody tr:nth-child(odd) td {
-    background: color-mix(in srgb, var(--color-track) 55%, transparent);
+    background: color-mix(in srgb, var(--color-ink) 3.5%, transparent);
   }
   .keys tbody tr td:first-child {
-    border-radius: 10px 0 0 10px;
+    border-radius: var(--r-tile-in) 0 0 var(--r-tile-in);
   }
   .keys tbody tr td:last-child {
-    border-radius: 0 10px 10px 0;
+    border-radius: 0 var(--r-tile-in) var(--r-tile-in) 0;
   }
   .keys__combo {
     width: 44%;
@@ -126,12 +126,12 @@
   }
   .keys__or {
     margin: 0 6px;
-    font-size: var(--text-meta);
     color: var(--color-ink-3);
+    font-size: var(--text-secondary);
   }
   .keys__plus {
-    font-size: var(--text-meta);
     color: var(--color-ink-3);
+    font-size: var(--text-secondary);
   }
   .keys__word {
     font-size: var(--text-secondary);

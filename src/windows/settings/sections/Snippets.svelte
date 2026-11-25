@@ -155,8 +155,8 @@
     </EmptyState>
   </div>
 {:else}
-  <div class="snip squircle">
-    <aside class="pane pane--list">
+  <div class="snip">
+    <aside class="pane pane--list squircle">
       <div class="pane__top">
         <SearchField value={query} placeholder={t("settings.snippets.search")} onInput={onSearch} />
         <Button variant="secondary" icon="plus" loading={creating} onclick={create} aria-label={t("settings.snippets.new")} title={t("settings.snippets.new")} />
@@ -206,7 +206,7 @@
         </p>
       {/if}
     </aside>
-    <section class="pane pane--editor">
+    <section class="pane pane--editor squircle">
       {#if selected}
         {#key selected.id}
           <SnippetEditor snippet={selected} {clipboard} focusName={focusNew === selected.id} {onSaved} onDelete={() => remove(selected)} />
@@ -214,7 +214,7 @@
       {:else if status === "loading"}
         <div class="editor-sk">
           <Skeleton width="30%" height="12px" />
-          <Skeleton height="38px" radius={12} />
+          <Skeleton height="36px" circle />
           <Skeleton width="20%" height="12px" />
           <Skeleton height="168px" radius={12} />
         </div>
@@ -227,59 +227,55 @@
 
 <style>
   .empty {
-    padding: 32px 0;
-    border-radius: 16px;
-    background: var(--s-tile);
+    padding: 24px 0;
+    border-radius: var(--r-tile);
+    background: var(--color-tile);
   }
-  .empty :global(.empty) {
-    max-width: 380px;
-  }
+  /* Two tiles side by side (never a 2 px seam). List: padding 8 → rows r8 (16 − 8); its
+     search row sits 16 px in, where the rule lets it keep its capsule. Editor: padding 16. */
   .snip {
     display: grid;
-    grid-template-columns: 250px minmax(0, 1fr);
-    gap: 2px;
-    min-height: 480px;
-    border-radius: 16px;
-    overflow: hidden;
+    grid-template-columns: 248px minmax(0, 1fr);
+    gap: 12px;
+    align-items: start;
   }
   .pane {
     min-width: 0;
-    background: var(--s-tile);
+    border-radius: var(--r-tile);
+    background: var(--color-tile);
   }
   .pane--list {
+    position: sticky;
+    top: 0;
     display: flex;
     flex-direction: column;
-    gap: 8px;
-    padding: 12px 10px;
+    gap: 4px;
+    padding: 8px;
   }
   .pane__top {
     display: flex;
     gap: 6px;
+    padding: 8px 8px 6px;
   }
   .pane__top :global(.field) {
     flex: 1 1 0;
     min-width: 0;
   }
-  .pane__top :global(.btn) {
-    flex: 0 0 auto;
-    width: 36px;
-    padding: 0;
-  }
   .items {
     display: flex;
     flex-direction: column;
     gap: 2px;
+    max-height: 520px;
     margin: 0;
     padding: 0;
-    list-style: none;
     overflow-y: auto;
-    max-height: 560px;
+    list-style: none;
   }
   .sk {
     display: flex;
     flex-direction: column;
-    gap: 7px;
-    padding: 10px;
+    gap: 8px;
+    padding: 10px 12px;
   }
   .item-wrap--drag {
     opacity: 0.5;
@@ -289,25 +285,28 @@
     flex-direction: column;
     gap: 2px;
     width: 100%;
-    padding: 8px 10px;
+    padding: 8px 12px;
     border: 0;
-    border-radius: 10px;
+    border-radius: max(4px, calc(var(--r-tile) - 8px));
+    corner-shape: squircle;
     background: transparent;
     color: var(--color-ink);
     font: inherit;
     text-align: left;
-    cursor: default;
     transition: background-color var(--dur-fast) var(--ease-out-soft);
   }
   .item:hover {
-    background: var(--color-hover);
+    background: var(--color-track);
   }
   .item:active {
-    background: var(--color-track);
+    background: var(--color-hover);
   }
   .item--sel,
   .item--sel:hover {
     background: var(--color-selected);
+  }
+  .item:focus-visible {
+    outline-offset: -2px;
   }
   .item__name,
   .item__body {
@@ -320,29 +319,32 @@
     font-weight: 600;
   }
   .item__body {
+    color: var(--color-ink-3);
     font-family: var(--font-mono);
     font-size: var(--text-meta);
-    color: var(--color-ink-3);
   }
   .pane__msg {
     display: flex;
-    align-items: flex-start;
     flex-wrap: wrap;
+    align-items: flex-start;
     gap: 8px;
-    padding: 10px;
-    font-size: var(--text-secondary);
-    line-height: 1.45;
+    padding: 10px 12px;
     color: var(--color-ink-2);
+    font-size: var(--text-secondary);
+    line-height: var(--text-secondary--line-height);
   }
   .pane__msg span {
     flex: 1 1 140px;
   }
   .pane__hint {
-    margin: auto 0 0;
-    padding: 6px 8px 0;
-    font-size: var(--text-meta);
-    line-height: 1.4;
+    margin: 0;
+    padding: 6px 12px 6px;
     color: var(--color-ink-3);
+    font-size: var(--text-secondary);
+    line-height: var(--text-secondary--line-height);
+  }
+  .pane__hint:empty {
+    display: none;
   }
   .pane__placeholder {
     display: flex;
@@ -350,22 +352,24 @@
     align-items: center;
     justify-content: center;
     gap: 10px;
-    height: 100%;
     min-height: 320px;
     padding: 24px;
-    font-size: var(--text-secondary);
     color: var(--color-ink-3);
+    font-size: var(--text-secondary);
     text-align: center;
   }
   .editor-sk {
     display: flex;
     flex-direction: column;
     gap: 10px;
-    padding: 18px;
+    padding: 16px;
   }
   @media (max-width: 859px) {
     .snip {
       grid-template-columns: minmax(0, 1fr);
+    }
+    .pane--list {
+      position: static;
     }
     .items {
       max-height: 220px;

@@ -280,25 +280,25 @@
   .list {
     display: flex;
     flex-direction: column;
-    gap: 2px;
     margin: 0;
     padding: 0;
     list-style: none;
   }
+  /* Entries fill the tile's inner width: r12 = tile radius − tile padding (concentric). */
   .tile {
     display: flex;
     align-items: center;
     gap: 10px;
-    min-height: 52px;
-    padding: 8px 10px 8px 12px;
-    background: var(--s-tile);
+    min-height: 48px;
+    padding: 8px 8px 8px 12px;
+    border-radius: var(--r-tile-in);
   }
   .tile--msg {
     gap: 10px;
-    padding: 14px 16px;
-    font-size: var(--text-secondary);
-    line-height: 1.45;
+    padding: 12px;
     color: var(--color-ink-2);
+    font-size: var(--text-secondary);
+    line-height: var(--text-secondary--line-height);
   }
   .tile--msg span {
     flex: 1 1 auto;
@@ -309,15 +309,17 @@
       opacity var(--dur-fast) var(--ease-out-soft);
   }
   .folder:hover {
-    background: var(--color-hover);
+    background: var(--color-track);
   }
   .folder--drag {
     opacity: 0.5;
   }
   .folder__grip {
     display: inline-flex;
+    margin-left: -4px;
     color: var(--color-ink-3);
     opacity: 0;
+    cursor: grab;
     transition: opacity var(--dur-fast) var(--ease-out-soft);
   }
   .folder:hover .folder__grip,
@@ -332,23 +334,25 @@
     flex: 1 1 auto;
     min-width: 0;
     padding: 4px 0;
+    overflow: hidden;
     border: 0;
     background: transparent;
+    color: var(--color-ink);
     font: inherit;
-    text-align: left;
-    cursor: default;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
     font-size: var(--text-row);
     font-weight: 600;
-    color: var(--color-ink);
+    text-align: left;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .folder__name:focus-visible {
+    border-radius: var(--radius-xs);
   }
   .folder__edit {
     display: flex;
+    flex: 1 1 auto;
     flex-direction: column;
     gap: 6px;
-    flex: 1 1 auto;
     min-width: 0;
   }
   .folder__tools {
@@ -365,40 +369,41 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 30px;
-    height: 30px;
+    width: var(--h-md);
+    height: var(--h-md);
     border: 0;
     border-radius: 999px;
     background: transparent;
     color: var(--color-ink-3);
-    cursor: default;
     transition:
       background-color var(--dur-fast) var(--ease-out-soft),
       color var(--dur-fast) var(--ease-out-soft);
   }
   .tool:hover {
-    background: var(--color-track);
+    background: var(--color-hover);
     color: var(--color-ink);
   }
   .tool:active {
     background: var(--color-selected);
   }
   .msg {
+    color: var(--color-ink);
     font-size: var(--text-secondary);
     font-weight: 600;
-    color: var(--color-ink);
   }
   .hint {
     margin: 0;
-    padding: 8px 16px 10px;
-    background: var(--s-tile);
-    font-size: var(--text-meta);
+    padding: 6px 12px 8px;
     color: var(--color-ink-3);
+    font-size: var(--text-secondary);
   }
   .create {
     align-items: flex-start;
   }
   .create .folder__icon {
-    margin-top: 9px;
+    margin-top: 10px;
+  }
+  .create :global(.btn) {
+    margin-top: 2px;
   }
 </style>

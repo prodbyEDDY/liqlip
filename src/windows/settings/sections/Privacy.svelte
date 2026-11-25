@@ -118,8 +118,8 @@
     note={pv.respectMarkers ? null : t("settings.privacy.respectMarkers.off")}
     error={settings.message("privacy.respectMarkers")}
   >
-    {#snippet control()}
-      <Toggle
+    {#snippet control(ids)}
+      <Toggle describedby={ids.describedby}
         checked={pv.respectMarkers}
         onChange={(v) => settings.set("privacy.respectMarkers", v)}
         ariaLabel={t("settings.privacy.respectMarkers")}
@@ -149,8 +149,8 @@
     icon="shield"
     error={settings.message("privacy.secretPatterns")}
   >
-    {#snippet control()}
-      <Toggle
+    {#snippet control(ids)}
+      <Toggle describedby={ids.describedby}
         checked={pv.secretPatterns}
         onChange={(v) => settings.set("privacy.secretPatterns", v)}
         ariaLabel={t("settings.privacy.secretPatterns")}
@@ -211,10 +211,10 @@
 
 <Group title={t("settings.privacy.recent")}>
   <Row label={t("settings.privacy.recent")} desc={t("settings.privacy.recent.desc")} icon="clock" stack>
-    {#snippet control()}
+    {#snippet control(ids)}
       <div class="recent">
-        <SegmentedControl options={periods} value={period} onChange={(v) => (period = v)} ariaLabel={t("settings.privacy.recent.period")} full={false} />
-        <Button variant="secondary" icon="trash" loading={deleting} onclick={deleteRecent} style="color: var(--color-danger)">
+        <SegmentedControl describedby={ids.describedby} options={periods} value={period} onChange={(v) => (period = v)} ariaLabel={t("settings.privacy.recent.period")} full={false} />
+        <Button variant="danger" icon="trash" loading={deleting} onclick={deleteRecent}>
           {t("settings.privacy.recent.button")}
         </Button>
       </div>
@@ -227,17 +227,18 @@
     display: flex;
     flex-direction: column;
     gap: 12px;
-    padding: 14px 16px;
-    background: var(--s-tile);
+    padding: 12px;
   }
+  /* Live status: r24 (scale) with a 32 px capsule button inset 8 px → concentric. Paused
+     inverts to ink — the state reads at a glance without colour. */
   .state {
     display: flex;
     align-items: center;
     gap: 10px;
     min-height: 48px;
-    padding: 8px 8px 8px 14px;
-    border-radius: 12px;
-    background: var(--s-inset);
+    padding: 8px 8px 8px 16px;
+    border-radius: var(--radius-2xl);
+    background: var(--color-track);
     color: var(--color-ink-2);
     transition:
       background-color var(--dur-base) var(--ease-out-soft),
@@ -249,8 +250,8 @@
   }
   .state__text {
     display: flex;
-    flex-direction: column;
     flex: 1 1 auto;
+    flex-direction: column;
     min-width: 0;
     font-size: var(--text-row);
     font-weight: 600;

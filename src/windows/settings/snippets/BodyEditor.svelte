@@ -61,30 +61,31 @@
 </div>
 
 <style>
+  /* Multi-line field: r12 squircle (--r-field), the concentric ring while typing. */
   .body {
     position: relative;
-    border-radius: 12px;
+    border-radius: var(--r-field);
     background: var(--color-track);
     transition: background-color var(--dur-fast) var(--ease-out-soft);
   }
-  .body:hover {
+  .body:hover:not(:focus-within) {
     background: var(--color-hover);
   }
   .body:focus-within {
-    background: var(--color-selected);
-    outline: 2px solid var(--color-ink);
-    outline-offset: 2px;
+    outline: var(--focus-ring);
+    outline-offset: var(--focus-offset);
   }
   .body--invalid {
-    background: var(--color-paper);
+    background: var(--color-raised);
+    box-shadow: var(--shadow-on-lift);
   }
   /* Mirror and textarea share every metric that affects line breaking. */
   .mirror__inner,
   .area {
     margin: 0;
-    padding: 10px 12px;
+    padding: 10px 14px;
     font-family: var(--font-mono);
-    font-size: 12.5px;
+    font-size: var(--text-secondary);
     line-height: 1.6;
     letter-spacing: 0;
     white-space: pre-wrap;
@@ -105,18 +106,16 @@
   .mirror__inner {
     color: transparent;
   }
+  /* Placeholder marks: a wash behind the token (no stroke). */
   .mk {
-    border-radius: 4px;
-    background: color-mix(in srgb, var(--color-ink) 13%, transparent);
-    box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--color-ink) 13%, transparent);
+    border-radius: var(--radius-xs);
+    background: color-mix(in srgb, var(--color-ink) 14%, transparent);
   }
   .mk--esc {
     background: color-mix(in srgb, var(--color-ink) 7%, transparent);
-    box-shadow: none;
   }
   .mk--bad {
     background: transparent;
-    box-shadow: none;
     text-decoration: underline wavy;
     text-decoration-color: var(--color-ink-2);
     text-underline-offset: 3px;
@@ -133,7 +132,9 @@
     color: var(--color-ink);
     caret-color: var(--color-ink);
     outline: none;
-    resize: vertical;
+    /* Grows with the text (no resize grip in the corner). */
+    field-sizing: content;
+    resize: none;
     overflow: auto;
     scrollbar-gutter: stable;
   }

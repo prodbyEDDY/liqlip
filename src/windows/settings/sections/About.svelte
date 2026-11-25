@@ -83,25 +83,26 @@
 </Group>
 
 <style>
+  /* Hero tile: r16 · padding 16 → the 56 px mark sits 16 px in (≥ radius → scale radius). */
   .hero {
     display: flex;
     align-items: center;
     gap: 16px;
-    padding: 18px;
-    border-radius: 16px;
-    background: var(--s-tile);
+    padding: 16px;
+    border-radius: var(--r-tile);
+    background: var(--color-tile);
   }
   .mark {
     display: flex;
+    flex: 0 0 auto;
     align-items: center;
     justify-content: center;
-    flex: 0 0 auto;
     width: 56px;
     height: 56px;
-    border-radius: 16px;
+    border-radius: var(--radius-lg);
     background: var(--color-ink);
     color: var(--color-paper);
-    font-size: 28px;
+    font-size: 26px;
     font-weight: 800;
     letter-spacing: -0.02em;
   }
@@ -116,17 +117,17 @@
     font-weight: 700;
   }
   .hero__tag {
-    font-size: var(--text-row);
     color: var(--color-ink-2);
+    font-size: var(--text-row);
   }
   .hero__ver {
     display: flex;
     align-items: center;
     gap: 8px;
-    min-height: 26px;
+    min-height: 28px;
+    color: var(--color-ink-3);
     font-family: var(--font-mono);
     font-size: var(--text-secondary);
-    color: var(--color-ink-3);
   }
   .hero__err {
     display: inline-flex;
@@ -138,27 +139,27 @@
     display: flex;
     align-items: center;
     gap: 8px;
-    margin: 12px 4px 26px;
-    font-size: var(--text-secondary);
+    margin: 12px 4px 24px;
     color: var(--color-ink-3);
+    font-size: var(--text-secondary);
   }
   .path {
     display: block;
-    padding: 6px 10px;
-    border-radius: 8px;
-    background: var(--s-inset);
+    padding: 6px 12px;
+    border-radius: var(--radius-sm);
+    background: var(--color-track);
+    color: var(--color-ink-2);
     font-family: var(--font-mono);
     font-size: var(--text-meta);
-    color: var(--color-ink-2);
     overflow-wrap: anywhere;
   }
   .link {
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    height: 30px;
-    padding: 0 12px;
-    border-radius: 12px;
+    height: var(--h-md);
+    padding: 0 13px;
+    border-radius: 999px;
     background: var(--color-track);
     color: var(--color-ink);
     font-size: var(--text-secondary);

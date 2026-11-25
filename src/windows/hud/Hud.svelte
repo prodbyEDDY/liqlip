@@ -49,15 +49,15 @@
 <div class="stage">
   {#if toast}
     {#key seq}
-      <div class="hud" class:out={!visible} role="status" aria-live="polite">
-        <Ico name={KIND_ICON[toast.kind]} size={16} />
+      <div class="hud" class:out={!visible} class:hud--keys-end={parts?.at(-1)?.kind === "keys"} role="status" aria-live="polite">
+        <span class="hud__icon"><Ico name={KIND_ICON[toast.kind]} size={16} /></span>
         <span class="msg">
           {#if parts}
             {#each parts as part, i (i)}
-              {#if part.kind === "keys"}<Kbd>{t("hud.pasteKeys")}</Kbd>{:else}{part.text}{/if}
+              {#if part.kind === "keys"}<Kbd>{t("hud.pasteKeys")}</Kbd>{:else}<span class="msg__text">{part.text.trim()}</span>{/if}
             {/each}
           {:else}
-            {toast.text}
+            <span class="msg__text">{toast.text}</span>
           {/if}
         </span>
       </div>
@@ -73,7 +73,10 @@
     user-select: none;
   }
   /* The window is larger than the capsule (picker/geometry.rs HUD_SIZE 400×112): the
-     transparent margin holds --shadow-pop. The capsule is 40 px tall, centred. */
+     transparent margin (36 px above/below, ≥ 32 px at the sides) holds --shadow-pop, so the
+     shadow is never cut by the window edge. The capsule is 40 px tall, centred; its icon
+     circle (32 px) and a trailing keycap (24 px) are inset so they stay concentric with the
+     capsule ends (16 + 4 = 20, 12 + 8 = 20). */
   .stage {
     position: fixed;
     inset: 0;
@@ -85,13 +88,13 @@
   .hud {
     display: inline-flex;
     align-items: center;
-    gap: 8px;
+    gap: 10px;
     height: 40px;
     max-width: calc(100% - 64px);
     box-sizing: border-box;
-    padding: 0 16px 0 14px;
+    padding: 4px 18px 4px 4px;
     border-radius: 999px;
-    background: var(--color-paper);
+    background: var(--color-raised);
     color: var(--color-ink);
     box-shadow: var(--shadow-pop);
     font-size: var(--text-row);
@@ -104,14 +107,31 @@
       opacity 170ms var(--ease-out-soft),
       transform 170ms var(--ease-out-soft);
   }
+  .hud--keys-end {
+    padding-right: 8px;
+  }
   .hud.out {
     opacity: 0;
     transform: translateY(4px) scale(0.97);
+  }
+  .hud__icon {
+    display: inline-flex;
+    flex: 0 0 auto;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    border-radius: 999px;
+    background: var(--color-ink);
+    color: var(--color-paper);
   }
   .msg {
     display: inline-flex;
     align-items: center;
     gap: 6px;
+    min-width: 0;
+  }
+  .msg__text {
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;

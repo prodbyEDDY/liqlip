@@ -166,9 +166,9 @@
 
 <Group title={t("settings.storage.history")}>
   <Row label={t("settings.storage.retention")} desc={t("settings.storage.retention.desc")} error={settings.message("storage.retention")}>
-    {#snippet control()}
+    {#snippet control(ids)}
       <div class="w-dd">
-        <Dropdown
+        <Dropdown describedby={ids.describedby}
           options={retentions}
           value={st.retention}
           onChange={(v) => settings.set("storage.retention", v)}
@@ -178,8 +178,8 @@
     {/snippet}
   </Row>
   <Row label={t("settings.storage.maxEntries")} desc={t("settings.storage.maxEntries.desc")} error={settings.message("storage.maxEntries")}>
-    {#snippet control()}
-      <SegmentedControl
+    {#snippet control(ids)}
+      <SegmentedControl describedby={ids.describedby}
         options={entries}
         value={String(st.maxEntries)}
         onChange={(v) => settings.set("storage.maxEntries", Number(v))}
@@ -189,8 +189,8 @@
     {/snippet}
   </Row>
   <Row label={t("settings.storage.maxSize")} desc={t("settings.storage.maxSize.desc")} error={settings.message("storage.maxSizeMb")}>
-    {#snippet control()}
-      <SegmentedControl
+    {#snippet control(ids)}
+      <SegmentedControl describedby={ids.describedby}
         options={sizes}
         value={String(st.maxSizeMb)}
         onChange={(v) => settings.set("storage.maxSizeMb", Number(v))}
@@ -210,8 +210,8 @@
       icon={KIND_ICON[kind]}
       error={settings.message(`storage.types.${kind}`)}
     >
-      {#snippet control()}
-        <Toggle
+      {#snippet control(ids)}
+        <Toggle describedby={ids.describedby}
           checked={st.types[kind]}
           onChange={(v) => settings.set(`storage.types.${kind}`, v)}
           ariaLabel={t(`settings.storage.type.${kind}`)}
@@ -261,14 +261,7 @@
   </Row>
   <Row label={t("settings.storage.clearAll")} desc={t("settings.storage.clearAll.desc")}>
     {#snippet control()}
-      <Button
-        variant="secondary"
-        icon="trash"
-        loading={clearing === "all"}
-        disabled={clearing !== null}
-        onclick={clearAll}
-        style="color: var(--color-danger)"
-      >
+      <Button variant="danger" icon="trash" loading={clearing === "all"} disabled={clearing !== null} onclick={clearAll}>
         {t("settings.storage.clearAll")}
       </Button>
     {/snippet}
@@ -281,20 +274,22 @@
   }
   .hint {
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     gap: 8px;
     margin: 0;
-    padding: 10px 16px 12px;
-    background: var(--s-tile);
-    font-size: var(--text-secondary);
+    padding: 2px 12px 12px;
     color: var(--color-ink-2);
+    font-size: var(--text-secondary);
+    line-height: var(--text-secondary--line-height);
+  }
+  .hint :global(.ico) {
+    margin-top: 2px;
   }
   .usage {
     display: flex;
     flex-direction: column;
     gap: 12px;
-    padding: 14px 16px;
-    background: var(--s-tile);
+    padding: 12px;
   }
   .stats {
     display: grid;
@@ -302,36 +297,48 @@
     gap: 8px;
     margin: 0;
   }
+  /* Stat cells sit 16 px from the tile corner (≥ its radius) → radius from the scale. */
   .stat {
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 4px;
+    min-width: 0;
     padding: 12px 14px;
-    border-radius: 12px;
-    background: var(--s-inset);
+    border-radius: var(--radius-md);
+    background: var(--color-track);
   }
   .stat dt {
-    font-size: var(--text-meta);
+    overflow: hidden;
     color: var(--color-ink-3);
+    font-size: var(--text-secondary);
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .stat dd {
-    margin: 0;
     min-height: 20px;
-    font-family: var(--font-mono);
-    font-size: 15px;
-    font-weight: 600;
+    margin: 0;
     color: var(--color-ink);
+    font-family: var(--font-mono);
+    font-size: var(--text-panel);
+    font-weight: 600;
     font-variant-numeric: tabular-nums;
+    white-space: nowrap;
   }
   .stat--total {
-    background: var(--color-track);
+    background: var(--color-ink);
+  }
+  .stat--total dt {
+    color: color-mix(in srgb, var(--color-paper) 70%, transparent);
+  }
+  .stat--total dd {
+    color: var(--color-paper);
   }
   .usage__error {
     display: flex;
     align-items: center;
     gap: 10px;
-    font-size: var(--text-secondary);
     color: var(--color-ink-2);
+    font-size: var(--text-secondary);
   }
   .usage__error span {
     flex: 1 1 auto;

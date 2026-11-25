@@ -65,7 +65,7 @@
 
 <dialog
   bind:this={el}
-  class="dlg squircle"
+  class="dlg"
   aria-labelledby={titleId}
   oncancel={(e) => {
     e.preventDefault();
@@ -117,29 +117,32 @@
     {/if}
   </div>
   <footer class="dlg__foot">
-    <Button variant="primary" onclick={() => (open = false)}>{t("common.done")}</Button>
+    <Button variant="primary" size="sm" onclick={() => (open = false)}>{t("common.done")}</Button>
   </footer>
 </dialog>
 
 <style>
+  /* Dialog geometry: r28 · pad 12; list rows (r16) and the Done capsule (32 px) sit 12 px
+     from the edges → concentric. */
   .dlg {
     display: flex;
     flex-direction: column;
     width: min(480px, calc(100vw - 32px));
     max-height: min(560px, calc(100vh - 48px));
     margin: auto; /* Tailwind preflight zeroes the UA centering margin */
-    padding: 0;
+    padding: var(--pad-dialog);
     border: 0;
-    border-radius: 22px;
-    background: var(--s-dialog);
+    border-radius: var(--r-dialog);
+    corner-shape: squircle;
+    background: var(--color-raised);
     color: var(--color-ink);
-    box-shadow: var(--shadow-pop);
+    box-shadow: var(--shadow-card-lg);
   }
   .dlg:not([open]) {
     display: none;
   }
   .dlg[open] {
-    animation: dlg-in var(--dur-base) var(--ease-out-soft);
+    animation: dlg-in var(--dur-slow) var(--ease-liquid);
   }
   .dlg::backdrop {
     background: rgb(0 0 0 / 0.32);
@@ -147,42 +150,45 @@
   @keyframes dlg-in {
     from {
       opacity: 0;
-      transform: translateY(6px) scale(0.98);
+      transform: scale(0.96);
     }
   }
   .dlg__head {
-    padding: 20px 22px 0;
+    padding: 10px 8px 0;
   }
   .dlg__title {
     margin: 0;
-    font-size: 15px;
+    font-size: var(--text-panel);
     font-weight: 700;
+    line-height: var(--text-panel--line-height);
   }
   .dlg__desc {
     margin: 4px 0 0;
-    font-size: var(--text-secondary);
     color: var(--color-ink-3);
+    font-size: var(--text-secondary);
+    line-height: var(--text-secondary--line-height);
   }
   .dlg__search {
-    padding: 14px 22px 8px;
+    padding: 14px 0 8px;
   }
   .dlg__list {
     flex: 1 1 auto;
     min-height: 200px;
+    margin: 0 calc(-1 * var(--pad-dialog));
+    padding: 4px var(--pad-dialog);
     overflow-y: auto;
-    padding: 4px 14px;
   }
   .dlg__foot {
     display: flex;
     justify-content: flex-end;
-    padding: 12px 22px 18px;
+    padding-top: 12px;
   }
   .sk {
     display: flex;
     align-items: center;
     gap: 12px;
     height: 48px;
-    padding: 0 8px;
+    padding: 0 10px;
   }
   .apps {
     display: flex;
@@ -198,29 +204,31 @@
     gap: 12px;
     width: 100%;
     height: 48px;
-    padding: 0 10px 0 8px;
+    padding: 0 12px 0 10px;
     border: 0;
-    border-radius: 12px;
+    border-radius: var(--r-dialog-in);
     background: transparent;
     color: var(--color-ink);
     font: inherit;
     text-align: left;
-    cursor: default;
     transition: background-color var(--dur-fast) var(--ease-out-soft);
   }
   .app:hover:not(:disabled) {
-    background: var(--color-hover);
-  }
-  .app:active:not(:disabled) {
     background: var(--color-track);
   }
+  .app:active:not(:disabled) {
+    background: var(--color-hover);
+  }
   .app:disabled {
-    opacity: 1;
+    cursor: default;
+  }
+  .app:focus-visible {
+    outline-offset: -2px;
   }
   .app__text {
     display: flex;
-    flex-direction: column;
     flex: 1 1 auto;
+    flex-direction: column;
     min-width: 0;
   }
   .app__name,
@@ -234,8 +242,8 @@
     font-weight: 600;
   }
   .app__exe {
-    font-size: var(--text-meta);
     color: var(--color-ink-3);
+    font-size: var(--text-secondary);
   }
   .app__plus {
     display: inline-flex;
@@ -248,8 +256,8 @@
     display: inline-flex;
     align-items: center;
     gap: 4px;
+    color: var(--color-ink-2);
     font-size: var(--text-secondary);
     font-weight: 600;
-    color: var(--color-ink-3);
   }
 </style>

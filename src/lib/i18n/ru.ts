@@ -544,6 +544,8 @@ export const ru: Record<TranslationKey, string> = {
   "settings.ocr.reindex.button": "Распознать заново",
   "settings.ocr.reindex.running": "Распознавание…",
   "settings.ocr.reindex.done": "Все картинки распознаны.",
+  "settings.ocr.reindex.paused": "Пауза — включите распознавание, чтобы продолжить",
+  "settings.ocr.reindex.needsLanguage": "Нужен язык распознавания, установленный в Windows, — см. «Языковые пакеты» ниже.",
   "settings.ocr.progress": "{done} из {total}",
   "settings.ocr.status": "Языковые пакеты",
   "settings.ocr.status.ready": "Установлены: {list}.",

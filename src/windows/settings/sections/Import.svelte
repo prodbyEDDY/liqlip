@@ -177,17 +177,18 @@
     display: flex;
     flex-direction: column;
     gap: 12px;
-    padding: 14px;
-    border-radius: 12px;
-    background: var(--s-inset);
+    padding: 12px;
+    border-radius: var(--radius-md);
+    corner-shape: squircle;
+    background: var(--color-track);
   }
   .card__line {
     display: flex;
     align-items: flex-start;
     gap: 10px;
-    font-size: var(--text-row);
-    line-height: 1.45;
     color: var(--color-ink);
+    font-size: var(--text-row);
+    line-height: var(--text-row--line-height);
   }
   .card__line :global(.ico) {
     margin-top: 2px;
@@ -202,7 +203,7 @@
   .card__path {
     display: block;
     padding: 6px 10px;
-    border-radius: 8px;
+    border-radius: var(--radius-sm);
     background: var(--color-track);
     font-family: var(--font-mono);
     font-size: var(--text-meta);

@@ -543,6 +543,8 @@ export const en = {
   "settings.ocr.reindex.button": "Recognize again",
   "settings.ocr.reindex.running": "Recognizing…",
   "settings.ocr.reindex.done": "All images are recognized.",
+  "settings.ocr.reindex.paused": "Paused — turn recognition on to continue",
+  "settings.ocr.reindex.needsLanguage": "Needs a recognition language installed in Windows — see Language packs below.",
   "settings.ocr.progress": "{done} of {total}",
   "settings.ocr.status": "Language packs",
   "settings.ocr.status.ready": "Installed: {list}.",

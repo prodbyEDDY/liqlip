@@ -109,7 +109,7 @@
     <label class="field__label" for="{ids}-name">{t("settings.snippets.name")}</label>
     <input
       id="{ids}-name"
-      class="name squircle selectable"
+      class="name selectable"
       type="text"
       spellcheck="false"
       autocomplete="off"
@@ -181,7 +181,7 @@
         {t("settings.snippets.used", { n: formatCount(snippet.useCount, getLocale()) })}
       {/if}
     </span>
-    <Button variant="ghost" size="sm" icon="trash" onclick={onDelete} style="color: var(--color-danger)">{t("settings.snippets.delete")}</Button>
+    <Button variant="danger" size="sm" icon="trash" onclick={onDelete}>{t("settings.snippets.delete")}</Button>
   </footer>
 </div>
 
@@ -189,8 +189,8 @@
   .editor {
     display: flex;
     flex-direction: column;
-    gap: 18px;
-    padding: 18px 18px 14px;
+    gap: 20px;
+    padding: 16px;
   }
   .field {
     display: flex;
@@ -205,14 +205,15 @@
   .field__desc {
     margin: -2px 0 2px;
     font-size: var(--text-secondary);
-    line-height: 1.45;
+    line-height: var(--text-secondary--line-height);
     color: var(--color-ink-3);
   }
+  /* Name: a 36 px capsule (it sits 16 px in from the tile corner → free radius). */
   .name {
-    height: 38px;
-    padding: 0 12px;
+    height: var(--h-lg);
+    padding: 0 16px;
     border: 0;
-    border-radius: 12px;
+    border-radius: 999px;
     background: var(--color-track);
     color: var(--color-ink);
     font: inherit;
@@ -221,13 +222,12 @@
     outline: none;
     transition: background-color var(--dur-fast) var(--ease-out-soft);
   }
-  .name:hover {
+  .name:hover:not(:focus) {
     background: var(--color-hover);
   }
   .name:focus {
-    background: var(--color-selected);
-    outline: 2px solid var(--color-ink);
-    outline-offset: 2px;
+    outline: var(--focus-ring);
+    outline-offset: var(--focus-offset);
   }
   .msg,
   .issues li {
@@ -260,11 +260,11 @@
     min-height: 64px;
     max-height: 240px;
     overflow: auto;
-    padding: 10px 12px;
-    border-radius: 12px;
-    background: var(--s-inset);
+    padding: 10px 14px;
+    border-radius: var(--r-field);
+    background: var(--color-track);
     font-family: var(--font-mono);
-    font-size: 12.5px;
+    font-size: var(--text-secondary);
     line-height: 1.6;
     white-space: pre-wrap;
     overflow-wrap: break-word;
@@ -305,7 +305,7 @@
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    min-height: 30px;
+    min-height: var(--h-md);
     font-size: var(--text-secondary);
     color: var(--color-ink-3);
   }

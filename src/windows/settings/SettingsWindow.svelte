@@ -129,7 +129,7 @@
           <SkeletonRows rows={3} />
           <SkeletonRows rows={2} />
         {:else if settings.status === "error"}
-          <div class="failed squircle">
+          <div class="failed">
             <EmptyState icon="warning" title={t("settings.load.error")} desc={t("settings.load.errorDesc")}>
               <Button variant="primary" icon="refresh" onclick={() => settings.load()}>{t("common.retry")}</Button>
             </EmptyState>
@@ -171,69 +171,57 @@
   :global(#app) {
     height: 100%;
   }
-  /* Surface aliases of this window (existing tokens only). Light follows the brief —
-     content ground, panel-2 tiles. In dark, panel-2 (#1c1c1c) and track (#1a1a1a) are
-     indistinguishable, so controls would vanish on tiles: the ground drops to page (#000)
-     and tiles lift to content (#242424), as the dark palette intends ("surfaces lift by
-     getting lighter"). */
-  :global(:root) {
-    --s-ground: var(--color-content);
-    --s-side: var(--color-panel-2);
-    --s-tile: var(--color-panel-2);
-    --s-inset: var(--color-content);
-    --s-dialog: var(--color-paper);
-  }
-  :global(:root[data-theme="dark"]) {
-    --s-ground: var(--color-page);
-    --s-side: var(--color-panel-2);
-    --s-tile: var(--color-content);
-    --s-inset: var(--color-page);
-    --s-dialog: var(--color-content);
+  /* Surfaces come straight from the tokens (app.css): the window ground, white / lifted tiles
+     on it, raised dialogs. The old per-window aliases are gone — every layer differs from its
+     parent in both themes because control fills are ink washes. */
+  :global(body) {
+    background: var(--color-ground);
   }
   .settings {
     display: grid;
-    grid-template-columns: 232px minmax(0, 1fr);
+    grid-template-columns: 220px minmax(0, 1fr);
     height: 100%;
-    background: var(--s-ground);
+    background: var(--color-ground);
   }
   .settings--compact {
-    grid-template-columns: 60px minmax(0, 1fr);
+    grid-template-columns: 64px minmax(0, 1fr);
   }
   .sidebar {
-    padding: 14px 10px;
-    background: var(--s-side);
+    padding: 16px 12px;
     overflow-y: auto;
   }
   .settings--compact .sidebar {
-    padding: 14px 8px;
+    padding: 16px 12px;
   }
   .content {
     overflow-y: auto;
     scrollbar-gutter: stable;
   }
+  /* Content is capped (it never stretches across a wide window) and sits next to the
+     sidebar, not floating in the middle of a 1200 px window. */
   .content__inner {
-    max-width: 780px;
-    margin: 0 auto;
-    padding: 26px 32px 56px;
+    max-width: 760px;
+    padding: 24px 28px 56px 12px;
   }
   .settings--compact .content__inner {
-    padding: 22px 22px 48px;
+    padding: 20px 20px 48px 8px;
   }
   .head {
-    margin-bottom: 22px;
+    margin-bottom: 20px;
     padding: 0 4px;
   }
   .head__title {
     margin: 0;
+    color: var(--color-ink);
     font-size: var(--text-section);
     font-weight: 700;
-    color: var(--color-ink);
+    line-height: var(--text-section--line-height);
   }
   .head__desc {
     margin: 4px 0 0;
-    font-size: var(--text-row);
-    line-height: 1.45;
     color: var(--color-ink-3);
+    font-size: var(--text-row);
+    line-height: var(--text-row--line-height);
   }
   .section {
     animation: section-in var(--dur-base) var(--ease-out-soft);
@@ -245,11 +233,9 @@
     }
   }
   .failed {
-    padding: 24px 0;
-    border-radius: 16px;
-    background: var(--s-tile);
-  }
-  .failed :global(.empty) {
-    max-width: 360px;
+    padding: 16px 0;
+    border-radius: var(--r-tile);
+    corner-shape: squircle;
+    background: var(--color-tile);
   }
 </style>
