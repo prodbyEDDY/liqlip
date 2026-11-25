@@ -1192,6 +1192,8 @@ export interface ImportReport { imported: number; skipped: number; folders: numb
   (подсказки, цель, пауза, очередь), `EmptyState`/скелетоны. Чистая логика — в `.ts` с тестами:
   `query.ts` (токены → `FeedQuery`), `layout.ts`, `gridNav.ts`, `transforms.ts`, `snippetExpand.ts`,
   `format.ts`/`preview.ts`.
+  Как сделано в W1-E (компоненты, состояние, клавиатура, точки расширения для W2-C, мок шелфа,
+  «Замер») — реверс-док [`picker.md`](picker.md).
 - **Настройки** (`windows/settings/`): `Settings.svelte` — сайдбар + секции (`sections/*.svelte`),
   онбординг (`onboarding/*.svelte`); стор настроек — один `settings.svelte.ts` поверх
   `settings_get/set` + `settings:changed`.

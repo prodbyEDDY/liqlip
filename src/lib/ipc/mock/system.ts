@@ -2,6 +2,13 @@
 // (owner: W1-E; W0 baseline). OCR/import (W2) are implemented here so the settings UI can
 // be built; `?mock-unimpl=ocr,import` makes them reject "unimplemented" like the real
 // app until W2.
+//
+// Shelf window in a browser tab (W1-E): there is no hotkey and no Rust window, so the mock
+// plays `picker::summon` — the shelf's first `picker_target` call (made on mount, after its
+// listeners are ready) emits `picker:layout` + `picker:open`; `picker_hide` and a pasting
+// `clip_paste`/`text_paste` emit `picker:close`; Alt+V in the tab toggles the shelf like the
+// global hotkey. Layout = `settings.picker.position/centerRow`, overridable per tab with
+// `?mock-position=center|left|right|top|bottom` and `?mock-row=1` (centre "one row").
 import type {
   AppMeta,
   BackupMode,
@@ -12,12 +19,18 @@ import type {
   MonitorInfo,
   OcrProgress,
   OcrStatus,
+  PickerClose,
+  PickerLayout,
+  PickerOpen,
+  Position,
   RunningApp,
+  Settings,
   SettingsNavigate,
   TargetInfo,
 } from "../types";
-import { fail, flags, mockEmit, now } from "./bus";
+import { fail, flags, mockEmit, mockListen, now } from "./bus";
 import { db, type Args } from "./clips";
+import { currentSettings } from "./settings";
 
 // ── capture state ────────────────────────────────────────────────────────────
 
@@ -83,6 +96,77 @@ export function mockTarget(): TargetInfo | null {
   }
 }
 
+// Panel sizes per position (SPEC §3.1 / ARCHITECTURE §7) + the shadow margin (BLEED).
+const SIZES: Record<Position | "row", [number, number]> = {
+  center: [760, 640],
+  row: [760, 360],
+  left: [400, 826],
+  right: [400, 826],
+  top: [800, 360],
+  bottom: [800, 360],
+};
+const BLEED = 72;
+const POSITIONS: readonly Position[] = ["center", "left", "right", "top", "bottom"];
+
+function urlParam(name: string): string | null {
+  if (typeof location === "undefined") return null;
+  return new URLSearchParams(location.search).get(name);
+}
+
+const forcedPosition = ((p) => (p && (POSITIONS as readonly string[]).includes(p) ? (p as Position) : null))(urlParam("mock-position"));
+const forcedRow = urlParam("mock-row") === "1";
+
+/** The layout Rust would send for the current settings (or the URL override). */
+export function mockLayout(s: Settings = currentSettings()): PickerLayout {
+  const position = forcedPosition ?? s.picker.position;
+  const centerRow = forcedPosition ? forcedRow : s.picker.centerRow;
+  const [width, height] = SIZES[position === "center" && centerRow ? "row" : position];
+  return { position, centerRow, width, height, bleed: BLEED };
+}
+
+const onPickerPage = () =>
+  typeof location !== "undefined" && typeof window !== "undefined" && location.pathname.endsWith("picker.html");
+let pickerBooted = false;
+let pickerOpen = false;
+
+function openPicker(): void {
+  pickerOpen = true;
+  mockEmit<PickerLayout>("picker:layout", mockLayout());
+  mockEmit<PickerOpen>("picker:open", { mode: "summon", target: mockTarget(), interactive: true });
+}
+
+/** `picker::hide_now` / the Esc path: the shelf plays its exit animation. */
+export function mockHidePicker(): void {
+  if (!pickerOpen) return;
+  pickerOpen = false;
+  mockEmit<PickerClose>("picker:close", {});
+}
+
+function bootPicker(): void {
+  if (pickerBooted || !onPickerPage()) return;
+  pickerBooted = true;
+  // Alt+V = the global summon hotkey (toggle). Capture phase: the shelf never sees it.
+  window.addEventListener(
+    "keydown",
+    (e) => {
+      if (e.code !== "KeyV" || !e.altKey || e.ctrlKey || e.shiftKey || e.metaKey) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      if (pickerOpen) mockHidePicker();
+      else openPicker();
+    },
+    true,
+  );
+  let last = JSON.stringify(mockLayout());
+  mockListen<Settings>("settings:changed", (s) => {
+    const next = mockLayout(s);
+    if (JSON.stringify(next) === last) return;
+    last = JSON.stringify(next);
+    mockEmit<PickerLayout>("picker:layout", next);
+  });
+  openPicker();
+}
+
 const MONITORS: MonitorInfo[] = [
   { id: "\\\\.\\DISPLAY1", name: "DELL U2723QE", primary: true, width: 3840, height: 2160, scale: 1.5 },
   { id: "\\\\.\\DISPLAY2", name: "LG 24MP88", primary: false, width: 1920, height: 1080, scale: 1 },
@@ -126,9 +210,12 @@ export const systemHandlers: Record<string, (args: Args) => unknown> = {
     return db().apps.map((a) => ({ exe: a.exe, name: a.name, iconUrl: a.iconUrl }));
   },
 
-  picker_hide: () => undefined,
+  picker_hide: () => mockHidePicker(),
   picker_make_interactive: () => undefined,
-  picker_target: () => mockTarget(),
+  picker_target: () => {
+    bootPicker();
+    return mockTarget();
+  },
   settings_open: ({ section }) => {
     // Single page in the browser: only the settings page can react.
     if (typeof location !== "undefined" && location.pathname.endsWith("settings.html") && typeof section === "string") {
