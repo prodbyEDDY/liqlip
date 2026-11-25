@@ -807,6 +807,32 @@ mod tests {
         h.stop();
     }
 
+    /// Contract with paste (W1-C): `mark_own_write(seq)` after its `CloseClipboard` — also after
+    /// a partially failed write — skips exactly that update, never the next one, even when the
+    /// next copy follows immediately (inside the same debounce window).
+    #[test]
+    fn own_write_skips_exactly_its_sequence_number() {
+        let h = harness(Timing::default());
+        // A (partial) Liqlip write, marked, and an external copy right after it.
+        let own = h.cb.set_text("written by liqlip (maybe only CF_UNICODETEXT made it)");
+        h.state.mark_own(own);
+        h.tx.send(LoopMsg::Notify).unwrap();
+        std::thread::sleep(Duration::from_millis(5));
+        let next = h.copy_text("external copy right after");
+        assert_eq!(next, own + 1);
+        h.wait_for(1, Duration::from_secs(2));
+        // Another own write, then a slower external copy.
+        let own2 = h.cb.set_text("liqlip again");
+        h.state.mark_own(own2);
+        h.tx.send(LoopMsg::Notify).unwrap();
+        std::thread::sleep(Duration::from_millis(150));
+        h.copy_text("external later");
+        h.wait_for(2, Duration::from_secs(2));
+        std::thread::sleep(Duration::from_millis(100));
+        assert_eq!(h.texts(), vec!["external copy right after", "external later"]);
+        h.stop();
+    }
+
     #[test]
     fn event_flood_still_captures_within_the_max_wait() {
         let h = harness(Timing::default());
