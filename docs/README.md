@@ -14,7 +14,9 @@
 | [ROADMAP.md](ROADMAP.md) | Волны и статус (§10), открытые вопросы, журнал решений (§11) |
 | [prompts/](prompts/) | Шаблоны, dispatch-документы волн, промпты агентов |
 | [progress/](progress/) | Отчёты приёмки волн (что сделано, гейты, отклонения, открытое) |
-| `picker.md`, `settings.md` | Реверс-доки шелфа и окна настроек — появятся в W1 |
+| [picker.md](picker.md), [settings.md](settings.md) | Реверс-доки шелфа (вид, данные, клавиатура, примитивы слоёв для W2-C) и окна настроек/онбординга |
+| [design-system.md](design-system.md) | Дизайн-система Liqlip (W2-E): токены, шкалы, правило концентричности, примитивы, состояния, отличия от Liquid Tools |
+| [design-audit.md](design-audit.md) | Аудит интерфейса W1 → W2-E: дефект · правило · как исправлено |
 
 Источник переноса — Liquid Tools (`../../liquid-tools-app/`, **только чтение**): его
 `docs/library.md`, `docs/design-system.md`, `docs/hotkeys.md`, `docs/hotkey-engine-debugging.md`.

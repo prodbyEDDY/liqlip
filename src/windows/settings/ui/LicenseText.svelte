@@ -75,8 +75,8 @@
     font-family: var(--font-mono);
     font-size: var(--text-meta);
     line-height: 1.55;
-    white-space: pre-wrap;
-    overflow-wrap: anywhere;
+    /* Keep the file's own layout (rulers, aligned columns); long lines scroll sideways. */
+    white-space: pre;
   }
   .lic__sk {
     display: flex;
