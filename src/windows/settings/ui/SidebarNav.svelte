@@ -8,7 +8,7 @@
 </script>
 
 <script lang="ts">
-  // Settings sidebar (styled like the shared MenuItem): one tab stop with roving focus —
+  // Settings sidebar: one tab stop with roving focus —
   // ↑/↓ move, Home/End jump, Enter/Space open the section. `compact` shows icons only
   // (narrow windows); the label stays as the accessible name and tooltip.
   import Ico from "$lib/components/Ico.svelte";

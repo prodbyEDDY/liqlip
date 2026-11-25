@@ -13,7 +13,7 @@
   import { isTauri } from "$lib/ipc/runtime";
   import type { IconName } from "$lib/icons";
   import { importer } from "../importer.svelte";
-  import { comboKeys, formatCount, HOTKEY_ACTIONS, importErrorKey, sameExe } from "../logic";
+  import { comboKeys, comboLabel, formatCount, importErrorKey, sameExe } from "../logic";
   import { settings } from "../settings.svelte";
   import { toasts } from "../ui.svelte";
   import ExeList from "../ui/ExeList.svelte";
@@ -38,7 +38,7 @@
 
   const s = $derived(settings.value!);
   const summon = $derived(s.hotkeys.summon);
-  const summonKeys = $derived(comboKeys(summon || "Alt + V").map((k) => (k === "Super" ? "Win" : k)));
+  const summonKeys = $derived(comboKeys(summon).map((k) => (k === "Super" ? "Win" : k)));
 
   function go(delta: number) {
     const next = steps[index + delta];
@@ -65,8 +65,6 @@
     return settings.watchConflicts(false);
   });
   const summonError = $derived(settings.error("hotkeys.summon"));
-  const SUGGESTIONS = ["Ctrl + Alt + V", "Alt + Shift + C", "Ctrl + Shift + Space"];
-  const suggestions = $derived(SUGGESTIONS.filter((c) => !HOTKEY_ACTIONS.some((a) => s.hotkeys[a] === c)).slice(0, 2));
 
   let finishing = $state(false);
   async function finish(hide = false) {
@@ -79,7 +77,10 @@
     toasts.show(
       failed
         ? { message: failed, icon: "warning" }
-        : { message: t("onboarding.done.toast", { hotkey: summon || "Alt + V" }), icon: "check" },
+        : {
+            message: summon ? t("onboarding.done.toast", { hotkey: comboLabel(summon) }) : t("onboarding.done.toastNoHotkey"),
+            icon: "check",
+          },
     );
     onFinish();
     // Saved → step out of the way: hide the window so the shortcut is the next thing to try.
@@ -102,7 +103,13 @@
     <div class="ob__label">{t("onboarding.label")}</div>
     <ol class="ob__steps">
       {#each steps as st, i (st)}
-        <li class="ob__step" class:ob__step--cur={st === current} class:ob__step--done={i < index} aria-current={st === current ? "step" : undefined}>
+        <li
+          class="ob__step"
+          class:ob__step--cur={st === current}
+          class:ob__step--done={i < index}
+          aria-current={st === current ? "step" : undefined}
+          title={t(`onboarding.step.${st}` as TranslationKey)}
+        >
           <span class="ob__dot">
             {#if i < index}<Ico name="check" size={13} />{:else}{i + 1}{/if}
           </span>
@@ -137,27 +144,17 @@
           <h1 class="ob__title" id={titleId}>{t("onboarding.hotkey.title")}</h1>
           <p class="ob__desc">{t("onboarding.hotkey.desc")}</p>
           <div class="ob__card squircle">
+            <!-- A conflict shows inside the row: the error, then free alternatives. -->
             <HotkeyRow action="summon" compact />
           </div>
-          <p class="ob__status" aria-live="polite">
+          <!-- The live region stays mounted (announcements); it only takes room with content. -->
+          <p class="ob__status" class:ob__status--empty={!checking && (!!summonError || !summon)} aria-live="polite">
             {#if checking}
               <Ico name="loaderCircle" size={15} />{t("onboarding.hotkey.checking")}
             {:else if !summonError && summon}
               <Ico name="checkCircle" size={15} />{t("onboarding.hotkey.ok")}
             {/if}
           </p>
-          {#if summonError?.code === "taken" && suggestions.length > 0}
-            <div class="ob__suggest">
-              <span>{t("onboarding.hotkey.suggest")}</span>
-              {#each suggestions as combo (combo)}
-                <button type="button" class="chip" onclick={() => settings.set("hotkeys.summon", combo)}>
-                  {#each comboKeys(combo) as k, i (k + i)}
-                    {#if i > 0}<span class="chip__plus">+</span>{/if}<Kbd size="sm">{k}</Kbd>
-                  {/each}
-                </button>
-              {/each}
-            </div>
-          {/if}
         {:else if current === "privacy"}
           <h1 class="ob__title" id={titleId}>{t("onboarding.privacy.title")}</h1>
           <p class="ob__desc">{t("onboarding.privacy.desc")}</p>
@@ -205,15 +202,20 @@
           </div>
         {:else}
           <h1 class="ob__title" id={titleId}>{t("onboarding.done.title")}</h1>
-          <p class="ob__done">
-            <span>{t("onboarding.done.before")}</span>
-            <span class="ob__keys">
-              {#each summonKeys as k, i (k + i)}
-                {#if i > 0}<span class="chip__plus">+</span>{/if}<Kbd size="lg" strong>{k}</Kbd>
-              {/each}
-            </span>
-            <span>{t("onboarding.done.after")}</span>
-          </p>
+          {#if summon}
+            <p class="ob__done">
+              <span>{t("onboarding.done.before")}</span>
+              <span class="ob__keys">
+                {#each summonKeys as k, i (k + i)}
+                  {#if i > 0}<span class="ob__plus">+</span>{/if}<Kbd size="lg" strong>{k}</Kbd>
+                {/each}
+              </span>
+              <span>{t("onboarding.done.after")}</span>
+            </p>
+          {:else}
+            <!-- No shortcut (removed in the settings): never tell the user to press one. -->
+            <p class="ob__desc">{t("onboarding.done.noHotkey")}</p>
+          {/if}
         {/if}
       </section>
     {/key}
@@ -444,8 +446,17 @@
     font-size: var(--text-secondary);
     font-weight: 600;
   }
+  /* An empty status line must not leave a gap above the footer (the conflict case). */
+  .ob__status--empty {
+    min-height: 0;
+    margin: 0;
+  }
   .ob__found {
     color: var(--color-ink);
+  }
+  /* Inside a padded card the line is the card's content: no outer margin (centred). */
+  .ob__card--pad .ob__found {
+    margin: 0;
   }
   .ob__err {
     margin: 0 0 10px;
@@ -454,32 +465,7 @@
   .ob__card--pad .ob__err:last-child {
     margin: 10px 0 0;
   }
-  .ob__suggest {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 8px;
-    margin-top: 10px;
-    color: var(--color-ink-2);
-    font-size: var(--text-secondary);
-  }
-  /* A suggested chord: 32 px capsule of 20 px keycaps (inset 6 → concentric). */
-  .chip {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    height: var(--h-md);
-    padding: 0 6px;
-    border: 0;
-    border-radius: 999px;
-    background: var(--color-tile);
-    box-shadow: var(--shadow-on-lift);
-    transition: background-color var(--dur-fast) var(--ease-out-soft);
-  }
-  .chip:hover {
-    background: var(--color-raised);
-  }
-  .chip__plus {
+  .ob__plus {
     margin: 0 2px;
     color: var(--color-ink-3);
     font-size: var(--text-secondary);
@@ -522,9 +508,17 @@
     .ob {
       grid-template-columns: 64px minmax(0, 1fr);
     }
-    .ob__label,
-    .ob__name {
+    .ob__label {
       display: none;
+    }
+    /* Icons-only steps keep their names for screen readers (and as a tooltip). */
+    .ob__name {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip-path: inset(50%);
+      white-space: nowrap;
     }
     .ob__side {
       align-items: center;

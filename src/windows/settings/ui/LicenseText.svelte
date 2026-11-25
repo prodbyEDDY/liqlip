@@ -8,6 +8,7 @@
   import Ico from "$lib/components/Ico.svelte";
   import Skeleton from "$lib/components/Skeleton.svelte";
   import { t } from "$lib/i18n/index.svelte";
+  import { scrollFade } from "$lib/scrollFade";
 
   interface Props {
     /** Path under `public/` (e.g. "licenses/LICENSE.txt"). */
@@ -42,7 +43,7 @@
 {#if open}
   <div class="lic" {id}>
     {#if status === "ready"}
-      <pre class="lic__text selectable" role="region" aria-label={label}>{text}</pre>
+      <pre class="lic__text selectable" role="region" aria-label={label} use:scrollFade>{text}</pre>
     {:else if status === "error"}
       <div class="lic__err" role="alert">
         <Ico name="warning" size={14} /><span>{t("settings.about.license.error")}</span>

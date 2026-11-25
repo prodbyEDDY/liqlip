@@ -72,10 +72,13 @@
     user-select: none;
   }
   /* The window is larger than the capsule (picker/geometry.rs HUD_SIZE 440×112): the
-     transparent margin (36 px above/below, ≥ 32 px at the sides) holds --shadow-pop, so the
-     shadow is never cut by the window edge. The capsule is 40 px tall, centred; its icon
-     circle (32 px) and a trailing keycap (24 px) are inset so they stay concentric with the
-     capsule ends (16 + 4 = 20, 12 + 8 = 20). */
+     transparent margin (36 px above/below, ≥ 24 px at the sides) holds --shadow-pop, so the
+     shadow is never visibly cut by the window edge (at 24 px its 38 px blur is under 2 %
+     alpha). The capsule is 40 px tall, centred, at most 392 px wide — the longest message
+     (RU "Окно администратора — нажмите" + "Ctrl+Shift+V", 379 px) fits without an ellipsis
+     (W3-D; it was cut to "нажм…" at 376). Its icon circle (32 px) and a trailing keycap
+     (24 px) are inset so they stay concentric with the capsule ends (16 + 4 = 20,
+     12 + 8 = 20). */
   .stage {
     position: fixed;
     inset: 0;
@@ -89,7 +92,7 @@
     align-items: center;
     gap: 10px;
     height: 40px;
-    max-width: calc(100% - 64px);
+    max-width: calc(100% - 48px);
     box-sizing: border-box;
     padding: 4px 18px 4px 4px;
     border-radius: 999px;

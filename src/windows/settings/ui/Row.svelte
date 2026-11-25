@@ -30,8 +30,10 @@
     control?: Snippet<[RowIds]>;
     /** Extra full-width content under the text/control. */
     children?: Snippet;
+    /** Full-width content after the error / note (e.g. the way out of that error). */
+    footer?: Snippet;
   }
-  let { label, desc, error, note, icon, stack = false, disabled = false, control, children }: Props = $props();
+  let { label, desc, error, note, icon, stack = false, disabled = false, control, children, footer }: Props = $props();
 
   const uid = $props.id();
   const describedBy = $derived(
@@ -65,6 +67,7 @@
   {#if note}
     <div class="row__note" id="{uid}-n"><Ico name="info" size={14} /><span>{note}</span></div>
   {/if}
+  {#if footer}{@render footer()}{/if}
 </div>
 
 <style>

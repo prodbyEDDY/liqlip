@@ -15,11 +15,13 @@
   import BrandMark from "../ui/BrandMark.svelte";
   import LicenseText from "../ui/LicenseText.svelte";
 
+  // THIRD-PARTY.txt points to heroicons.txt for the icons' MIT notice: show it here too.
   const LICENSES = [
     { key: "own", src: "licenses/LICENSE.txt", icon: "lock" },
     { key: "third", src: "licenses/THIRD-PARTY.txt", icon: "document" },
+    { key: "icons", src: "licenses/heroicons.txt", icon: "sparkles" },
   ] as const;
-  let openLicense = $state<"own" | "third" | null>(null);
+  let openLicense = $state<(typeof LICENSES)[number]["key"] | null>(null);
   const licId = $props.id();
 
   let info = $state<AppMeta | null>(null);

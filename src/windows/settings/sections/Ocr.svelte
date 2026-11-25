@@ -44,15 +44,21 @@
 
   $effect(() => {
     void load();
+    // `progress` holds a reactive proxy of each payload, so "is it still the final one?" is
+    // checked by a counter — `progress === p` was never true and the bar never went away.
+    let seq = 0;
+    let doneTimer: ReturnType<typeof setTimeout> | undefined;
     const off = onOcrProgress((p) => {
       awaiting = false;
       clearTimeout(awaitTimer);
+      clearTimeout(doneTimer);
+      const mine = ++seq;
       progress = p;
       if (p.done >= p.total) {
-        setTimeout(() => {
-          if (progress === p) progress = null;
+        doneTimer = setTimeout(() => {
+          if (seq === mine) progress = null;
         }, 2500);
-        void load();
+        void load(true);
       }
     });
     // Live queue: every recognised image emits clips:changed; refresh at most once a second.
@@ -63,6 +69,7 @@
     });
     return () => {
       clearTimeout(awaitTimer);
+      clearTimeout(doneTimer);
       clearTimeout(refresh);
       void off.then((f) => f());
       void offClips.then((f) => f());
@@ -106,7 +113,7 @@
       clearTimeout(awaitTimer);
       awaitTimer = setTimeout(() => {
         awaiting = false;
-        void load();
+        void load(true);
       }, 5000);
     } catch (e) {
       if (errorCode(e) === "unimplemented") phase = "unavailable";

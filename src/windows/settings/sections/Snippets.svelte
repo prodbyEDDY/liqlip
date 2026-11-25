@@ -9,11 +9,12 @@
   import Ico from "$lib/components/Ico.svelte";
   import SearchField from "$lib/components/SearchField.svelte";
   import Skeleton from "$lib/components/Skeleton.svelte";
-  import { clipsList, snippetDelete, snippetMove, snippetSave, snippetsList } from "$lib/ipc/commands";
+  import { clipboardText, clipsList, snippetDelete, snippetMove, snippetSave, snippetsList } from "$lib/ipc/commands";
   import { errorMessage } from "$lib/ipc/errors";
   import { onClipsChanged } from "$lib/ipc/events";
   import type { Snippet } from "$lib/ipc/types";
   import { t } from "$lib/i18n/index.svelte";
+  import { scrollFade } from "$lib/scrollFade";
   import { createReorder } from "../reorder.svelte";
   import { dialogs, toasts } from "../ui.svelte";
   import SnippetEditor from "../snippets/SnippetEditor.svelte";
@@ -49,17 +50,42 @@
     searchTimer = setTimeout(() => void load(true), 150);
   }
 
-  // Latest copied text = what {clipboard} would most likely be (preview only).
+  // {clipboard} in the preview: the clipboard's current text (`clipboard_text`, what the shelf
+  // pastes with — FIX-09), else the latest copied text from the history. Re-read on new copies
+  // and when the window is shown — never while it is hidden (no clipboard access for nothing).
   let clipboard = $state<string | null>(null);
+  async function readClipboard() {
+    try {
+      const now = await clipboardText();
+      if (now !== null) {
+        clipboard = now;
+        return;
+      }
+    } catch {
+      /* fall back to the history */
+    }
+    try {
+      const p = await clipsList({ text: "", exclude: [], filter: { kinds: ["text", "link", "code", "color", "contact"] }, cursor: null, limit: 1 });
+      clipboard = p.items[0]?.preview ?? null;
+    } catch {
+      /* the preview uses the sample text */
+    }
+  }
   $effect(() => {
     void load();
-    void clipsList({ text: "", exclude: [], filter: { kinds: ["text", "link", "code", "color", "contact"] }, cursor: null, limit: 1 })
-      .then((p) => (clipboard = p.items[0]?.preview ?? null))
-      .catch(() => {});
+    void readClipboard();
     // The store signals folder/snippet edits (here or from the shelf's "Save as snippet")
     // as `clips:changed { change: 'updated' }` without ids: re-read the list quietly.
     let changedTimer: ReturnType<typeof setTimeout> | undefined;
+    let clipTimer: ReturnType<typeof setTimeout> | undefined;
+    const visible = () => document.visibilityState === "visible";
+    const onVisible = () => visible() && void readClipboard();
+    document.addEventListener("visibilitychange", onVisible);
     const off = onClipsChanged((e) => {
+      if (e.change === "added" && visible()) {
+        clearTimeout(clipTimer);
+        clipTimer = setTimeout(() => void readClipboard(), 300);
+      }
       if (e.change !== "updated" || e.ids) return;
       clearTimeout(changedTimer);
       changedTimer = setTimeout(() => void load(true), 300);
@@ -67,6 +93,8 @@
     return () => {
       clearTimeout(searchTimer);
       clearTimeout(changedTimer);
+      clearTimeout(clipTimer);
+      document.removeEventListener("visibilitychange", onVisible);
       void off.then((f) => f());
     };
   });
@@ -141,6 +169,13 @@
       <Button variant="primary" icon="plus" loading={creating} onclick={create}>{t("settings.snippets.new")}</Button>
     </EmptyState>
   </div>
+{:else if status === "error"}
+  <!-- Nothing to pick or edit: one error tile with the way out (never "select a snippet"). -->
+  <div class="empty squircle">
+    <EmptyState icon="warning" title={t("settings.snippets.error")}>
+      <Button variant="secondary" icon="refresh" onclick={() => load()}>{t("common.retry")}</Button>
+    </EmptyState>
+  </div>
 {:else}
   <div class="snip">
     <aside class="pane pane--list squircle">
@@ -154,16 +189,10 @@
             <div class="sk"><Skeleton width={`${50 + ((i * 17) % 35)}%`} height="12px" /><Skeleton width="80%" height="10px" /></div>
           {/each}
         </div>
-      {:else if status === "error"}
-        <div class="pane__msg">
-          <Ico name="warning" size={16} />
-          <span>{t("settings.snippets.error")}</span>
-          <Button variant="secondary" size="sm" icon="refresh" onclick={() => load()}>{t("common.retry")}</Button>
-        </div>
       {:else if list.length === 0}
         <div class="pane__msg"><Ico name="search" size={16} /><span>{t("settings.snippets.noMatch", { q: query.trim() })}</span></div>
       {:else}
-        <ul class="items" aria-label={t("settings.snippets.list")}>
+        <ul class="items" aria-label={t("settings.snippets.list")} use:scrollFade>
           {#each list as s (s.id)}
             <li
               class="item-wrap"
@@ -179,6 +208,7 @@
                 class="item"
                 class:item--sel={s.id === selectedId}
                 aria-current={s.id === selectedId ? "true" : undefined}
+                title={firstLine(s.body) ? `${s.name}\n${firstLine(s.body)}` : s.name}
                 onclick={() => (selectedId = s.id)}
                 onkeydown={(e) => onItemKey(s, e)}
               >
@@ -305,10 +335,15 @@
     font-size: var(--text-row);
     font-weight: 600;
   }
+  /* Content preview, not a service mark: 12 px; ink-2 on the chosen row's wash (ink-3 there
+     falls under 4.5:1 in both themes). */
   .item__body {
     color: var(--color-ink-3);
     font-family: var(--font-mono);
-    font-size: var(--text-meta);
+    font-size: var(--text-secondary);
+  }
+  .item--sel .item__body {
+    color: var(--color-ink-2);
   }
   .pane__msg {
     display: flex;

@@ -3,7 +3,6 @@
 // Hub file: each agent appends ONLY inside its own prefix block (same order in ru.ts).
 export const en = {
   // --- common.* (W0) ---
-  "common.ok": "OK",
   "common.cancel": "Cancel",
   "common.delete": "Delete",
   "common.undo": "Undo",
@@ -16,15 +15,10 @@ export const en = {
   "common.copy": "Copy",
   "common.paste": "Paste",
   "common.add": "Add",
-  "common.remove": "Remove",
-  "common.rename": "Rename",
   "common.back": "Back",
   "common.next": "Next",
-  "common.skip": "Skip",
   "common.done": "Done",
   "common.loading": "Loading…",
-  "common.on": "On",
-  "common.off": "Off",
 
   "common.error.not_found": "This item no longer exists.",
   "common.error.busy": "The clipboard or the database is busy. Try again in a moment.",
@@ -32,9 +26,6 @@ export const en = {
   "common.error.failed": "Something went wrong. Try again.",
   "common.error.unimplemented": "Not available yet.",
   "common.error.unknown": "Something went wrong.",
-
-  "common.hotkey.taken": "This shortcut is used by another app.",
-  "common.hotkey.invalid": "This shortcut can't be used.",
 
   "common.kind.text": "Text",
   "common.kind.link": "Link",
@@ -434,6 +425,7 @@ export const en = {
   "settings.error.ignoredApps": "Couldn't save the list — each app can be listed only once.",
   "settings.error.monitor": "This display can't be selected.",
   "settings.error.ocrLanguage": "This language can't be selected.",
+  "settings.error.autostart": "Windows didn't let Liqlip change this. Try again in a moment.",
   "settings.error.invalid": "This value can't be saved.",
   "settings.error.notSaved": "Not saved. {reason}",
 
@@ -445,6 +437,7 @@ export const en = {
   "settings.general.startup": "Startup",
   "settings.general.autostart": "Start with Windows",
   "settings.general.autostart.desc": "Liqlip starts in the tray when you sign in, so {hotkey} works right away.",
+  "settings.general.autostart.descNoHotkey": "Liqlip starts in the tray when you sign in.",
   "settings.general.appearance": "Appearance",
   "settings.general.language": "Language",
   "settings.general.language.desc": "Language of Liqlip's windows and tray menu.",
@@ -559,9 +552,12 @@ export const en = {
   "settings.hotkey.recordingHint": "Esc to cancel",
   "settings.hotkey.reset": "Reset to {combo}",
   "settings.hotkey.clear": "Remove the shortcut",
-  "settings.hotkey.duplicate": "Already used for “{action}”.",
+  "settings.hotkey.duplicate": "{combo} is already used for “{action}”.",
   "settings.hotkey.needsModifier": "Add Ctrl, Alt or Win — on its own this key would stop working for typing.",
   "settings.hotkey.needsKey": "Add a regular key — modifier keys alone can't be a shortcut.",
+  "settings.hotkey.takenCombo": "{combo} is taken by another app (maybe Liquid Tools). Choose a different one.",
+  "settings.hotkey.suggest": "Free alternatives:",
+  "settings.hotkey.useSuggestion": "Use {combo}",
   "settings.hotkey.retryNote": "Liqlip tries again every 30 seconds — the shortcut starts working as soon as the other app releases it.",
   "settings.hotkeys.reference": "Keys on the shelf",
   "settings.hotkeys.reference.desc": "They work while the shelf is open and follow the physical keys, so any keyboard layout is fine.",
@@ -706,7 +702,7 @@ export const en = {
   "settings.snippets.preview": "Preview",
   "settings.snippets.preview.desc": "What would be pasted right now. The bar marks where the cursor lands.",
   "settings.snippets.preview.empty": "Nothing to paste yet.",
-  "settings.snippets.preview.clipboard": "{clipboard} uses your latest copied text in this preview.",
+  "settings.snippets.preview.clipboard": "{clipboard} in this preview is what's on the clipboard now.",
   "settings.snippets.preview.sample": "Copied text",
   "settings.snippets.placeholders": "Placeholders",
   "settings.snippets.insert": "Insert {ph}",
@@ -807,7 +803,9 @@ export const en = {
   "settings.about.license.own": "Liqlip license",
   "settings.about.license.own.desc": "Proprietary software for personal use.",
   "settings.about.license.third": "Third-party licenses",
-  "settings.about.license.third.desc": "Open-source components inside Liqlip and their licenses, icons included (Heroicons, MIT).",
+  "settings.about.license.third.desc": "Open-source components inside Liqlip and their licenses.",
+  "settings.about.license.icons": "Interface icons",
+  "settings.about.license.icons.desc": "Heroicons by Tailwind Labs, MIT license.",
   "settings.about.license.show": "Show",
   "settings.about.license.hide": "Hide",
   "settings.about.license.error": "Couldn't open the license text.",
@@ -832,7 +830,6 @@ export const en = {
   "onboarding.hotkey.desc": "Press it in any app to open Liqlip. Click the keys to choose another one.",
   "onboarding.hotkey.checking": "Checking the shortcut…",
   "onboarding.hotkey.ok": "Ready — no other app is using it.",
-  "onboarding.hotkey.suggest": "Free alternatives:",
   "onboarding.privacy.title": "Private by default",
   "onboarding.privacy.desc": "Your history stays on this computer. Liqlip never saves:",
   "onboarding.privacy.p1": "Passwords copied from password managers",
@@ -847,6 +844,8 @@ export const en = {
   "onboarding.done.before": "Copy something, then press",
   "onboarding.done.after": "in any window.",
   "onboarding.done.toast": "Liqlip is ready — press {hotkey}",
+  "onboarding.done.noHotkey": "Copy something, then open Liqlip from its tray icon — or go back and choose a shortcut.",
+  "onboarding.done.toastNoHotkey": "Liqlip is ready — open it from the tray icon",
 
   // --- hud.* (W1-D) ---
   // {keys} renders as a key chip (hud.pasteKeys).

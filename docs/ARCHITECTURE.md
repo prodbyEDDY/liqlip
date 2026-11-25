@@ -43,10 +43,11 @@ liqlip/
   src/
     app.css                     токены (перенос из Liquid Tools, монохром-лок)
     lib/
-      components/               общие компоненты (перенос: Ico, Button, Toggle, SegmentedControl, Dropdown,
-                                Menu/MenuItem, Skeleton, EmptyState, Toast/FlashPill, Kbd, Badge, BigTypeList …)
+      components/               общие компоненты (Ico, Button, Toggle, SegmentedControl, Dropdown, Skeleton,
+                                EmptyState, Toast, Kbd, Badge, SearchField; неиспользуемые удалены в W3-D)
       heroicons/ · icons.ts     иконки
-      i18n/                     en.ts (источник ключей) · ru.ts (Record<TranslationKey,string>) · index.svelte.ts
+      i18n/                     en.ts (источник ключей) · ru.ts (Record<TranslationKey,string>) · index.svelte.ts ·
+                                format.ts (подстановка {слотов} за один проход, тест i18n)
       ipc/
         types.ts                ← КОНТРАКТ (§9), зеркало src-tauri/src/model.rs
         commands.ts             типизированные обёртки invoke (одна функция на команду)
@@ -54,7 +55,8 @@ liqlip/
         runtime.ts · errors.ts  isTauri() · код ошибки → локализованный текст (common.error.*)
         mock/                   браузерный адаптер: index (роутер) · bus (события, флаги URL, задержка) ·
                                 seed · clips (store+paste+stack+симулятор захвата) · settings · system
-      motion/ · theme.svelte.ts · appearance.ts · flash.svelte.ts · hotkey.ts · hotkeyCapture.ts · hotkeyError.ts
+      motion/ · theme.svelte.ts · appearance.ts · hotkey.ts · hotkeyCapture.ts · scrollFade.ts (затухание краёв
+                                прокрутки, W3-D) · snippets/expand.ts (развёртка плейсхолдеров)
     windows/
       picker/                   шелф (Picker.svelte + компоненты, cards/, layout.ts, query.ts, transforms.ts …)
       settings/                 окно настроек + онбординг
@@ -1072,7 +1074,8 @@ SWP_NOACTIVATE)` и прячется `ShowWindow(SW_HIDE)`; tao `show()` не в
 активации → перепроверка геометрии; автоскрытие через 1.66 с после последнего показа (фронт начинает
 выход на 1.4 с); повторный показ того же тоста только продлевает его. Кто показывает: вставка —
 `copied` (focus_lost/нет цели) и `elevated`; очередь на пути хоткея — `stack_empty`; хоткеи паузы и
-пропуска — `paused`/`resumed`/`skip_next`. Фронт — `src/windows/hud/` (капсула 999px, `--shadow-pop`,
+пропуска — `paused`/`resumed`/`skip_next`. Фронт — `src/windows/hud/` (капсула 999px не шире 392 px — W3-D: самая длинная фраза, RU «Окно
+администратора — нажмите» + «Ctrl+Shift+V», 379 px, раньше резалась до «нажм…»; `--shadow-pop`,
 иконка + текст, `{keys}` → чип `Kbd`, вход 190 мс liquid, выход 170 мс, reduced-motion без
 движения; превью `/hud.html?kind=copied|elevated|stack_empty|paused|resumed|skip_next`,
 `&text=Shift%2BInsert`, `?demo=1`). **`HudShow.text`** (уточнено W2-F, FIX-07) — подпись чипа
@@ -1471,6 +1474,13 @@ stroke 1.5, `1em`), реестр `src/lib/icons.ts`, лицензия `public/li
 компоненты переведены на шкалы и капсулы; `Toast` получил `action`, `Toggle`/`SegmentedControl`/
 `Dropdown` — `id` и `describedby`.
 
+**W3-D (2026-11-26).** Неиспользуемые переносы удалены: `Menu`, `MenuItem`, `FlashPill`, `BigTypeList`,
+`flash.svelte.ts`, `hotkeyError.ts` (и их ключи `common.hotkey.*`). Новый общий примитив — `use:scrollFade`
+(`src/lib/scrollFade.ts` + `[data-fade]` в `app.css`): вертикальный скроллер затухает краем, за которым
+есть содержимое (design-system §7). `t()` подставляет `{слоты}` за один проход (`i18n/format.ts`): значение
+не сканируется повторно, ``Dropdown` — `id` и `describedby`.
+`/`$1` в нём — не шаблоны замены.
+
 ## 12. Проверка (гейты)
 
 | Гейт | Команда |
@@ -1505,8 +1515,8 @@ stroke 1.5, `1em`), реестр `src/lib/icons.ts`, лицензия `public/li
   `src/lib/i18n/{en,ru}.ts` (агенты дописывают только свой префикс), `src/app.css`.
   С W0 к ним относятся и общие модули: `src-tauri/src/{settings,content,events,tray,theme,
   i18n_native,logx,fsx,autostart}.rs`, `src/lib/ipc/{commands,events,runtime,errors}.ts`,
-  `src/lib/ipc/mock/bus.ts`, `src/lib/{appearance,theme.svelte,flash.svelte,hotkey,hotkeyCapture,
-  hotkeyError}.ts`, `src/lib/components/**`, `tests/{contract,settingsDefaults,ipcMock}.test.mjs`,
+  `src/lib/ipc/mock/bus.ts`, `src/lib/{appearance,theme.svelte,hotkey,hotkeyCapture,scrollFade}.ts`,
+  `src/lib/components/**`, `tests/{contract,settingsDefaults,ipcMock}.test.mjs`,
   `tests/helpers/`, `tests/fixtures/`. Нужна правка — сниппет в отчёте.
 - Контракт: агент может **аддитивно** добавить поле/команду, если без этого задача не решается,
   — в обоих файлах (`model.rs` + `types.ts`) и с явным пунктом в отчёте. Переименовывать и
