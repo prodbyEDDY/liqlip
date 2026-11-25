@@ -1450,7 +1450,8 @@ export interface ImportReport { imported: number; skipped: number; folders: numb
   (ошибка команды). Хоткеи — синхронный хук `hotkeys::apply_settings` (§15): отвергнутое поле
   возвращается к прежнему. `autostart` применяется при изменении (в любой сборке) и сверяется на
   старте (только release — debug-сборка не прописывает dev-бинарник в автозапуск). Успешное
-  изменение: атомарная запись `settings.json` → подписчики → `settings:changed` ⚑ → при смене темы
+  изменение: атомарная (W3: и надёжная — `sync_all` перед переименованием) запись `settings.json` →
+  замок записи отпускается (W3, §15 правило 7) → подписчики → `settings:changed` ⚑ → при смене темы
   `theme://changed` ⚑ (разрешённая тема). Загрузка `settings.json` — по полям: неверное поле → дефолт.
 - **Тема.** `theme://changed` несёт разрешённую тему (`'light'|'dark'`); шлётся при смене
   `general.theme` и при смене темы Windows, если выбрано `system`.
@@ -1598,6 +1599,16 @@ stroke 1.5, `1em`), реестр `src/lib/icons.ts`, лицензия `public/li
    и из коллбека LL-хука — никогда.
 5. Ошибки — `Result<_, String>` с кодом `not_found | busy | invalid | failed`.
 6. После изменения того, что показывает трей (пауза, длина очереди), вызвать `tray::refresh(app)`.
+7. **Настройки: никто не уведомляется под замком записи** (W3, находка W3-A). `settings_set` в два шага:
+   `commit` под `SettingsStore.write` — валидация, синхронные побочные эффекты (хоткеи, автозапуск),
+   атомарная запись, публикация в `current`, номер коммита; замок **отпускается**; `announce` под
+   отдельным замком уведомлений — подписчики, `settings:changed`, тема (`theme::emit_changed` ждёт
+   главный поток). Порядок уведомлений = порядок коммитов: изменение старше уже объявленного не
+   объявляется (объявленное шло от состояния до обоих к состоянию после обоих — подписчик видит каждое
+   поле и никогда не видит откат). Подписчику можно читать `settings::get`, ждать главный поток, писать
+   геометрию окна; нельзя звать `settings_set` (ждал бы сам себя). Под замком уведомлений никто не
+   берёт замок записи. Тест — `settings::tests::subscribers_run_without_the_write_lock`,
+   `announcements_never_go_backwards`.
 
 **Координатор (реализовано в W0)**
 
@@ -1615,7 +1626,8 @@ pub const PREVIEW_MAX_CHARS, TEXT_MAX_BYTES, FILES_MAX /*2000*/, IMAGE_MAX_PIXEL
 // settings.rs
 pub fn get(app: &AppHandle) -> Settings;                             // клон, только read-lock
 pub fn subscribe(app: &AppHandle, f: impl Fn(&Settings /*old*/, &Settings /*new*/) + Send + Sync + 'static);
-//   вызывается после сохранения, до settings:changed; НЕ вызывать settings_set из подписчика
+//   вызывается после сохранения, до settings:changed, БЕЗ замка записи настроек (правило 7, W3);
+//   old = последнее объявленное состояние; НЕ вызывать settings_set из подписчика
 pub fn patch_window_bounds(app: &AppHandle, bounds: Bounds);         // без рассылки
 
 // events.rs — по функции на событие §9.7
