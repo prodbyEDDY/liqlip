@@ -8,6 +8,8 @@
     keys?: string;
     danger?: boolean;
     disabled?: boolean;
+    /** The current choice of a set (✓, role menuitemradio). */
+    checked?: boolean;
     /** Draw a gap before this entry (groups, without a divider line). */
     gapBefore?: boolean;
     run: () => void;
@@ -17,8 +19,8 @@
 <script lang="ts">
   // A small context menu anchored at a viewport point, clamped inside the panel — built on
   // the layer kit (LayerSurface `menu` + LayerItem). ↑/↓ move, Enter runs, Esc / a click
-  // outside closes. Used by the W1 actions stub and the folder pill menu; W2-C's searchable
-  // actions menu replaces the `actions` layer.
+  // outside closes. Used by the pill menus and as the generic `menu` layer (ContextMenu:
+  // the separator choice of the paste stack). The record actions menu is ActionsMenu.
   import type { Layer } from "../overlays.svelte";
   import { LayerItem, LayerSurface } from "./kit";
 
@@ -30,8 +32,10 @@
   }
   let { layer, close, items, label }: Props = $props();
 
-  let active = $state(0);
   const enabled = $derived(items.filter((i) => !i.disabled));
+  // Start on the current choice of a set (a radio menu), else on the first item.
+  // svelte-ignore state_referenced_locally
+  let active = $state(Math.max(0, items.filter((i) => !i.disabled).findIndex((i) => i.checked)));
 
   function run(entry: MenuEntry) {
     if (entry.disabled) return;
@@ -71,6 +75,8 @@
       keys={entry.keys}
       danger={entry.danger}
       disabled={entry.disabled}
+      checked={entry.checked}
+      role={entry.checked !== undefined ? "menuitemradio" : "menuitem"}
       active={enabled[active]?.id === entry.id}
       onpointermove={() => {
         const i = enabled.findIndex((x) => x.id === entry.id);

@@ -18,8 +18,10 @@
     disabled?: boolean;
     active?: boolean;
     checked?: boolean;
+    /** An on/off row (role "switch"): a small capsule switch on the right instead of ✓. */
+    toggle?: boolean;
     submenu?: boolean;
-    role?: "menuitem" | "menuitemcheckbox" | "menuitemradio" | "option" | "button" | "listitem";
+    role?: "menuitem" | "menuitemcheckbox" | "menuitemradio" | "option" | "button" | "listitem" | "switch";
     /** A display row (not actionable): rendered as a <div>, no hover/press states. */
     plain?: boolean;
     id?: string;
@@ -37,8 +39,9 @@
     disabled = false,
     active = false,
     checked,
+    toggle,
     submenu = false,
-    role = "menuitem",
+    role = toggle !== undefined ? "switch" : "menuitem",
     plain = false,
     id,
     lead,
@@ -58,7 +61,7 @@
   class:item--active={active}
   class:item--danger={danger}
   class:item--tall={!!hint}
-  aria-checked={checked}
+  aria-checked={toggle ?? checked}
   aria-haspopup={submenu ? "menu" : undefined}
   disabled={plain ? undefined : disabled}
   onmousedown={(e: MouseEvent) => e.preventDefault()}
@@ -76,7 +79,9 @@
   </span>
   {#if trail}{@render trail()}{/if}
   {#if keys}<span class="item__keys">{keys}</span>{/if}
-  {#if checked}<span class="item__mark"><Ico name="check" size={14} /></span>{/if}
+  {#if toggle !== undefined}
+    <span class="item__switch" class:item__switch--on={toggle} aria-hidden="true"><span class="item__knob"></span></span>
+  {:else if checked}<span class="item__mark"><Ico name="check" size={14} /></span>{/if}
   {#if submenu}<span class="item__mark"><Ico name="chevronRight" size={14} /></span>{/if}
 </svelte:element>
 
@@ -156,5 +161,33 @@
     display: inline-flex;
     flex: 0 0 auto;
     color: var(--color-ink-3);
+  }
+  /* Switch: a 28 × 16 capsule, knob 12 inset 2 (concentric: 8 − 2 = 6). */
+  .item__switch {
+    position: relative;
+    flex: 0 0 auto;
+    width: 28px;
+    height: 16px;
+    border-radius: 999px;
+    background: var(--color-toggle-track);
+    transition: background-color var(--dur-fast) var(--ease-out-soft);
+  }
+  .item__knob {
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 12px;
+    height: 12px;
+    border-radius: 999px;
+    background: var(--color-raised);
+    box-shadow: var(--shadow-on-lift);
+    transition: transform var(--dur-base) var(--ease-pill);
+  }
+  .item__switch--on {
+    background: var(--color-ink);
+  }
+  .item__switch--on .item__knob {
+    background: var(--color-paper);
+    transform: translateX(12px);
   }
 </style>

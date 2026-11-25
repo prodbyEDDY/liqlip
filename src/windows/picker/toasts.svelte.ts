@@ -4,6 +4,8 @@ import type { IconName } from "$lib/icons";
 
 export interface ToastAction {
   label: string;
+  /** Icon of the action capsule (default: undo). */
+  icon?: IconName;
   run: () => void;
 }
 

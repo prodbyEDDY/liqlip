@@ -622,6 +622,8 @@ function clipCopy({ req }: Args): PasteOutcome {
 function textPaste({ req }: Args): PasteOutcome {
   const r = req as TextPasteRequest;
   writeClipboard(r.text);
+  // W2-C: lets a browser check see the snippet caret contract (lengths only, no content).
+  console.info("[mock] text_paste", { chars: r.text.length, plain: r.plain, caretBack: r.caretBack ?? 0 });
   hideForPaste(r.keepOpen);
   return outcome();
 }

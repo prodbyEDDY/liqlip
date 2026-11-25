@@ -13,6 +13,8 @@ const r = (code, mods, ctx = empty, k) => resolveKey(key(code, mods, k), ctx);
 test("shortcuts match physical keys (Russian layout)", () => {
   assert.deepEqual(r("KeyD", { ctrlKey: true }, empty, "в"), { type: "favorite" });
   assert.deepEqual(r("KeyK", { ctrlKey: true }, empty, "л"), { type: "actions" });
+  assert.deepEqual(r("KeyE", { ctrlKey: true }, empty, "у"), { type: "edit" }, "W2-C: Ctrl+E edits (Quick Look)");
+  assert.equal(r("KeyE", { ctrlKey: true, shiftKey: true }), null);
   assert.deepEqual(r("KeyO", { ctrlKey: true, shiftKey: true }, empty, "Щ"), { type: "reveal" });
   assert.deepEqual(r("Comma", { ctrlKey: true }, empty, "б"), { type: "settings" });
 });

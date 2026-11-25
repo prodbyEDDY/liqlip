@@ -139,6 +139,12 @@
 
   // ── context menu ──
   function onContext(p: Pill, e: MouseEvent) {
+    if (p.id === "snippets") {
+      // W2-C: the Snippets pill's menu — New snippet… · Manage in Settings.
+      e.preventDefault();
+      overlays.open("pillMenu", { snippets: true, anchor: { x: e.clientX, y: e.clientY } });
+      return;
+    }
     if (p.folderId === null) return;
     e.preventDefault();
     overlays.open("pillMenu", { folderId: p.folderId, anchor: { x: e.clientX, y: e.clientY } });

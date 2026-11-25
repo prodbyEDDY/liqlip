@@ -21,13 +21,16 @@ import {
   textPaste,
 } from "$lib/ipc/commands";
 import { errorMessage } from "$lib/ipc/errors";
-import type { Clip, Kind, MergeSeparator, PasteMode, PasteOutcome, Snippet } from "$lib/ipc/types";
+import type { Clip, Kind, PasteMode, PasteOutcome, Snippet } from "$lib/ipc/types";
 import { t, type TranslationKey } from "$lib/i18n/index.svelte";
 import { feed } from "./feed.svelte";
 import { selection } from "./selection.svelte";
 import { shelf } from "./shelf.svelte";
 import { toasts } from "./toasts.svelte";
 import { folderIdOf } from "./pills";
+import { overlays } from "./overlays.svelte";
+import { separatorPref } from "./overlays/separator.svelte";
+import { expandNow, noteWrite, type SnippetExpansion } from "./overlays/snippetText";
 
 export type ActionName =
   | "paste" // into the target (copy when there is none)
@@ -52,9 +55,10 @@ export interface ActionOptions {
   folderId?: number;
   title?: string | null;
   mode?: PasteMode;
+  /** Separator text for several records (default: the remembered one, `separator.svelte`). */
+  separator?: string;
 }
 
-const SEPARATORS: Record<MergeSeparator, string> = { newline: "\n", space: " ", tab: "\t", none: "" };
 const OPENABLE: readonly Kind[] = ["link", "file", "image"];
 const REVEALABLE: readonly Kind[] = ["file", "image"];
 
@@ -64,8 +68,8 @@ function clipsOf(ids: readonly number[]): Clip[] {
   return ids.map((id) => feed.clip(id)).filter((c): c is Clip => c !== undefined);
 }
 
-function separator(ids: readonly number[]): string | undefined {
-  return ids.length > 1 ? SEPARATORS[shelf.settings?.picker.mergeSeparator ?? "newline"] : undefined;
+function separator(ids: readonly number[], override?: string): string | undefined {
+  return ids.length > 1 ? (override ?? separatorPref.text) : undefined;
 }
 
 /**
@@ -74,7 +78,7 @@ function separator(ids: readonly number[]): string | undefined {
  * the shelf stays visible (keepOpen, or no target with `closeOnCopy` off) — otherwise Rust
  * hides the shelf and shows the HUD.
  */
-function reportOutcome(o: PasteOutcome, keepOpen: boolean): void {
+export function reportOutcome(o: PasteOutcome, keepOpen: boolean): void {
   if (o.result === "failed") {
     toasts.error(t(o.reason ? (`picker.outcome.${o.reason}` as TranslationKey) : "picker.outcome.failed"));
     if (o.reason === "not_found") void shelf.refreshMeta();
@@ -93,11 +97,13 @@ function reportOutcome(o: PasteOutcome, keepOpen: boolean): void {
 
 /** Paste through Rust's flow (ARCHITECTURE §6): it knows the live target, hides the shelf,
  *  copies instead when there is no target (per `closeOnCopy`) and honours `alwaysPlain`. */
-async function paste(ids: number[], mode: PasteMode, keepOpen: boolean): Promise<void> {
+async function paste(ids: number[], mode: PasteMode, keepOpen: boolean, sep?: string): Promise<void> {
   if (ids.length === 0 || pasting) return;
   pasting = true;
   try {
-    const o = await clipPaste({ ids, mode, separator: separator(ids), keepOpen: keepOpen || undefined });
+    const joint = separator(ids, sep);
+    const o = await clipPaste({ ids, mode, separator: joint, keepOpen: keepOpen || undefined });
+    if (o.result !== "failed") noteWrite({ ids, separator: joint });
     reportOutcome(o, keepOpen);
   } catch (e) {
     toasts.error(errorMessage(e));
@@ -106,11 +112,13 @@ async function paste(ids: number[], mode: PasteMode, keepOpen: boolean): Promise
   }
 }
 
-async function copy(ids: number[], mode: PasteMode = "auto"): Promise<void> {
+async function copy(ids: number[], mode: PasteMode = "auto", sep?: string): Promise<void> {
   if (ids.length === 0) return;
   try {
-    const o = await clipCopy({ ids, mode, separator: separator(ids) });
+    const joint = separator(ids, sep);
+    const o = await clipCopy({ ids, mode, separator: joint });
     if (o.result === "failed") return reportOutcome(o, true);
+    noteWrite({ ids, separator: joint });
     if (shelf.settings?.picker.closeOnCopy ?? true) {
       await shelf.hide();
       return;
@@ -202,15 +210,15 @@ export async function runAction(action: ActionName, ids: number[], opts: ActionO
   if (ids.length === 0) return;
   switch (action) {
     case "paste":
-      return paste(ids, "auto", false);
+      return paste(ids, "auto", false, opts.separator);
     case "pastePlain":
-      return paste(ids, "plain", false);
+      return paste(ids, "plain", false, opts.separator);
     case "pasteKeepOpen":
-      return paste(ids, "auto", true);
+      return paste(ids, "auto", true, opts.separator);
     case "pasteAs":
-      return paste(ids, opts.mode ?? "auto", false);
+      return paste(ids, opts.mode ?? "auto", false, opts.separator);
     case "copy":
-      return copy(ids, opts.mode ?? "auto");
+      return copy(ids, opts.mode ?? "auto", opts.separator);
     case "toggleFavorite": {
       const list = clipsOf(ids);
       return setFavorite(ids, list.some((c) => !c.favorite));
@@ -238,7 +246,11 @@ export async function runAction(action: ActionName, ids: number[], opts: ActionO
     case "stack":
       try {
         const s = await stackAdd(ids);
-        toasts.show(t("picker.toast.stacked", { n: s.items.length }), { icon: "stack" });
+        shelf.stack = s;
+        toasts.show(t("picker.toast.stacked", { n: s.items.length }), {
+          icon: "stack",
+          action: { label: t("picker.stack.show"), icon: "stack", run: () => overlays.open("stack") },
+        });
       } catch (e) {
         toasts.error(errorMessage(e));
       }
@@ -275,14 +287,80 @@ export async function moveFavorite(id: number, beforeId: number | null): Promise
   }
 }
 
-// ── snippets (plain list until W2-C wires placeholder expansion: `src/lib/snippets/`) ──
+// ── text (transform results, colour values, OCR text, paths) ──
 
-export async function pasteSnippet(s: Snippet, plain: boolean, keepOpen = false): Promise<void> {
-  if (pasting) return;
+/** Paste a text from the shelf (`text_paste`, through Rust's flow like a record). */
+export async function pasteText(text: string, opts: { plain?: boolean; caretBack?: number; keepOpen?: boolean } = {}): Promise<boolean> {
+  if (pasting) return false;
   pasting = true;
   try {
-    const o = await textPaste({ text: s.body, plain: plain || (shelf.settings?.picker.alwaysPlain ?? false), keepOpen: keepOpen || undefined });
-    if (o.result !== "failed") void snippetMarkUsed(s.id).catch(() => {});
+    const plain = opts.plain ?? true;
+    const o = await textPaste({ text, plain, caretBack: opts.caretBack || undefined, keepOpen: opts.keepOpen || undefined });
+    if (o.result !== "failed") noteWrite({ text });
+    reportOutcome(o, opts.keepOpen ?? false);
+    return o.result !== "failed";
+  } catch (e) {
+    toasts.error(errorMessage(e));
+    return false;
+  } finally {
+    pasting = false;
+  }
+}
+
+/** Copy a text; the shelf closes per `closeOnCopy`, otherwise `message` (or "Copied") toasts. */
+export async function copyText(text: string, message?: string): Promise<boolean> {
+  try {
+    await textCopy(text);
+    noteWrite({ text });
+    if (shelf.settings?.picker.closeOnCopy ?? true) await shelf.hide();
+    else toasts.show(message ?? t("picker.outcome.copied"));
+    return true;
+  } catch (e) {
+    toasts.error(errorMessage(e));
+    return false;
+  }
+}
+
+// ── snippets: placeholders expand on paste / copy (`overlays/snippetText.ts`) ──
+
+/**
+ * Expand a snippet, or explain why not: a placeholder that can't be filled (unknown name, bad
+ * format…) or an unreadable history for {clipboard} is shown as a toast with "Paste anyway"
+ * (`proceed` runs with the text as expanded) — never silently pasted or swallowed.
+ */
+async function expandOrAsk(s: Snippet, proceed: (x: SnippetExpansion) => void): Promise<SnippetExpansion | null> {
+  let x: SnippetExpansion;
+  try {
+    x = await expandNow(s.body);
+  } catch (e) {
+    toasts.error(errorMessage(e));
+    return null;
+  }
+  const problem = x.clipboardFailed
+    ? t("picker.snippet.clipboardFailed")
+    : x.issues.length
+      ? t(`settings.snippets.issue.${x.issues[0].issue}` as TranslationKey, { ph: x.issues[0].raw })
+      : null;
+  if (!problem) return x;
+  toasts.show(problem, { error: true, duration: 8_000, action: { label: t("picker.snippet.pasteAnyway"), icon: "paste", run: () => proceed(x) } });
+  return null;
+}
+
+async function pasteExpanded(s: Snippet, x: SnippetExpansion, plain: boolean, keepOpen: boolean): Promise<void> {
+  if (pasting) return;
+  pasting = true;
+  toasts.dismiss();
+  try {
+    const o = await textPaste({
+      text: x.text,
+      plain: plain || (shelf.settings?.picker.alwaysPlain ?? false),
+      caretBack: x.caretBack || undefined,
+      keepOpen: keepOpen || undefined,
+    });
+    if (o.result !== "failed") {
+      noteWrite({ text: x.text });
+      void snippetMarkUsed(s.id).catch(() => {});
+    }
     reportOutcome(o, keepOpen);
   } catch (e) {
     toasts.error(errorMessage(e));
@@ -291,13 +369,20 @@ export async function pasteSnippet(s: Snippet, plain: boolean, keepOpen = false)
   }
 }
 
+/** Paste a snippet with its placeholders expanded; the caret lands on {cursor}. */
+export async function pasteSnippet(s: Snippet, plain: boolean, keepOpen = false): Promise<void> {
+  if (pasting) return;
+  const x = await expandOrAsk(s, (x) => void pasteExpanded(s, x, plain, keepOpen));
+  if (x) await pasteExpanded(s, x, plain, keepOpen);
+}
+
+async function copyExpanded(s: Snippet, x: SnippetExpansion): Promise<void> {
+  toasts.dismiss();
+  if (await copyText(x.text)) void snippetMarkUsed(s.id).catch(() => {});
+}
+
+/** Copy a snippet with its placeholders expanded ({cursor} has no meaning here). */
 export async function copySnippet(s: Snippet): Promise<void> {
-  try {
-    await textCopy(s.body);
-    void snippetMarkUsed(s.id).catch(() => {});
-    if (shelf.settings?.picker.closeOnCopy ?? true) await shelf.hide();
-    else toasts.show(t("picker.outcome.copied"));
-  } catch (e) {
-    toasts.error(errorMessage(e));
-  }
+  const x = await expandOrAsk(s, (x) => void copyExpanded(s, x));
+  if (x) await copyExpanded(s, x);
 }
