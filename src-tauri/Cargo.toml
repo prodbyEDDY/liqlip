@@ -84,10 +84,11 @@ windows = { version = "0.62", features = [
     "Win32_UI_Shell_Common",
     # W1-C paste: RegisterClassExW (WNDCLASSEXW has an HBRUSH), CreateBitmap for the drag image.
     "Win32_Graphics_Gdi",
-    # W1-B capture uses the same surface for the clipboard listener + snapshot
-    # (DataExchange, Memory, Threading, LibraryLoader, Gdi for RegisterClassExW), app icons
-    # (Shell: SHDefExtractIconW / SHGetFileInfoW / DragQueryFileW; Com per call; Gdi:
-    # GetIconInfo → GetDIBits) and app names (Storage_FileSystem: GetFileVersionInfoW), plus:
-    # W1-B capture: DwmGetWindowAttribute(DWMWA_CLOAKED) — apps_running skips cloaked windows.
+    # W1-B capture: clipboard listener + snapshot (Open/Enum/GetClipboardData, sequence number,
+    # owner, AddClipboardFormatListener), HGLOBAL access, CF_HDROP (DragQueryFileW), app icons
+    # (SHDefExtractIconW / SHGetFileInfoW → GetIconInfo → GetDIBits, COM per call), owner process,
+    # FileDescription, message-only window — shares DataExchange/Memory/Threading/Com/
+    # LibraryLoader/Storage_FileSystem/Gdi/UI_Shell above; plus the cloaked-window filter for
+    # apps_running (DwmGetWindowAttribute):
     "Win32_Graphics_Dwm",
 ] }

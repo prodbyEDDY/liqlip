@@ -960,7 +960,9 @@ export interface ImportReport { imported: number; skipped: number; folders: numb
 
 `register_asynchronous_uri_scheme_protocol("liq", …)` (по образцу `ltthumb` Liquid Tools,
 `lib.rs:198–226`); в WebView2 адрес `http://liq.localhost/<path>`:
-`/thumb/<id>?v=<n>` · `/media/<id>` · `/icon/<appId>` — чтение файла в `spawn_blocking`,
+`/thumb/<id>?v=<n>` · `/media/<id>?v=<n>` · `/icon/<appId>?v=<n>` (версия у всех трёх — W1-A: после
+пересоздания базы id могут совпасть, и без версии WebView2 показал бы чужую картинку из кэша) —
+чтение файла в `spawn_blocking`,
 `Cache-Control: immutable` (версия в query), 404 для отсутствующих.
 
 ### 9.9. Уточнения контракта (W0, 2026-11-26)
@@ -1248,6 +1250,11 @@ pub fn toggle_pause(app: &AppHandle) -> Result<CaptureStatus, String>; // ← х
 pub fn ignore_next(app: &AppHandle) -> Result<CaptureStatus, String>;  // ← трей, хоткей IgnoreNext
 pub fn app_icon_data_url(exe: &str) -> Option<String>;           // ← paste (TargetInfo.iconUrl), apps_running
 pub mod classify { pub fn classify_text(text: &str) -> (Kind, ClipMeta); }   // ← store
+// добавлено W1-B (аддитивно):
+pub fn stop();                                                     // ← lib.rs RunEvent::Exit: снять listener, остановить потоки
+pub fn set_collect(app: &AppHandle, on: bool) -> Result<CaptureStatus, String>; // режим сбора в очередь
+pub fn running_apps() -> Vec<RunningApp>;                          // ← apps_running (blocking-пул)
+pub fn clipboard_sequence() -> u32;                                // GetClipboardSequenceNumber для mark_own_write
 ```
 Захват после `insert_clip` эмитит `clips:changed { origin: 'capture', change: created ? 'added' :
 'updated', ids }`, в режиме сбора зовёт `paste::stack::push`, при смене состояния —
