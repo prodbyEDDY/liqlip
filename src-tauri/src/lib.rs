@@ -44,6 +44,13 @@ pub fn run() {
         ))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        // W1-D: re-send layout/open to a webview that loaded after the shelf was summoned
+        // (summon within the first second after launch).
+        .on_page_load(|webview, payload| {
+            if matches!(payload.event(), tauri::webview::PageLoadEvent::Finished) {
+                picker::on_page_load(webview.app_handle(), webview.label());
+            }
+        })
         // Media for the webviews: `http://liq.localhost/{thumb,media,icon}/<id>` (§9.8),
         // like Liquid Tools' `ltthumb`. The file read runs off the WebView2 thread; the
         // version lives in `?v=`, so responses are immutable.
@@ -239,7 +246,7 @@ fn build_windows(app: &AppHandle, current: &model::Settings) -> tauri::Result<()
         .resizable(false)
         .focusable(false)
         .visible(false)
-        .inner_size(320.0, 56.0)
+        .inner_size(400.0, 112.0) // W1-D: HUD capsule + shadow bleed
         .build()?;
     hud.set_ignore_cursor_events(true)?;
 
