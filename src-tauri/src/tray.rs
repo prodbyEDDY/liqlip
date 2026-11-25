@@ -324,6 +324,12 @@ fn confirm_delete_recent(app: &AppHandle, minutes: i64, period: Key) {
                         &app2,
                         &ClipsChanged { origin: ChangeOrigin::User, change: ClipsChange::Deleted, ids: None },
                     );
+                    // The paste stack must not keep the deleted records (their previews, the
+                    // "Paste stack: N" count) until it is next touched — as `clips_delete_recent`
+                    // does (FIX-13). Blocking store reads: this is already a worker thread.
+                    if n > 0 {
+                        paste::stack::prune(&app2);
+                    }
                 }
                 Err(e) => logx::warn("tray", &format!("delete recent: {e}")),
             });

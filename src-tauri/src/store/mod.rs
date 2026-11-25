@@ -226,6 +226,30 @@ pub fn serve_uri(app: &AppHandle, path: &str) -> Option<(String, Vec<u8>)> {
     app.try_state::<Store>()?.serve_path(path)
 }
 
+/// `Cache-Control` of a `liq` response, by path (W4, FIX-14). `/thumb` and `/media` are
+/// clipboard content: a deleted — maybe private — picture must not stay in WebView2's HTTP disk
+/// cache, so they are `no-store` (as is anything unknown). Within one page the browser still
+/// reuses an image it has loaded: a card re-created by the virtualized grid is not fetched again
+/// (ARCHITECTURE §9.8). `/icon` (app icons, not content) stays cacheable, versioned by `?v=`.
+pub fn cache_control(path: &str) -> &'static str {
+    if path.starts_with("/icon/") {
+        "public, max-age=31536000, immutable"
+    } else {
+        "no-store"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn content_is_never_stored_by_the_webview_cache_icons_are() {
+        assert_eq!(super::cache_control("/thumb/42"), "no-store");
+        assert_eq!(super::cache_control("/media/42"), "no-store");
+        assert_eq!(super::cache_control("/whatever"), "no-store");
+        assert_eq!(super::cache_control("/icon/7"), "public, max-age=31536000, immutable");
+    }
+}
+
 /// Set once a query hits `SQLITE_CORRUPT` / `SQLITE_NOTADB`; the background thread then
 /// drops a marker so the next start runs `PRAGMA quick_check` (and recovers if needed).
 static CORRUPTION_SEEN: AtomicBool = AtomicBool::new(false);

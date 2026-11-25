@@ -54,8 +54,9 @@ pub fn run() {
             }
         })
         // Media for the webviews: `http://liq.localhost/{thumb,media,icon}/<id>` (§9.8),
-        // like Liquid Tools' `ltthumb`. The file read runs off the WebView2 thread; the
-        // version lives in `?v=`, so responses are immutable.
+        // like Liquid Tools' `ltthumb`. The file read runs off the WebView2 thread. Pictures
+        // are `no-store` (no copy of a deleted image in the disk cache), icons immutable
+        // (`?v=` versions them) — `store::cache_control` (W4, FIX-14).
         .register_asynchronous_uri_scheme_protocol("liq", |ctx, request, responder| {
             let app = ctx.app_handle().clone();
             let path = request.uri().path().to_string();
@@ -64,7 +65,7 @@ pub fn run() {
                     Some((mime, bytes)) => tauri::http::Response::builder()
                         .status(200)
                         .header("Content-Type", mime)
-                        .header("Cache-Control", "public, max-age=31536000, immutable")
+                        .header("Cache-Control", store::cache_control(&path))
                         .header("Access-Control-Allow-Origin", "*")
                         .body(bytes),
                     None => tauri::http::Response::builder()

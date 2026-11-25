@@ -2,6 +2,7 @@
 // layer, then through the key map (`keymap.ts`, physical keys) to the shelf / actions.
 // Typing anywhere goes to the search field. Also tracks a held Ctrl (digits 1…9 on the
 // first nine cards on screen).
+import { isBrowserShortcut } from "$lib/browserKeys";
 import { settingsOpen } from "$lib/ipc/commands";
 import { errorMessage } from "$lib/ipc/errors";
 import { feed } from "./feed.svelte";
@@ -13,7 +14,7 @@ import { view } from "./view.svelte";
 import { drag } from "./drag.svelte";
 import { copySnippet, pasteSnippet, runAction } from "./actions.svelte";
 import { confirmSnippetDelete } from "./overlays/layerActions";
-import { isBrowserShortcut, isSwallowedRepeat, isTypingKey, resolveKey, type Command } from "./keymap";
+import { isSwallowedRepeat, isTypingKey, resolveKey, type Command } from "./keymap";
 
 /** Ctrl must be held this long before the digits appear (quick chords don't flash them). */
 const CTRL_HINT_DELAY_MS = 120;

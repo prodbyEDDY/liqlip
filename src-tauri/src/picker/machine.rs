@@ -8,11 +8,14 @@
 //!     │ Summon                     Summon  │                                   │ Summon (upgrade)
 //!     ▼                                    ▼                                   ▼
 //!   Open{Summon, interactive = activation succeeded}  ◀────────────  Open{_, interactive}
-//!     │ Hide(Esc) · Summon(repeat) · ClickOutside · Blur(interactive) · CursorLeft(passive hover)
-//!     │ · CloseRequested(Alt+F4) · ShowSettings                       HideNow (paste: native hide now)
+//!     │ Hide(Esc) · Summon(repeat, interactive) · ClickOutside · Blur(interactive)
+//!     │ · CursorLeft(passive hover) · CloseRequested(Alt+F4) · ShowSettings
+//!     │                                                               HideNow (paste: native hide now)
 //!     ▼                                                                      │
 //!   Closing ── 260 ms (HideTimer, same generation) ──▶ Armed if hover is on, else Hidden
 //!     └── Summon inside the 260 ms cancels the hide (generation bump) and re-opens
+//!
+//!   Open{Summon, passive} ── Summon(repeat) ──▶ activate: ok → interactive, refused → Closing
 //! ```
 
 use crate::model::{PickerMode, Position};
@@ -128,12 +131,23 @@ pub struct Machine {
     pub open_seq: u64,
     /// `Open` waiting for `Activated` to announce itself.
     awaiting_open: Option<PickerMode>,
+    /// A repeat summon is activating a passive shelf: if Windows refuses again, the repeat
+    /// closes it (FIX-10).
+    close_if_refused: bool,
     pub last_close: Option<CloseReason>,
 }
 
 impl Machine {
     pub fn new(cfg: Config) -> Machine {
-        Machine { phase: Phase::Hidden, cfg, gen: 0, open_seq: 0, awaiting_open: None, last_close: None }
+        Machine {
+            phase: Phase::Hidden,
+            cfg,
+            gen: 0,
+            open_seq: 0,
+            awaiting_open: None,
+            close_if_refused: false,
+            last_close: None,
+        }
     }
 
     fn resting(&self) -> Phase {
@@ -149,6 +163,7 @@ impl Machine {
         self.open_seq += 1;
         self.phase = Phase::Open { mode: PickerMode::Summon, interactive: false };
         self.awaiting_open = Some(PickerMode::Summon);
+        self.close_if_refused = false;
         let mut fx = vec![Effect::CaptureTarget];
         if dock {
             fx.push(Effect::Dock);
@@ -161,6 +176,7 @@ impl Machine {
         self.gen += 1;
         self.phase = Phase::Closing;
         self.awaiting_open = None;
+        self.close_if_refused = false;
         self.last_close = Some(reason);
         let mut fx = Vec::with_capacity(5);
         if restore {
@@ -182,8 +198,18 @@ impl Machine {
                 }
             }
 
-            (Open { mode: PickerMode::Summon, .. }, Event::Summon { visible: true }) => {
+            (Open { mode: PickerMode::Summon, interactive: true }, Event::Summon { visible: true }) => {
                 self.close(CloseReason::Repeat, true)
+            }
+            // A passive summoned shelf (Windows refused the activation — a second instance
+            // started from a shortcut holds the foreground right — or focus left during a
+            // hand-off) + the hotkey / tray again: after WM_HOTKEY or the tray click the process
+            // may take the foreground, so activate it instead of closing — the user wants the
+            // keyboard (W4, FIX-10). Refused again → the repeat closes it, as on an active shelf.
+            (Open { mode: PickerMode::Summon, interactive: false }, Event::Summon { visible: true }) => {
+                let fx = self.open_summon(false);
+                self.close_if_refused = true;
+                fx
             }
             // A hover-opened shelf + the hotkey: the user wants the keyboard — upgrade in place.
             (Open { mode: PickerMode::Hover, .. }, Event::Summon { visible: true }) => self.open_summon(false),
@@ -240,6 +266,9 @@ impl Machine {
             }
 
             (Open { mode, .. }, Event::Activated(ok)) => {
+                if std::mem::take(&mut self.close_if_refused) && !ok {
+                    return self.close(CloseReason::Repeat, true);
+                }
                 self.phase = Open { mode, interactive: ok };
                 match self.awaiting_open.take() {
                     Some(m) => vec![Effect::EmitOpen { mode: m, interactive: ok }],
@@ -318,6 +347,55 @@ mod tests {
         assert_eq!(m.on(Event::HideTimer(g - 1)), vec![], "stale timer");
         assert_eq!(m.on(Event::HideTimer(g)), vec![HideWindow]);
         assert_eq!(m.phase, Phase::Hidden);
+    }
+
+    /// W4, FIX-10: the hotkey on a passive summoned shelf activates it (a second
+    /// `picker:open` tells the frontend it has the keyboard now); only an active shelf closes.
+    #[test]
+    fn repeat_hotkey_activates_a_passive_shelf_and_closes_only_an_active_one() {
+        let mut m = Machine::new(cfg(Position::Center, false));
+        m.on(Event::Summon { visible: false });
+        assert_eq!(m.on(Event::Activated(false)), vec![EmitOpen { mode: PickerMode::Summon, interactive: false }]);
+        let seq = m.open_seq;
+        assert_eq!(m.on(Event::Summon { visible: true }), vec![CaptureTarget, ShowActive], "activate, not close");
+        assert_eq!(m.open_seq, seq + 1, "the poll drops the pending click of a tray toggle");
+        assert_eq!(m.on(Event::Activated(true)), vec![EmitOpen { mode: PickerMode::Summon, interactive: true }]);
+        assert_eq!(m.phase, Phase::Open { mode: PickerMode::Summon, interactive: true });
+        assert_eq!(m.last_close, None);
+        // Now active: the next repeat closes it, giving focus back.
+        let fx = m.on(Event::Summon { visible: true });
+        assert_eq!(fx[0], RestoreFocus);
+        assert_eq!((m.phase, m.last_close), (Phase::Closing, Some(CloseReason::Repeat)));
+    }
+
+    /// FIX-10: refused again → the repeat closes the shelf (the hotkey never becomes a no-op);
+    /// the refusal of an ordinary summon still opens it passive.
+    #[test]
+    fn repeat_on_a_passive_shelf_closes_it_when_windows_refuses_again() {
+        let mut m = Machine::new(cfg(Position::Center, false));
+        m.on(Event::Summon { visible: false });
+        m.on(Event::Activated(false));
+        assert_eq!(m.on(Event::Summon { visible: true }), vec![CaptureTarget, ShowActive]);
+        let fx = m.on(Event::Activated(false));
+        let g = m.gen;
+        assert_eq!(fx, vec![RestoreFocus, EmitClose, ClickThrough(true), DisarmHover, ScheduleHide(g)]);
+        assert_eq!((m.phase, m.last_close), (Phase::Closing, Some(CloseReason::Repeat)));
+        assert_eq!(m.on(Event::HideTimer(g)), vec![HideWindow]);
+        // The flag does not outlive that attempt: a fresh summon refused → passive, open.
+        assert_eq!(m.on(Event::Summon { visible: false }), vec![CaptureTarget, Dock, ShowActive]);
+        assert_eq!(m.on(Event::Activated(false)), vec![EmitOpen { mode: PickerMode::Summon, interactive: false }]);
+        assert_eq!(m.phase, Phase::Open { mode: PickerMode::Summon, interactive: false });
+    }
+
+    /// FIX-10: passive after a keepOpen hand-off / drag-out (`Deactivated`) — same rule.
+    #[test]
+    fn repeat_after_a_handoff_reactivates() {
+        let mut m = Machine::new(cfg(Position::Center, false));
+        open_summoned(&mut m);
+        m.on(Event::Deactivated);
+        assert_eq!(m.on(Event::Summon { visible: true }), vec![CaptureTarget, ShowActive]);
+        assert_eq!(m.on(Event::Activated(true)), vec![EmitOpen { mode: PickerMode::Summon, interactive: true }]);
+        assert_eq!(m.phase, Phase::Open { mode: PickerMode::Summon, interactive: true });
     }
 
     #[test]

@@ -451,7 +451,8 @@ fn lt_import_leaves_ignored_apps_out() {
 
 #[test]
 fn ignore_rule_matches_like_the_capture() {
-    use super::runner::is_ignored;
+    // FIX-16: the import has no copy of the rule — this is the capture's function.
+    use crate::capture::is_ignored;
     let list = vec!["keepass.exe".to_string(), "bitwarden".to_string(), "C:/Tools/Vault.exe".to_string()];
     assert!(is_ignored("c:\\program files\\keepass\\KeePass.exe", &list), "file name");
     assert!(is_ignored("d:\\apps\\bitwarden.exe", &list), "bare stem");

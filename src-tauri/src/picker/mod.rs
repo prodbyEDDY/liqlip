@@ -129,7 +129,8 @@ pub fn init(app: &AppHandle) {
 }
 
 /// Open the shelf from the hotkey, the tray or a second instance (toggle: closes it when
-/// it is open from a summon). Never blocks; the work runs on the main thread.
+/// it is open from a summon and active; a passive one is activated first — FIX-10). Never
+/// blocks; the work runs on the main thread.
 pub fn summon(app: &AppHandle) {
     let visible = hwnds().map(|h| win::is_visible(h.picker)).unwrap_or(false);
     dispatch(app, Event::Summon { visible });
