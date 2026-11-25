@@ -17,7 +17,7 @@
   import { shelf } from "../shelf.svelte";
   import { pasteSnippet, runAction } from "../actions.svelte";
   import { colorValue } from "../format";
-  import { baseName } from "../preview";
+  import { autoTitle, baseName } from "../preview";
 
   let { layer, close }: LayerProps = $props();
 
@@ -80,7 +80,12 @@
     };
   });
 
-  const title = $derived(snippet?.name ?? detail?.title ?? (detail ? t(`common.kind.${detail.kind}` as TranslationKey) : ""));
+  const title = $derived.by(() => {
+    if (snippet) return snippet.name;
+    if (!detail) return "";
+    const app = detail.appId !== null ? shelf.apps.get(detail.appId) : undefined;
+    return detail.title ?? autoTitle(detail, app?.name ?? null) ?? t(`common.kind.${detail.kind}` as TranslationKey);
+  });
 </script>
 
 <div class="scrim" role="presentation" onpointerdown={close}></div>

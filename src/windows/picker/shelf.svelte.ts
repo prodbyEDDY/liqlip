@@ -113,7 +113,7 @@ class Shelf {
   hoveredId = $state<number | null>(null);
   /** Folder pill being renamed inline (double click / context menu). */
   renamingFolder = $state<number | null>(null);
-  /** Time from `picker:open` to the first painted cards (ms), for the report / diagnostics. */
+  /** Time from `picker:open` to the first cards in the DOM (ms), for the report / diagnostics. */
   lastOpenMs = $state<number | null>(null);
   searchEl: HTMLInputElement | null = null;
   /** The panel (overlay layers position themselves relative to it: its transform makes it
@@ -150,8 +150,6 @@ class Shelf {
   terms: string[] = $derived(searchTerms(this.parsed.text));
   /** No text and no chips in the search. */
   searchEmpty = $derived(this.draft.trim() === "" && this.chips.length === 0);
-  /** A search or a pill narrows the feed (for the empty-state wording). */
-  filtered = $derived(!this.searchEmpty || this.parsed.text !== "");
   paused = $derived(this.capture.pausedUntil !== null);
 
   // ── lifecycle ──
@@ -197,11 +195,13 @@ class Shelf {
       .then((s) => (this.settings ??= s))
       .catch(() => {});
     // `picker_target` is a safe read in Rust. The browser mock answers it by "summoning" the
-    // shelf (there is no hotkey in a browser tab); inside Tauri, a window that is already
-    // visible at mount (summoned before the listeners were ready) opens itself here.
+    // shelf (there is no hotkey in a browser tab). Inside Tauri, a window that is already
+    // visible at mount was summoned before these listeners existed: open it here.
     void pickerTarget()
-      .then((target) => {
-        if (isTauri() && !this.open && document.visibilityState === "visible") {
+      .then(async (target) => {
+        if (!isTauri() || this.open) return;
+        const { getCurrentWindow } = await import("@tauri-apps/api/window");
+        if ((await getCurrentWindow().isVisible()) && !this.open) {
           this.#onOpen({ mode: "summon", target, interactive: document.hasFocus() });
         }
       })
@@ -245,11 +245,12 @@ class Shelf {
     this.#lastKey = this.sourceKey;
     const t0 = performance.now();
     void this.#reload(keep).then(async () => {
+      // Cards are in the DOM after the next microtask flush; the browser paints them on the
+      // following frame. (Measured without requestAnimationFrame: it is throttled while the
+      // window is not composited, which would inflate the number.)
       await tick();
-      requestAnimationFrame(() => {
-        this.lastOpenMs = Math.round(performance.now() - t0);
-        if (import.meta.env.DEV) console.info(`[picker] cards painted ${this.lastOpenMs} ms after picker:open`);
-      });
+      this.lastOpenMs = Math.round(performance.now() - t0);
+      if (import.meta.env.DEV) console.info(`[picker] ${feed.count} cards in the DOM ${this.lastOpenMs} ms after picker:open`);
     });
     void this.refreshMeta();
     void captureStatus()
@@ -258,7 +259,13 @@ class Shelf {
     void stackGet()
       .then((s) => (this.stack = s))
       .catch(() => {});
-    if (p.interactive) requestAnimationFrame(() => this.focusSearch(false));
+    if (p.interactive) {
+      // Now and on the next frame: focusing in the same tick as the OS activation can be
+      // swallowed by that transition (Liquid Tools), and a frame may never come while the
+      // window isn't composited.
+      this.focusSearch(false);
+      requestAnimationFrame(() => this.focusSearch(false));
+    }
   }
 
   #onClose(): void {

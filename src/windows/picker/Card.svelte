@@ -62,9 +62,9 @@
       return;
     }
     selection.focus(id);
+    // Same rule as records: a click pastes (or copies, per settings); a double click pastes.
     const pastes = (shelf.settings?.picker.clickAction ?? "paste") === "paste";
-    if (e.detail >= 2) void pasteSnippet(snippet!, false);
-    else if (pastes) void pasteSnippet(snippet!, false);
+    if (pastes || e.detail >= 2) void pasteSnippet(snippet!, false);
     else void copySnippet(snippet!);
   }
 

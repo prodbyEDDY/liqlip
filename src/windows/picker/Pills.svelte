@@ -205,6 +205,7 @@
     {@const isRenaming = pill.folderId !== null && shelf.renamingFolder === pill.folderId}
     <div
       class="tabwrap"
+      role="presentation"
       class:tabwrap--marker-before={markerFolder?.before === pill.folderId && pill.folderId !== null}
       class:tabwrap--marker-after={markerFolder && markerFolder.before === null && markerFolder.last === pill.folderId && pill.folderId !== null}
       data-folder={pill.folderId ?? undefined}
@@ -259,7 +260,7 @@
   {/each}
 
   {#if adding}
-    <div class="tabwrap">
+    <div class="tabwrap" role="presentation">
       <input
         class="pill-input selectable"
         type="text"
