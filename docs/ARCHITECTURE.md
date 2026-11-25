@@ -1620,7 +1620,8 @@ pub fn apply_settings(app: &AppHandle, prev: &HotkeySettings, next: &HotkeySetti
 `PauseToggle → capture::toggle_pause`, `IgnoreNext → capture::ignore_next`.
 
 **ocr (W2-A)** — `pub fn start(app: &AppHandle)` (setup шаг 5, после `store::init`) + команды; аддитивно `pub fn wake(app: &AppHandle)` — разбудить очередь и поставить в неё картинки, ни разу не стоявшие в очереди (для импорта). Внутри хранилища — `store/ocr.rs` (§5a.2). **import (W2-B)** — только
-команды.
+команды; методы `Store` для импорта и восстановления — `store/bulk.rs` (`pub(crate) mod bulk`,
+§16.7); после импорта и восстановления зовёт `ocr::wake`.
 
 **Фронт.** Окна общаются с Rust только через `src/lib/ipc/commands.ts` (`call` → `invoke` или мок) и
 `events.ts` (`on*` → `listen` или мок-шина). Тема/язык окна — `initAppearance()` из `appearance.ts`
@@ -1629,3 +1630,212 @@ pub fn apply_settings(app: &AppHandle, prev: &HotkeySettings, next: &HotkeySetti
 флаги `?mock-empty=1`, `?mock-error=1`, `?mock-live=0`, `?mock-size=N`,
 `?mock-target=chrome|none|elevated`, `?mock-unimpl=ocr,import`; задержка 30–80 мс), стабильный API
 `settings.ts::currentSettings()` для остальных мок-модулей.
+
+## 16. Импорт и резервные копии (`import/`, `store/bulk.rs`) — W2-B
+
+> Замер: 2026-11-26 (W2-B: импорт из Liquid Tools, экспорт `.liqlip`, восстановление `replace`/`merge`,
+> `snippet_move`; `cargo test` — 289 в крейте, из них 23 теста W2-B на синтетической базе в схеме Liquid
+> Tools и во временных хранилищах; реальная база Liquid Tools в тестах не открывалась; нативно не
+> запускалось).
+
+Файлы: `import/lt.rs` (чтение Liquid Tools) · `import/backup.rs` (zip: экспорт, проверка, распаковка,
+`replace`, `merge`) · `import/runner.rs` (общий цикл импорта) · `import/tmp.rs` (временные каталоги с
+guard-ом) · `import/commands.rs` (диалоги, `import:progress`, события, «занято») · `store/bulk.rs`
+(методы `Store`). Подключение в хранилище — одна строка `pub(crate) mod bulk;`.
+
+### 16.1. Импорт из Liquid Tools
+
+**Источник** — `%APPDATA%\com.liquidtools.app\clipboard\clipboard.db` (`PathResolver::data_dir()` +
+идентификатор) и файлы `<id>.png` рядом (Liquid Tools `docs/library.md` §4, `clipboard/store.rs`).
+
+**Только чтение, без влияния на работающий Liquid Tools.** База никогда не открывается на месте:
+она копируется (вместе с `-journal`/`-wal`, если есть; `-shm` не нужен — SQLite перестроит индекс по
+WAL) в `%TEMP%\liqlip-lt-*`, и открывается копия. Причины (отклонение от «открыть `mode=ro`, при
+занятости — копия»): (1) любое открытие оригинала, даже `SQLITE_OPEN_READONLY`, берёт разделяемую
+блокировку, а у Liquid Tools нет `busy_timeout` — его ближайший INSERT захвата упал бы с
+`SQLITE_BUSY`; (2) у WAL-базы read-only соединение создаёт и пишет `-shm` в его каталоге. Копирование
+читает файлы обычным `ReadFile` (std открывает с `FILE_SHARE_READ|WRITE|DELETE`), байтовые блокировки
+SQLite лежат на смещении 1 ГиБ и чтению не мешают. Запись, попавшая в окно копирования, ловится
+сравнением размера/mtime базы и наличия `-journal`/`-wal` до и после — копия повторяется (≤ 4 раз).
+Копия без сопутствующих файлов открывается `SQLITE_OPEN_READ_ONLY`; с ними — на запись (это наша
+копия: SQLite откатывает «горячий» журнал или проигрывает WAL), затем `PRAGMA quick_check(1)`. Каталог
+копии удаляется guard-ом. PNG читаются из каталога Liquid Tools только на чтение. Тесты сверяют
+отпечаток каталога (имя, размер, mtime, хэш содержимого каждого файла) до и после — в том числе при
+открытой транзакции писателя с журналом и при WAL-базе с открытым писателем.
+
+**Проверка схемы.** Нет заголовка `SQLite format 3` → `invalid: not a Liquid Tools database`; нет
+`clipboard_entries` с `id, kind, preview, created_at` → `invalid: unknown Liquid Tools database format`;
+`SQLITE_CORRUPT`/`NOTADB`/`quick_check ≠ ok` → `invalid: the Liquid Tools database is damaged`.
+Необязательные колонки (`content_ref, source_app, pinned, html, category, app_icon`, таблица `categories`)
+определяются через `pragma_table_info` — старые версии Liquid Tools тоже импортируются.
+
+**Отображение схемы Liquid Tools → Liqlip**
+
+| Liquid Tools | Liqlip |
+|---|---|
+| `kind` text · link · code · contact · color | текстовая запись; вид — заново `capture::classify::classify_text` (все текстовые виды — одно семейство хэша, метка на дедупликацию не влияет; `123456` без `#` больше не «цвет») |
+| `kind` image | `image`: `<dir>\<id>.png` (иначе абсолютный `content_ref`), декод в RGBA8 + нормализация как в захвате (полностью прозрачная → непрозрачная), `content::image_hash` по пикселям; PNG копируется как есть (перекодируется, только если нормализация его изменила); миниатюра ≤ 360 px строится сразу. Нет файла → `errors + 1` |
+| `kind` file | `file`: пути из `content_ref`/`preview` (через `\n`, ≤ 2000), `meta.ext`, `files` (`dropEffect` 1) |
+| `kind` screenshot и любой другой | не переносится и не считается. Диктовки живут в `dictation-history.json`, в этой базе их нет |
+| полный текст | `content_ref` (> 280 символов), иначе `preview` (Liquid Tools хранил текст ≤ 280 символов обрезанным по краям пробелов); усечение до 2 МБ (`meta.truncated`); `content_ref` читается как `substr(…, 1, 2 100 000)` — результат тот же, память страницы ограничена |
+| `html` (сырой CF_HTML с заголовком) | формат `html` без заголовка (`StartHTML..EndHTML`; без контекста — фрагмент в минимальном документе), `SourceURL` → `meta.url/host`, если у записи нет ссылки |
+| `created_at` (мс; < 1e11 — секунды до v3, ×1000, как `migrate_timestamps` Liquid Tools) | `created_at` = `copied_at` |
+| `pinned` | избранное; порядок — как в пилюле «Избранное» Liquid Tools (`created_at DESC`), после уже имеющегося избранного Liqlip |
+| `category` + таблица `categories` | папки: сначала `categories` по `position`, затем имена, встречающиеся только в записях; совпадение по имени без учёта регистра (Unicode), управляющие символы чистятся, ≤ 64 символа. Переносятся все папки Liquid Tools, в том числе пустые и папки только со снимками |
+| `source_app` (имя файла exe без расширения) | приложение `exe = "<stem>.exe"` (нижний регистр), `name = stem`; если в Liqlip уже есть приложение с таким именем файла (полный путь из захвата) — используется оно |
+| `app_icon` (data-URL PNG; в Liquid Tools есть только у строк снимков) | иконка приложения (по одной на `source_app`), если у приложения её ещё нет |
+| `title` | не переносится: в Liquid Tools заголовки только автоматические |
+| `size`, `width`, `height`, `thumb`, `ocr_text` | не используются (размер и габариты считаются заново, OCR Liquid Tools удалён) |
+
+**Правила.**
+- **Срок хранения.** История (не избранное и не в папке) старше `storage.retention` не переносится —
+  первая же ретенция Liqlip удалила бы её. Пробник считает так же, поэтому `imported + skipped + errors =
+  probe.clips`. Лимиты `maxEntries`/`maxSizeMb` применяет обычная ретенция после импорта.
+- **Повторный импорт** не создаёт дублей и не поднимает записи: совпадение хэша с уже существующей
+  записью → `skipped`, её время и счётчики не трогаются; избранное (если не было) и папка (если не было)
+  дополняются. Мягко удалённая запись с тем же хэшем не воскрешается.
+- **Дубли внутри источника** (Liquid Tools хранил каждое неподряд идущее копирование отдельной строкой)
+  сливаются в одну запись этого же прогона: `created_at` — самый ранний, `copied_at` — самый поздний,
+  `copy_count` — число строк; в отчёте такие строки — `skipped`.
+- Пакеты по 200 строк в порядке `(created_at, id)`, по транзакции на пакет и по savepoint на запись:
+  ошибка одной записи → `errors + 1`, импорт идёт дальше; сбой БД (диск, `busy`) прерывает импорт, уже
+  записанные пакеты остаются (повторный запуск продолжит без дублей).
+- PNG и миниатюры пишутся во временные файлы `media\.staging-*` **до** захвата блокировки БД и
+  переименовываются в транзакции (как в захвате); откат записи удаляет её файлы. Иконки приложений
+  пишутся после коммита (id откатанного приложения может быть выдан снова).
+- Прогресс `import:progress`: `folders` (0/N → N/N), затем `clips` (done/total после каждого пакета).
+  В конце — `clips:changed { origin: 'import', change: 'added' }` без `ids` и `ocr::wake` (картинки
+  импорта приходят с `ocr_state = none`). `ImportReport.folders` — сколько папок **создано**;
+  `ImportProbe.folders` — сколько папок в Liquid Tools.
+- `ImportProbe.found = false`, если базы нет **или** переносить нечего (0 записей и 0 папок): шаг
+  онбординга не показывается зря. `path` — только при `found`.
+- Логи — только числа и коды ошибок, без содержимого.
+
+### 16.2. Формат `.liqlip`
+
+Zip (крейт `zip` 9.8, Deflate через `flate2`/miniz_oxide):
+
+```
+manifest.json          Deflate
+clipboard.db           Deflate (ZIP64, если ≥ 4 ГиБ) — снимок liqlip.db
+settings.json          Deflate — Settings на момент экспорта
+media/<id>.png         Stored — PNG записей (картинки и PNG-альтернативы текста)
+media/thumbs/<id>.png  Stored — миниатюры картинок
+icons/<id>.png         Stored — иконки приложений
+```
+
+```json
+{ "format": "liqlip-backup", "formatVersion": 1, "appVersion": "0.1.0", "schemaVersion": 1,
+  "createdAt": 1795638957418,
+  "counts": { "clips": 1240, "favorites": 32, "folders": 3, "snippets": 5, "apps": 14, "media": 300 } }
+```
+
+`schemaVersion` = `PRAGMA user_version` базы. Восстановление отказывает с понятной ошибкой, если
+`format ≠ "liqlip-backup"` или нет манифеста (`invalid: not a Liqlip backup`), если `formatVersion > 1`
+или `schemaVersion` новее сборки (`invalid: the backup was made by a newer Liqlip`), если нет базы
+(`invalid: the backup has no database`), если база не открывается, `quick_check ≠ ok` или версия не та
+(`invalid: the backup database is damaged`). Счётчики манифеста справочные.
+
+### 16.3. Экспорт (`backup_export`)
+
+1. Системный диалог сохранения (`tauri-plugin-dialog`, родитель — окно настроек, фильтр `*.liqlip`,
+   имя `Liqlip-YYYY-MM-DD.liqlip` по локальной дате `GetLocalTime`); отмена → `null`; имя без
+   расширения получает `.liqlip`.
+2. Снимок без остановки приложения (`Store::snapshot_to`): `VACUUM INTO` на втором соединении
+   `SQLITE_OPEN_READ_ONLY` (WAL: захват и UI продолжают работать) во `%TEMP%\liqlip-backup-*`; затем в
+   копии `foreign_keys = ON`, `secure_delete = ON`, удаление мягко удалённых записей (с их форматами и
+   FTS-токенами), `VACUUM`, `journal_mode = DELETE` — один самодостаточный файл без следов удалённого.
+3. Из снимка — списки id с PNG, картинок и приложений с иконкой; файлы берутся из `media\`, `icons\`
+   (удалённый за это время файл пропускается).
+4. Zip пишется в `<цель>.<pid>.part` рядом с целью, `sync_all`, затем переименование в цель (замена
+   существующей). `.part` и временный каталог удаляются на любом пути.
+5. Прогресс: `clips` 0/1 → 1/1 (снимок), `media` (упаковано / всего).
+
+### 16.4. Восстановление `replace`
+
+1. Диалог открытия (фильтр `*.liqlip`); отмена → **`Err("invalid: cancelled")`** (выбрано вместо отчёта
+   с нулями: пустая копия и отмена иначе неотличимы; UI должен молча игнорировать эту ошибку).
+2. Манифест (§16.2) → распаковка в `<data>\restore-staging-*` (тот же том, что и данные: каждый шаг
+   подмены — `rename`; остатки прерванного восстановления удаляются в начале). Распаковываются только
+   точные имена (`clipboard.db`, `media/<цифры>.png`, `media/thumbs/<цифры>.png`, `icons/<цифры>.png`,
+   `settings.json`) — запись за пределы каталога невозможна; размер записи ограничен (PNG ≤ 512 МБ),
+   CRC-32 проверяет zip-ридер.
+3. Проверка распакованной базы (§16.2) и `count(*)` записей.
+4. `Store::replace_with` под мьютексом соединения: соединение закрывается (на его месте — пустая
+   in-memory заглушка, её никто не видит), текущие `liqlip.db`, `-wal`, `-shm`, `media\`, `icons\`
+   переезжают в `backup-before-restore-<ms>\` (переименования с повторами до ~1,5 с: файл может быть
+   открыт схемой `liq` на мгновение), на их место — распакованные, `create_dirs`, открытие обычным
+   `schema::open_or_recover` (WAL, миграции, ремонт `fav_order`), сверка числа записей (иначе испорченный
+   файл был бы молча пересоздан пустым). Успех → новое соединение, книга undo очищается, старые
+   `backup-before-restore-*` удаляются (остаётся одна, последняя), сигнал ретенции. Поле `ocr`
+   (`OcrHook`, W2-A) не трогается — меняется только соединение.
+5. **Откат** при сбое любого шага: удаляются положенные на место файлы (и `*.corrupt-<ms>`, если
+   `open_or_recover` успел их отодвинуть), отодвинутые данные возвращаются, старая база открывается
+   снова, каталог `backup-before-restore-<ms>` удаляется; ошибка `failed: …`. Если вернуть не удалось —
+   ошибка называет каталог, где лежат прежние данные (они не удаляются).
+6. После успеха (в команде): очередь вставки очищается (её id указывали на прежнюю базу),
+   `settings.json` копии накладывается на текущие настройки (сохраняются геометрия окна настроек и
+   пройденный онбординг; поля, которых нет в файле, остаются текущими; файл, не подходящий под
+   `Settings`, игнорируется с записью в лог) и применяется через `settings::settings_set` (валидация,
+   хоткеи, автозапуск, `settings:changed`), затем `clips:changed { origin: 'import', change: 'reset' }`
+   и `ocr::wake`. Отчёт: `imported` — живых записей, `folders` — папок, `skipped = errors = 0`.
+
+### 16.5. Восстановление `merge`
+
+Распаковка во `%TEMP%\liqlip-merge-*`, проверка базы, затем живые записи копии (`deleted_at IS NULL`,
+тот же фильтр срока хранения, что у Liquid Tools) идут **через тот же цикл импорта** (`runner.rs` →
+`Store::import_batch`): дедупликация по хэшу копии (тот же алгоритм `content.rs`), существующие записи не
+поднимаются (избранное и папка дополняются), медиа и миниатюры копируются, форматы (html, rtf, files,
+PNG-альтернатива), заголовок, счётчики, времена, OCR-текст и состояние переносятся, приложения — по
+точному `exe` (с иконкой, если у приложения её нет), папки сливаются по имени без учёта регистра,
+избранное — в порядке копии после имеющегося. Потом сниппеты: такой же (имя + тело) пропускается, иначе
+добавляется в конец, ключевое слово — только если свободно. Настройки не трогаются. Прогресс: `media`
+(распаковка), `folders`, `clips`. В конце — `clips:changed { origin: 'import', change: 'added' }` и
+`ocr::wake`.
+
+### 16.6. Команды, ошибки, конкуренция
+
+- `import_lt_probe` → `ImportProbe`; `import_lt_run` → `ImportReport` (`not_found:` — базы нет);
+  `backup_export` → путь или `null`; `backup_import(mode)` → `ImportReport` (`invalid: cancelled` — диалог
+  закрыт). Коды: `invalid:` — не та, битая или более новая база/копия; `failed:` — ввод-вывод; `busy:` —
+  уже идёт другая операция импорта или копии (одна за раз; пробник не блокируется).
+- Всё тяжёлое — на blocking-пуле; диалоги — асинхронно (`oneshot`), как `pick_exe`.
+- Подписи диалогов (EN/RU) временно в `import/commands.rs` — до ключей в `i18n_native.rs` (сниппет
+  координатору в отчёте W2-B).
+
+### 16.7. `store/bulk.rs` (API для модуля `import`)
+
+```rust
+pub(crate) struct ImportItem { clip: NewClip /*copied_at = исходное*/, created_at, title, copy_count,
+    used_at, use_count, favorite, fav_order: Option<f64>, folder: Option<String>, ocr_text, ocr_state,
+    app_icon: Option<Vec<u8>> }
+pub(crate) struct ImportSession { /* записи этого прогона, папки имя → id */ }
+impl Store {
+    fn retention_cutoff(&self, Retention) -> Option<i64>;      // now − срок; None = всегда
+    fn fav_order_base(&self) -> Result<f64, String>;
+    fn data_dir(&self) -> &Path;
+    fn import_folders(&self, names, &mut ImportSession) -> Result<i64 /*создано*/, String>;
+    fn import_batch(&self, Vec<ImportItem>, &mut ImportSession) -> Result<BatchStats, String>;
+    fn merge_snippets(&self, &[SnippetRow]) -> Result<i64, String>;
+    fn snapshot_to(&self, dest: &Path) -> Result<(), String>;
+    fn replace_with(&self, staging: &Path, expected_clips: i64) -> Result<PathBuf /*aside*/, String>;
+}
+```
+
+Нормализация `ImportItem` повторяет `write.rs::prepare` захвата (хэш, заголовок PNG и 64 МП, текст ≤ 2 МБ
+и списки ≤ 2000 с перехэшированием, форматы ≤ 2 МБ, метрики, превью); `upsert_format`/`recompute_size`
+продублированы для savepoint (`&Connection`). Хранилище по-прежнему не эмитит — эмитит `import`.
+
+### 16.8. Ограничения
+
+- Нативно не проверено (PQ-02): диалоги, переименование каталогов при открытых файлах, импорт с живой
+  базой Liquid Tools — сценарии в отчёте W2-B.
+- Приложение, импортированное как `<stem>.exe` раньше, чем Liqlip сам увидел этот exe, при следующем
+  захвате получит вторую строку `apps` (с полным путём): захват сопоставляет только точный `exe`.
+- «Похоже на секрет» к импорту не применяется: `capture::secrets` — приватный модуль захвата.
+- Экспорт и `replace` временно занимают место: снимок базы во `%TEMP%` и `.part`; `replace` держит
+  прежние данные в `backup-before-restore-<ms>\` до следующего восстановления.
+- `merge` переносит записи, папки и сниппеты, но не настройки; `replace` — всё, кроме геометрии окна
+  настроек.
+- Запись, сделанная в Liquid Tools во время копирования файлов, может не попасть в импорт (повторный
+  импорт её добавит).
