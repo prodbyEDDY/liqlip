@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { importTs } from "./helpers/bundle.mjs";
 
-const { navigate, navGrid, rangeBetween, geometry } = await importTs("src/windows/picker/gridNav.ts", "src/windows/picker/layout.ts");
+const { navigate, navGrid, rangeBetween, indexAfterRemoval, geometry } = await importTs("src/windows/picker/gridNav.ts", "src/windows/picker/layout.ts");
 
 // 4 columns, 10 items: rows [0-3] [4-7] [8-9]
 const grid = { count: 10, columns: 4, horizontal: false, perPage: 2 };
@@ -67,4 +67,18 @@ test("rangeBetween is inclusive in both directions", () => {
   assert.deepEqual(rangeBetween(2, 5), [2, 3, 4, 5]);
   assert.deepEqual(rangeBetween(5, 2), [2, 3, 4, 5]);
   assert.deepEqual(rangeBetween(3, 3), [3]);
+});
+
+test("cursor after a removal lands at the gap, not past it (W3)", () => {
+  // Shift+→ twice from 10, cursor on 12, Delete: the card that followed (old 13) is now 10.
+  assert.equal(indexAfterRemoval(12, [10, 11, 12], 297), 10);
+  // One card: its successor slides into its place.
+  assert.equal(indexAfterRemoval(5, [5], 20), 5);
+  // Removed cards after the cursor don't move it.
+  assert.equal(indexAfterRemoval(3, [3, 7, 8], 9), 3);
+  // At the end: the new last card; everything gone: −1.
+  assert.equal(indexAfterRemoval(9, [8, 9], 8), 7);
+  assert.equal(indexAfterRemoval(0, [0, 1], 0), -1);
+  // The cursor wasn't in the list: the first card.
+  assert.equal(indexAfterRemoval(-1, [2], 5), 0);
 });

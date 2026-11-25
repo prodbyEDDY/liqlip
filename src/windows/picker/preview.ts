@@ -50,6 +50,26 @@ export function baseName(path: string): string {
 }
 
 /**
+ * The tail of a folder path for a file card (FIX-08, `ClipMeta.dir`): the last `keep`
+ * folders behind "…" (`C:\Users\me\Documents` → `…\me\Documents`); a short path stays whole
+ * (`C:\Projects`, `C:\`, `\\server\share`). Empty / missing → "" (the card shows nothing).
+ * The full path goes into the tooltip.
+ */
+export function pathTail(dir: string | null | undefined, keep = 2): string {
+  const raw = (dir ?? "").trim();
+  if (!raw) return "";
+  const sep = raw.includes("\\") || !raw.includes("/") ? "\\" : "/";
+  const parts = raw.split(/[\\/]+/).filter(Boolean);
+  if (parts.length <= keep) {
+    // A bare drive keeps its root separator ("C:" → "C:\"); anything else as written, minus
+    // a trailing separator.
+    if (parts.length === 1 && /^[A-Za-z]:$/.test(parts[0])) return `${parts[0]}\\`;
+    return raw.length > 1 ? raw.replace(/[\\/]+$/, "") : raw;
+  }
+  return `…${sep}${parts.slice(-keep).join(sep)}`;
+}
+
+/**
  * Title of the meta row when the user hasn't renamed the record: the source app for
  * text-like records (the preview already shows the content — Liquid Tools did the same for
  * text/code), host+path for links, dimensions for images. `null` → the caller shows the kind

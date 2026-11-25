@@ -191,6 +191,39 @@ function resolveRaw(e: KeyInput, ctx: KeyContext): Command | null {
   return null;
 }
 
+/**
+ * What a plain click on a card does (SPEC §3.6): the first click pastes or copies per
+ * `settings.picker.clickAction`; the second click of a double click pastes (= Enter) — but
+ * only when the first one copied: if a click pastes, the pair's first click already did, and
+ * pasting again would paste (or, with no target, copy) twice.
+ */
+export function clickIntent(detail: number, clickPastes: boolean): "paste" | "copy" | null {
+  if (detail >= 2) return clickPastes ? null : "paste";
+  return clickPastes ? "paste" : "copy";
+}
+
+/** Ctrl + these keys are browser features in WebView2 ("browser accelerator keys" are on by
+ *  default and Tauri 2.11 doesn't expose the switch): reload, print, find next, view source,
+ *  save page, downloads, history, new window. None edits text. */
+const BROWSER_CTRL: ReadonlySet<string> = new Set(["KeyR", "KeyP", "KeyG", "KeyU", "KeyS", "KeyJ", "KeyH", "KeyN", "F5"]);
+/** Ctrl+Shift: hard reload, find previous, new private window. */
+const BROWSER_CTRL_SHIFT: ReadonlySet<string> = new Set(["KeyR", "KeyG", "KeyN", "F5"]);
+const BROWSER_PLAIN: ReadonlySet<string> = new Set(["F3", "F5", "F7", "BrowserBack", "BrowserForward", "BrowserRefresh"]);
+
+/**
+ * A key press the shelf doesn't use that would run a browser feature inside the window —
+ * F5 / Ctrl+R reload the shelf mid-session, Ctrl+P prints, F7 asks about caret browsing,
+ * Alt+← navigates back. The keyboard handler swallows it when nothing else took the key.
+ * (DevTools keys — F12, Ctrl+Shift+I — are left alone: release builds have no DevTools.)
+ */
+export function isBrowserShortcut(e: KeyInput): boolean {
+  if (e.metaKey) return false;
+  if (e.ctrlKey && !e.altKey) return (e.shiftKey ? BROWSER_CTRL_SHIFT : BROWSER_CTRL).has(e.code);
+  if (e.altKey && !e.ctrlKey && !e.shiftKey) return e.code === "ArrowLeft" || e.code === "ArrowRight";
+  if (!e.ctrlKey && !e.altKey) return BROWSER_PLAIN.has(e.code);
+  return false;
+}
+
 /** A printable character typed outside the search field — it belongs in the search. */
 export function isTypingKey(e: KeyInput): boolean {
   return !e.ctrlKey && !e.altKey && !e.metaKey && e.key.length === 1 && e.key !== " ";

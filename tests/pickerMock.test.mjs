@@ -77,3 +77,14 @@ test("layout per position (SPEC §3.1 sizes + BLEED 72)", () => {
   assert.equal(at("left").height, 826);
   assert.equal(at("bottom").width, 800);
 });
+
+test("seeded file records carry meta.dir = the first file's folder (FIX-08)", async () => {
+  const files = await all({ filter: { kinds: ["file"] } });
+  assert.ok(files.length > 0);
+  for (const c of files) {
+    const d = await mockInvoke("clip_detail", { id: c.id });
+    const first = d.files[0].path;
+    const dir = first.slice(0, first.lastIndexOf("\\"));
+    assert.equal(c.meta.dir, /^[A-Za-z]:$/.test(dir) ? `${dir}\\` : dir, first);
+  }
+});

@@ -14,7 +14,13 @@
   $effect(() => {
     const n = overlays.layers.length;
     const closed = n < count;
+    const opened = n > count;
     count = n;
+    // A hover-opened (passive) shelf doesn't own the keyboard: a layer opened by the mouse
+    // (⋯, right click, "Stack N") would focus a filter or a field that typing never reaches,
+    // and the shelf would close when the cursor leaves. Opening a layer is engaging with the
+    // shelf — make it keyboard-interactive, like a click into the search (SPEC §3.3).
+    if (opened && !shelf.interactive) void shelf.makeInteractive();
     if (!closed) return;
     void tick().then(() => {
       if (!shelf.open || overlays.layers.length !== n) return;

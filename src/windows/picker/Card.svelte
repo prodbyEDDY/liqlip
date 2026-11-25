@@ -18,8 +18,9 @@
   import { selection } from "./selection.svelte";
   import { overlays } from "./overlays.svelte";
   import { drag } from "./drag.svelte";
-  import { copySnippet, pasteSnippet, runAction } from "./actions.svelte";
+  import { clickPastes, copySnippet, pasteSnippet, runAction } from "./actions.svelte";
   import { autoTitle, baseName, entryFormat } from "./preview";
+  import { clickIntent } from "./keymap";
   import { colorValue, linkHost, relativeTime } from "./format";
 
   interface Props {
@@ -75,9 +76,11 @@
       return;
     }
     selection.focus(id);
-    // Same rule as records: a click pastes (or copies, per settings); a double click pastes.
-    const pastes = (shelf.settings?.picker.clickAction ?? "paste") === "paste";
-    if (pastes || e.detail >= 2) void pasteSnippet(snippet!, false);
+    // Same rule as records: a click pastes (or copies, per settings); a double click pastes —
+    // once (`clickIntent`).
+    const intent = clickIntent(e.detail, clickPastes());
+    if (intent === null || (e.detail >= 2 && !shelf.open)) return;
+    if (intent === "paste") void pasteSnippet(snippet!, false);
     else void copySnippet(snippet!);
   }
 
@@ -163,7 +166,7 @@
     {:else if clip.kind === "contact"}
       <ContactCard value={clip.preview} email={(clip.meta.contact ?? (clip.preview.includes("@") ? "email" : "phone")) === "email"} terms={shelf.terms} />
     {:else if clip.kind === "file"}
-      <FileCard name={baseName(clip.preview)} format={badge} more={Math.max(0, (clip.fileCount ?? 1) - 1)} terms={shelf.terms} />
+      <FileCard name={baseName(clip.preview)} format={badge} more={Math.max(0, (clip.fileCount ?? 1) - 1)} dir={clip.meta.dir} terms={shelf.terms} />
     {:else if clip.kind === "code"}
       <CodeCard text={clip.preview} terms={shelf.terms} />
     {:else}

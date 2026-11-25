@@ -45,7 +45,9 @@
         </span>
       {:else if target?.elevated}
         <span class="hint__label">{t("picker.hint.copy")}</span>
-        <span class="hint__sub" title={target.title}><Ico name="shield" size={13} />{t("picker.hint.elevated")}</span>
+        <span class="hint__sub" title={`${t("picker.hint.elevated")} · ${target.title}`}
+          ><Ico name="shield" size={13} /><span class="hint__subtext">{t("picker.hint.elevated")}</span></span
+        >
       {:else}
         <span class="hint__label">{t("picker.hint.copy")}</span>
       {/if}
@@ -104,12 +106,19 @@
     font-size: var(--text-secondary);
     white-space: nowrap;
   }
+  /* Hints in priority order (target first). One that doesn't fit wraps onto a second line
+     that is clipped away whole — a hint shows completely or not at all, and the target app's
+     name never gets squeezed to make room for a secondary hint. The 4 px block padding keeps
+     the first line where a single line would sit (24 px keycaps centred in the 32 px row). */
   .hints {
     display: flex;
     flex: 1 1 auto;
+    flex-wrap: wrap;
     align-items: center;
-    gap: 16px;
+    gap: 8px 16px;
     min-width: 0;
+    height: var(--h-md);
+    padding-block: calc((var(--h-md) - var(--h-sm)) / 2);
     overflow: hidden;
   }
   .hint {
@@ -121,6 +130,7 @@
   }
   .hint--main {
     flex: 0 1 auto;
+    max-width: 100%;
   }
   .hint__label {
     color: var(--color-ink-2);
@@ -130,8 +140,12 @@
     align-items: center;
     gap: 5px;
     min-width: 0;
-    overflow: hidden;
     color: var(--color-ink-2);
+  }
+  /* The ellipsis needs the text in its own box (a flex container never shows one). */
+  .hint__subtext {
+    min-width: 0;
+    overflow: hidden;
     text-overflow: ellipsis;
   }
   .hint--selected {
@@ -221,7 +235,7 @@
       display: none;
     }
     .hints {
-      gap: 10px;
+      column-gap: 10px;
     }
   }
   @container (max-width: 330px) {

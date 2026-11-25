@@ -9,6 +9,7 @@
   import { t, type TranslationKey } from "$lib/i18n/index.svelte";
   import { shelf, type FolderError } from "./shelf.svelte";
   import { overlays } from "./overlays.svelte";
+  import { toasts } from "./toasts.svelte";
   import { drag } from "./drag.svelte";
   import { folderDropBefore, type Pill } from "./pills";
 
@@ -63,7 +64,9 @@
   let busy = false;
 
   async function commitNew(el: HTMLInputElement, onBlur = false) {
-    if (busy) return;
+    // Esc and a successful Enter close the field before focus moves back to the search; the
+    // blur that follows must not create the folder (again) — the field is already gone.
+    if (busy || !adding) return;
     const name = el.value.trim();
     if (!name) {
       adding = false;
@@ -112,6 +115,9 @@
       el.select();
       return;
     }
+    // Focus left the field with a name the store refused: the old name stays — say why
+    // instead of silently dropping what was typed.
+    if (err) toasts.error(errorText(err));
     shelf.renamingFolder = null;
     renameError = null;
     if (!onBlur) shelf.focusSearch(false);
@@ -286,6 +292,7 @@
           ondblclick={() => {
             if (pill.folderId !== null) {
               renameError = null;
+              void shelf.makeInteractive(); // the name field needs the keyboard
               shelf.renamingFolder = pill.folderId;
             }
           }}

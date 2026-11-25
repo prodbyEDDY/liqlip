@@ -33,12 +33,12 @@
   import { toasts } from "../toasts.svelte";
   import { copySnippet, pasteSnippet, runAction } from "../actions.svelte";
   import { colorValue, formatSize, hostPath, linkHost, pluralCategory, relativeTime } from "../format";
-  import { baseName, entryFormat, fileIcon } from "../preview";
+  import { baseName, entryFormat, fileIcon, pathTail } from "../preview";
   import ViewText from "./ViewText.svelte";
   import ImageStage from "./ImageStage.svelte";
   import { focusLayer, focusOnce, trapTab } from "./focus";
   import { confirmDiscard, copyColorValue, copyImageText } from "./layerActions";
-  import { clipboardText, previewExpansion } from "./snippetText";
+  import { previewClipboardText, previewExpansion } from "./snippetText";
   import { TEXT_KINDS } from "./menuModel";
   import { qlPrefs } from "./qlPrefs.svelte";
 
@@ -217,6 +217,33 @@
     view.reveal(feed.indexOf(next));
   }
 
+  // The record left the feed behind the sheet (deleted from the actions menu opened here, a
+  // "delete recent"): show the one that took its place — or close — instead of a record that
+  // no longer exists (Enter on it would only say "not found").
+  let lastIndex = -1;
+  $effect(() => {
+    if (snippetMode || id === null || editing) return;
+    const i = feed.indexOf(id);
+    if (i >= 0) {
+      lastIndex = i;
+      return;
+    }
+    if (feed.status !== "ready" || lastIndex < 0) return;
+    const gone = id;
+    untrack(() => {
+      let next: number | null;
+      if (scope) {
+        const at = scope.indexOf(gone);
+        const live = (x: number) => feed.index.has(x);
+        next = scope.slice(at + 1).find(live) ?? scope.slice(0, Math.max(0, at)).reverse().find(live) ?? null;
+      } else {
+        next = feed.count ? feed.idAt(Math.min(lastIndex, feed.count - 1)) : null;
+      }
+      if (next !== null) go(next);
+      else close();
+    });
+  });
+
   const position = $derived.by(() => {
     if (id === null) return null;
     if (scope) {
@@ -291,7 +318,7 @@
   let clipSample = $state<string | null>(null);
   onMount(() => {
     if (untrack(() => feed.mode) === "snippets") {
-      clipboardText()
+      previewClipboardText()
         .then((s) => (clipSample = s))
         .catch(() => {});
     }
@@ -318,6 +345,13 @@
           return true;
         }
         return trapTab(e, sheet);
+      }
+      // Opened with Ctrl+E and the editor isn't there yet (the record is loading): keys typed
+      // right away belong to the editor, not to Quick Look — a leading Space would close the
+      // sheet and the rest would land in the search. Swallow them; Esc still leaves.
+      if (wantsEdit && !editedOnce && !loadError) {
+        if (e.key === "Escape") close();
+        return true;
       }
       const onControl = document.activeElement instanceof HTMLButtonElement || document.activeElement instanceof HTMLInputElement;
       if (trapTab(e, sheet)) return true;
@@ -358,6 +392,10 @@
             return true;
           case "KeyK":
             openActions();
+            return true;
+          case "KeyZ":
+            // Delete here shows "Deleted · Undo" over the sheet; Ctrl+Z works as on the grid.
+            if (toasts.undoToken) void shelf.undo();
             return true;
           case "KeyC":
             if (window.getSelection()?.toString()) return false; // copy the selected text natively
@@ -415,6 +453,8 @@
   interface InfoRow {
     label: string;
     value: string;
+    /** Tooltip of the value (a shortened path → the full one). */
+    title?: string;
     sub?: string;
     icon?: string | null;
     appIcon?: boolean;
@@ -450,6 +490,9 @@
       const n = d.files?.length ?? d.fileCount ?? 0;
       const total = (d.files ?? []).reduce((a, f) => a + (f.size ?? 0), 0);
       rows.push({ label: t("picker.ql.size"), value: [plural("picker.ql.files", n), sizeText(total)].filter(Boolean).join(" · ") });
+      // FIX-08: the folder of the first file — its tail, the full path on hover.
+      const tail = pathTail(d.meta.dir);
+      if (tail) rows.push({ label: t("picker.ql.location"), value: tail, title: d.meta.dir });
     } else {
       const s = sizeText(d.size);
       if (s) rows.push({ label: t("picker.ql.size"), value: s });
@@ -678,7 +721,7 @@
                 <div class="info__row">
                   <dt>{row.label}</dt>
                   <dd>
-                    <span class="info__value">
+                    <span class="info__value" title={row.title}>
                       {#if row.appIcon}
                         {#if row.icon}<img class="info__app" src={row.icon} alt="" />{:else}<Ico name="appWindow" size={14} />{/if}
                       {/if}

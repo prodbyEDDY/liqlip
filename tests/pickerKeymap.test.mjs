@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { importTs } from "./helpers/bundle.mjs";
 
-const { resolveKey, isTypingKey, isSwallowedRepeat } = await importTs("src/windows/picker/keymap.ts");
+const { resolveKey, isTypingKey, isSwallowedRepeat, clickIntent, isBrowserShortcut } = await importTs("src/windows/picker/keymap.ts");
 
 const key = (code, mods = {}, keyChar = "") => ({ code, key: keyChar, ctrlKey: false, shiftKey: false, altKey: false, metaKey: false, ...mods });
 const empty = { inSearch: true, inOtherInput: false, onButton: false, searchEmpty: true, caretAtEnd: true, undoAvailable: false };
@@ -96,4 +96,33 @@ test("typing keys go to the search", () => {
   assert.equal(isTypingKey(key("KeyA", { ctrlKey: true }, "a")), false);
   assert.equal(isTypingKey(key("Space", {}, " ")), false);
   assert.equal(isTypingKey(key("ArrowUp", {}, "ArrowUp")), false);
+});
+
+test("click intent: one click per settings; a double click pastes only when a click copies (W3)", () => {
+  assert.equal(clickIntent(1, true), "paste");
+  assert.equal(clickIntent(1, false), "copy");
+  // The pair's first click already pasted — the second one must not paste again.
+  assert.equal(clickIntent(2, true), null);
+  assert.equal(clickIntent(2, false), "paste");
+  assert.equal(clickIntent(3, false), "paste");
+});
+
+test("browser accelerators the shelf swallows; its own chords and text editing untouched (W3)", () => {
+  const b = (code, mods) => isBrowserShortcut(key(code, mods));
+  for (const code of ["F5", "F3", "F7"]) assert.ok(b(code), code);
+  for (const code of ["KeyR", "KeyP", "KeyG", "KeyU", "KeyS", "KeyJ", "KeyH", "KeyN"]) assert.ok(b(code, { ctrlKey: true }), code);
+  assert.ok(b("KeyR", { ctrlKey: true, shiftKey: true }), "hard reload");
+  assert.ok(b("ArrowLeft", { altKey: true }), "Alt+← = back");
+  // DevTools keys stay (no DevTools in release); AltGr (Ctrl+Alt) never matches.
+  assert.ok(!b("KeyI", { ctrlKey: true, shiftKey: true }));
+  assert.ok(!b("KeyJ", { ctrlKey: true, shiftKey: true }));
+  assert.ok(!b("F12"));
+  assert.ok(!b("KeyR", { ctrlKey: true, altKey: true }));
+  // Text editing and the shelf's own keys are not browser shortcuts.
+  for (const code of ["KeyA", "KeyC", "KeyV", "KeyX", "KeyZ", "KeyD", "KeyK", "KeyE", "KeyO", "KeyF"]) assert.ok(!b(code, { ctrlKey: true }), code);
+  assert.ok(!b("ArrowLeft"));
+  assert.ok(!b("ArrowLeft", { shiftKey: true }));
+  assert.ok(!b("Backspace", { ctrlKey: true }));
+  // Ctrl+Shift+S is the stack chord: the key map resolves it before this guard is asked.
+  assert.deepEqual(resolveKey(key("KeyS", { ctrlKey: true, shiftKey: true }), empty), { type: "stack" });
 });

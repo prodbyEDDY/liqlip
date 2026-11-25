@@ -185,3 +185,10 @@ test("text runs: hits, and one run per invisible character with copy-safe text",
     .join("");
   assert.equal(joined, "x y\nz", "runs cover the text exactly");
 });
+
+test("snippet menu: Delete asks first — its chord is Delete, like a snippet card (W3)", () => {
+  const menu = buildMenu({ ...base, snippet: true, clips: [] });
+  const del = { code: "Delete", key: "Delete", ctrlKey: false, shiftKey: false, altKey: false, metaKey: false };
+  assert.equal(chordNode(menu, del)?.id, "snippetDelete");
+  assert.equal(find(menu, "snippetDelete").keys, "Del");
+});

@@ -265,11 +265,15 @@ export async function runAction(action: ActionName, ids: number[], opts: ActionO
   }
 }
 
+/** A click on a card pastes (`settings.picker.clickAction`), rather than only copying. */
+export function clickPastes(): boolean {
+  return (shelf.settings?.picker.clickAction ?? "paste") === "paste";
+}
+
 /** Click / Enter on a card: paste when clicking pastes and there is a target, else copy. */
 export function activate(id: number, byClick: boolean): Promise<void> {
   const ids = selection.multi && selection.has(id) ? shelf.targets() : [id];
-  const clickPastes = (shelf.settings?.picker.clickAction ?? "paste") === "paste";
-  if (byClick && !clickPastes) return runAction("copy", ids);
+  if (byClick && !clickPastes()) return runAction("copy", ids);
   return runAction("paste", ids);
 }
 
@@ -325,7 +329,7 @@ export async function copyText(text: string, message?: string): Promise<boolean>
 
 /**
  * Expand a snippet, or explain why not: a placeholder that can't be filled (unknown name, bad
- * format…) or an unreadable history for {clipboard} is shown as a toast with "Paste anyway"
+ * format…) or an unreadable clipboard + history for {clipboard} is shown as a toast with "Paste anyway"
  * (`proceed` runs with the text as expanded) — never silently pasted or swallowed.
  */
 async function expandOrAsk(s: Snippet, proceed: (x: SnippetExpansion) => void): Promise<SnippetExpansion | null> {

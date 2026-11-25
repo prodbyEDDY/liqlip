@@ -79,6 +79,18 @@ export function navigate(index: number, dir: NavDir, grid: NavGrid): NavResult {
   return { index, hitEnd: false };
 }
 
+/**
+ * Where the cursor goes when the card it was on (index `at`) left the list together with
+ * the cards at `removed` (their indices before the removal): onto the card that followed
+ * the removed block — `at` minus the removed cards that stood before it — or the last card.
+ * (Shift+→ twice + Delete keeps the cursor at the gap instead of jumping ahead.) −1 = empty.
+ */
+export function indexAfterRemoval(at: number, removed: readonly number[], count: number): number {
+  if (count <= 0) return -1;
+  const before = removed.filter((i) => i < at).length;
+  return Math.max(0, Math.min(at - before, count - 1));
+}
+
 /** Inclusive index range between two cards (Shift+arrows / Shift+click). */
 export function rangeBetween(a: number, b: number): number[] {
   const lo = Math.min(a, b);

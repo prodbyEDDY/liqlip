@@ -1,24 +1,18 @@
 // Snippet expansion on the shelf (SPEC §3.10): the shared pure expander (`$lib/snippets`,
 // W1-F) fed with the current time, locale, a fresh UUID and the text for {clipboard}.
 //
-// {clipboard} = what is on the clipboard now. There is no "read the clipboard" command in the
-// contract, so it is resolved from what Liqlip knows: the newest record of the history, unless
-// the shelf itself wrote the clipboard after that record was copied (a paste / copy from the
-// shelf — then that is what the clipboard holds). Images and files have no text → "".
-import { clipDetail, clipsList } from "$lib/ipc/commands";
+// {clipboard} = what is on the clipboard now: `clipboard_text` (FIX-09, W3) at paste time —
+// null (no text) → "", an error → the history; previews use the history only. The decision is
+// `clipboardSource.ts` (pure, node-tested).
+import { clipboardText as readClipboard, clipDetail, clipsList } from "$lib/ipc/commands";
 import type { Kind } from "$lib/ipc/types";
 import { getLocale } from "$lib/i18n/index.svelte";
 import { expandSnippet, parseSnippet, type ExpandResult, type PlaceholderToken } from "$lib/snippets/expand";
+import { historyClipboardText, resolveClipboardText } from "./clipboardSource";
+
+export { noteWrite } from "./clipboardSource";
 
 const TEXT_KINDS: readonly Kind[] = ["text", "code", "link", "contact", "color"];
-
-/** The last clipboard write made from the shelf. */
-let lastWrite: { at: number; ids?: number[]; separator?: string; text?: string } | null = null;
-
-/** Remember a clipboard write by the shelf (records joined by `separator`, or a text). */
-export function noteWrite(w: { ids?: number[]; separator?: string; text?: string }): void {
-  lastWrite = { at: Date.now(), ...w };
-}
 
 /** Full text of records joined by `separator` (text kinds only; images and files have none). */
 export async function recordsText(ids: readonly number[], separator: string): Promise<{ text: string; skipped: number }> {
@@ -33,26 +27,16 @@ export async function recordsText(ids: readonly number[], separator: string): Pr
   return { text: parts.join(separator), skipped };
 }
 
-/** The text {clipboard} expands to right now (see the header). */
-export async function clipboardText(): Promise<string> {
-  // One page is enough: with "favorites first" the newest record may not be the first one.
-  const page = await clipsList({ text: "", exclude: [], filter: {}, cursor: null, limit: 40 });
-  let newest = page.items[0] ?? null;
-  for (const c of page.items) if (c.copiedAt > (newest?.copiedAt ?? -Infinity)) newest = c;
-  const own = lastWrite;
-  if (own && (!newest || own.at >= newest.copiedAt)) {
-    if (own.text !== undefined) return own.text;
-    if (own.ids?.length) {
-      const details = await Promise.all(own.ids.map((id) => clipDetail(id).catch(() => null)));
-      return details
-        .filter((d) => d && TEXT_KINDS.includes(d.kind))
-        .map((d) => d!.text ?? d!.preview)
-        .join(own.separator ?? "\n");
-    }
-  }
-  if (!newest || !TEXT_KINDS.includes(newest.kind)) return "";
-  const d = await clipDetail(newest.id);
-  return d.text ?? d.preview;
+/** The text {clipboard} expands to when pasting right now (see the header); rejects only when
+ *  the clipboard is unreadable and so is the history. */
+export function clipboardText(): Promise<string> {
+  return resolveClipboardText({ live: readClipboard, list: clipsList, detail: clipDetail });
+}
+
+/** The {clipboard} sample of a preview: the latest copied text from the history — a preview
+ *  never reads the clipboard itself (it may hold a password the history never saw). */
+export function previewClipboardText(): Promise<string> {
+  return historyClipboardText({ list: clipsList, detail: clipDetail });
 }
 
 function uuid(): string {
@@ -70,7 +54,8 @@ function uuid(): string {
 export interface SnippetExpansion extends ExpandResult {
   /** Placeholders that can't be filled (pasted as written). A second {cursor} isn't one. */
   issues: PlaceholderToken[];
-  /** {clipboard} is used but the history couldn't be read (it expanded to ""). */
+  /** {clipboard} is used but neither the clipboard nor the history could be read (it
+   *  expanded to ""). */
   clipboardFailed: boolean;
 }
 

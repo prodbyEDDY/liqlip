@@ -552,9 +552,22 @@ function storageStats(): StorageStats {
 
 // ── paste ────────────────────────────────────────────────────────────────────
 
+/** What the mock "clipboard" holds as text (`clipboard_text`, W3 FIX-09): the last write by
+ *  a paste / copy, or the last simulated capture (null after an image or files — no text).
+ *  Null until the first one (no text → the shelf expands {clipboard} to "");
+ *  `?mock-unimpl=clipboard` makes the command fail like a locked clipboard (`busy:`), so the
+ *  shelf's history fallback can be checked. */
+let clipboard: string | null = null;
+
 function writeClipboard(text: string | null): void {
+  if (text !== null) clipboard = text;
   if (!text || typeof navigator === "undefined" || !navigator.clipboard) return;
   void navigator.clipboard.writeText(text).catch(() => {});
+}
+
+function clipboardText(): string | null {
+  if (flags.unimpl.has("clipboard")) throw fail("busy", "clipboard_text: the clipboard is locked (mock-unimpl)");
+  return clipboard;
 }
 
 function outcome(): PasteOutcome {
@@ -672,12 +685,15 @@ function stackMove({ key, beforeKey }: Args): Stack {
   return emitStack();
 }
 
+/** From the shelf (its popover) this is the shelf's paste flow in Rust (§6.7: `deliver` with
+ *  the shelf as origin) — the shelf hides like for any paste. */
 function stackPasteAll({ separator }: Args): PasteOutcome {
   pruneStack();
   if (stack.length === 0) return { result: "failed", reason: "stack_empty" };
   const list = stack.map((i) => find(i.clipId));
   writeClipboard(joinedText(list, String(separator ?? "\n")));
   markUsed(list);
+  hideForPaste(false);
   return outcome();
 }
 
@@ -715,6 +731,7 @@ export function startLive(): void {
       c.copiedAt = now();
       c.copyCount++;
       d.clips = [c, ...d.clips.filter((x) => x !== c)];
+      clipboard = isTextKind(c.kind) ? c.text : null;
       changed("updated", [c.id], "capture");
       if (cap.collectToStack) stackPush(c);
       return;
@@ -725,6 +742,7 @@ export function startLive(): void {
     const appId = d.apps.length ? d.apps[Math.floor(liveRng() * d.apps.length)].id : null;
     const c = makeClip(d.nextId++, kind, liveRng, now(), appId);
     d.clips.unshift(c);
+    clipboard = isTextKind(c.kind) ? c.text : null;
     changed("added", [c.id], "capture");
     if (cap.collectToStack) stackPush(c);
   };
@@ -770,9 +788,9 @@ export const clipsHandlers: Record<string, (args: Args) => unknown> = {
   clip_copy: clipCopy,
   text_paste: textPaste,
   text_copy: ({ text }) => writeClipboard(String(text ?? "")),
-  // Browsers gate clipboard reads behind a permission prompt — the mock answers "no text",
-  // so the shelf falls back to the newest history record, as it would in Rust on failure.
-  clipboard_text: () => null,
+  // Browsers gate real clipboard reads behind a permission prompt — the mock answers from its
+  // own "clipboard" (see `clipboard` above).
+  clipboard_text: clipboardText,
   clip_open: openLike(["link", "file", "image"]),
   clip_open_with: openLike(["file", "image"]),
   clip_reveal: openLike(["file", "image"]),

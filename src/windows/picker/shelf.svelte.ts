@@ -57,7 +57,7 @@ import { view } from "./view.svelte";
 import { buildPills, cyclePill, folderIdOf, folderPillId, pillFilter, type Pill, type PillId } from "./pills";
 import { extractChips, mergeFilters, parseQuery, type ParsedQuery, type QueryContext } from "./query";
 import { searchTerms } from "./highlight";
-import { navGrid, navigate, rangeBetween, type NavDir } from "./gridNav";
+import { indexAfterRemoval, navGrid, navigate, rangeBetween, type NavDir } from "./gridNav";
 
 const DEFAULT_LAYOUT: PickerLayout = { position: "center", centerRow: false, width: 760, height: 640, bleed: 72 };
 /** Rows stay painted through the exit animation, then are released (ARCHITECTURE §9.7). */
@@ -291,7 +291,12 @@ class Shelf {
   #focusAfterOpen(): void {
     this.focusSearch(false);
     requestAnimationFrame(() => {
-      if (this.open) this.focusSearch(false);
+      if (!this.open) return;
+      // The frame can come late (a window that isn't composited yet): by then the user may
+      // have moved on — Ctrl+K's filter, a new-folder field. Don't pull focus back from them.
+      const a = document.activeElement;
+      if (a && a !== document.body && a !== this.searchEl && this.panelEl?.contains(a)) return;
+      this.focusSearch(false);
     });
   }
 
@@ -455,7 +460,8 @@ class Shelf {
     const at = feed.indexOf(selection.current);
     const removed = feed.remove(ids);
     if (selection.current !== null && !feed.index.has(selection.current)) {
-      selection.focus(feed.idAt(Math.max(0, Math.min(at, feed.count - 1))), false);
+      const next = indexAfterRemoval(at, removed.map((r) => r.index), feed.count);
+      selection.focus(next < 0 ? null : feed.idAt(next), false);
     }
     selection.prune((id) => feed.index.has(id));
     return removed;
@@ -613,6 +619,8 @@ class Shelf {
 
   startRename(id: number | null): void {
     if (id === null || feed.mode !== "clips" || !feed.clip(id)) return;
+    // The title field needs the keyboard (a hover-opened shelf doesn't have it).
+    void this.makeInteractive();
     selection.focus(id);
     view.reveal(feed.indexOf(id));
     this.renamingId = id;

@@ -12,7 +12,8 @@ import { toasts } from "./toasts.svelte";
 import { view } from "./view.svelte";
 import { drag } from "./drag.svelte";
 import { copySnippet, pasteSnippet, runAction } from "./actions.svelte";
-import { isSwallowedRepeat, isTypingKey, resolveKey, type Command } from "./keymap";
+import { confirmSnippetDelete } from "./overlays/layerActions";
+import { isBrowserShortcut, isSwallowedRepeat, isTypingKey, resolveKey, type Command } from "./keymap";
 
 /** Ctrl must be held this long before the digits appear (quick chords don't flash them). */
 const CTRL_HINT_DELAY_MS = 120;
@@ -28,7 +29,11 @@ class Keyboard {
       clearTimeout(this.#ctrlTimer);
       this.#ctrlTimer = setTimeout(() => (this.ctrlHeld = true), CTRL_HINT_DELAY_MS);
     }
-    if (overlays.handleKey(e)) return;
+    if (overlays.handleKey(e)) {
+      // A layer took the keyboard but not this key: no browser feature behind its back either.
+      if (!e.defaultPrevented && isBrowserShortcut(e)) e.preventDefault();
+      return;
+    }
     if (drag.active && e.code === "Escape") {
       e.preventDefault();
       drag.cancel();
@@ -54,6 +59,10 @@ class Keyboard {
     }
     const cmd = resolveKey(e, ctx);
     if (!cmd) {
+      if (isBrowserShortcut(e)) {
+        e.preventDefault();
+        return;
+      }
       // Type-to-search: focusing the field during keydown makes the character land in it.
       if (!inSearch && !inOtherInput && (isTypingKey(e) || e.code === "Backspace")) shelf.focusSearch(false);
       return;
@@ -113,6 +122,8 @@ class Keyboard {
         return runAction("reveal", ids.slice(0, 1));
       case "delete":
         if (feed.mode === "clips") return runAction("delete", ids);
+        // A snippet has no undo: Delete asks first (as the menu's "Delete snippet…").
+        if (snippet) confirmSnippetDelete(snippet);
         return;
       case "undo":
         return shelf.undo();

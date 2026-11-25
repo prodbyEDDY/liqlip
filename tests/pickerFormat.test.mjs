@@ -5,7 +5,7 @@ import test from "node:test";
 import { importTs } from "./helpers/bundle.mjs";
 
 const m = await importTs("src/windows/picker/preview.ts", "src/windows/picker/format.ts", "src/windows/picker/highlight.ts");
-const { entryFormat, fileIcon, autoTitle, baseName, colorValue, formatSize, hostPath, linkHost, pluralCategory, searchTerms, segments } = m;
+const { entryFormat, fileIcon, autoTitle, baseName, pathTail, colorValue, formatSize, hostPath, linkHost, pluralCategory, searchTerms, segments } = m;
 
 const clip = (over) => ({ kind: "text", preview: "", meta: {}, formats: ["text"], width: null, height: null, ...over });
 
@@ -78,4 +78,21 @@ test("highlight: case-insensitive, Cyrillic, longest term first", () => {
   assert.deepEqual(segments("a+b (c)", searchTerms('"+b ("')).map((x) => x.hit), [false, true, false], "regex characters are literal");
   assert.deepEqual(segments("a+b (c)", searchTerms("+b (")).map((x) => x.hit), [false, true, false, true, false], "terms highlight separately");
   assert.deepEqual(segments("plain", []), [{ text: "plain", hit: false }]);
+});
+
+test("folder tail of a file card (FIX-08, meta.dir)", () => {
+  const raw = String.raw;
+  assert.equal(pathTail(raw`C:\Users\me\Documents`), raw`…\me\Documents`);
+  assert.equal(pathTail(raw`C:\Users\me\Pictures\Trip` + "\\"), raw`…\Pictures\Trip`);
+  assert.equal(pathTail(raw`C:\Projects`), raw`C:\Projects`);
+  assert.equal(pathTail("C:\\"), "C:\\");
+  assert.equal(pathTail("C:"), "C:\\");
+  assert.equal(pathTail(raw`\\server\share`), raw`\\server\share`);
+  assert.equal(pathTail(raw`\\server\share\team\specs`), raw`…\team\specs`);
+  assert.equal(pathTail("/home/me/docs"), "…/me/docs");
+  assert.equal(pathTail(raw`C:\a\b\c`, 1), raw`…\c`);
+  // No dir (older records, non-files) → nothing to show.
+  assert.equal(pathTail(undefined), "");
+  assert.equal(pathTail(null), "");
+  assert.equal(pathTail("   "), "");
 });

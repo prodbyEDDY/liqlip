@@ -21,7 +21,7 @@
   import { shelf } from "../shelf.svelte";
   import { toasts } from "../toasts.svelte";
   import { confirmDiscard } from "./layerActions";
-  import { clipboardText, previewExpansion, usesClipboard } from "./snippetText";
+  import { previewClipboardText, previewExpansion, usesClipboard } from "./snippetText";
   import { focusOnce, trapTab } from "./focus";
 
   let { layer, close }: LayerProps = $props();
@@ -74,7 +74,7 @@
 
   onMount(() => {
     if (clipId !== null) void loadClip(clipId);
-    clipboardText()
+    previewClipboardText()
       .then((s) => (clipSample = s))
       .catch(() => {});
     const timer = setInterval(() => (now = Date.now()), 30_000);
