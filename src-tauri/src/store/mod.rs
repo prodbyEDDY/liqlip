@@ -1,17 +1,39 @@
 //! Store — SQLite history, folders, favorites, snippets, media, search, retention, undo
-//! (ARCHITECTURE §4). Owner: **W1-A**. W0 declares the inter-module API (§15) with
-//! panic-free stubs so capture (W1-B) and paste (W1-C) can code against it in parallel.
+//! (ARCHITECTURE §4). Owner: **W1-A**.
 //!
-//! Rules of this API: `Store` methods never emit events — the caller does (it knows the
-//! `ChangeOrigin`); background work (retention, purge) emits through the `AppHandle`
+//! Rules of this API (§15): `Store` methods never emit events — the caller does (it knows
+//! the `ChangeOrigin`); background work (retention, purge) emits through the `AppHandle`
 //! handed to [`init`]. All methods are blocking: call them from a worker thread or
 //! `tauri::async_runtime::spawn_blocking`, never from the UI thread.
+//!
+//! Layout: `schema` (open, pragmas, migrations, corruption recovery) · `media` (files under
+//! `media\`, `icons\`, thumbnails, the `liq` scheme) · `write` (capture insert, paste data,
+//! record mutations) · `feed` (feed query, cursor, search, counts, detail, apps) ·
+//! `lifecycle` (soft delete, undo, delete-recent, clear, purge, retention) · `folders` ·
+//! `snippets` · `maint` (background thread) · `commands` (§9.6).
+//!
+//! Privacy: nothing here logs clipboard content — only ids, counts, sizes and error codes.
 
 pub mod commands;
+mod feed;
+mod folders;
+mod lifecycle;
+mod maint;
+mod media;
+mod schema;
+mod snippets;
+#[cfg(test)]
+mod testutil;
+mod write;
 
 use crate::model::{ClipMeta, Format, Kind};
+use parking_lot::{Mutex, MutexGuard};
+use rusqlite::{Connection, ErrorCode};
 use std::path::{Path, PathBuf};
-use tauri::AppHandle;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc;
+use std::time::{SystemTime, UNIX_EPOCH};
+use tauri::{AppHandle, Manager};
 
 /// Source application of a capture (`apps` row, upserted by exe).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -34,7 +56,12 @@ pub struct ClipFiles {
 /// What capture hands to the store: everything already decoded, classified, hashed
 /// (`content::content_hash` / `content::image_hash`) and measured (`content::text_metrics`).
 /// The store does no clipboard work and no classification.
-#[allow(dead_code)] // W1-A reads, W1-B builds
+///
+/// Store-side normalisation (W1-A): text longer than `content::TEXT_MAX_BYTES` and file
+/// lists longer than `content::FILES_MAX` are cut and re-hashed with the same `content.rs`
+/// functions; `html`/`rtf` above 2 MB are dropped; `size` is recomputed from the bytes the
+/// store actually persists (text + rich formats + full PNG, §4.2) — the field is advisory.
+#[allow(dead_code)] // W1-B builds it (`size` is advisory, see above)
 #[derive(Debug, Clone)]
 pub struct NewClip {
     pub kind: Kind,
@@ -102,74 +129,127 @@ pub struct PastePayload {
     pub formats: Vec<Format>,
 }
 
+/// The single source of "now" (Unix ms) — tests swap it for a manual clock.
+pub(crate) type Clock = Box<dyn Fn() -> i64 + Send + Sync>;
+
+/// Wall clock in Unix milliseconds.
+pub(crate) fn system_now() -> i64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
+}
+
 /// Managed state (`app.manage(store)` in `setup()` step 4, before any window).
 pub struct Store {
-    // W1-A: connection (parking_lot::Mutex<rusqlite::Connection>), data/media dirs, undo map.
-    _private: (),
+    /// One connection, serialised by a non-poisoning mutex (a panic in one command must not
+    /// brick every later one).
+    conn: Mutex<Connection>,
+    paths: media::Paths,
+    clock: Clock,
+    undo: Mutex<lifecycle::UndoBook>,
+    /// Wake-up channel of the background thread (set by [`init`]; `None` in tests).
+    maint: Mutex<Option<mpsc::Sender<maint::Wake>>>,
 }
 
 impl Store {
-    /// Open (create / migrate) `liqlip.db` in `data_dir`. Must only fail on unrecoverable
-    /// I/O (a corrupt database is moved aside and recreated — W1-A); `setup()` aborts
-    /// start-up on `Err`.
+    /// Open (create / migrate) `liqlip.db` in `data_dir`. Only fails on unrecoverable I/O
+    /// or on a database written by a newer Liqlip; a corrupt database (and its media) is
+    /// moved aside as `*.corrupt-<ms>` and recreated. `setup()` aborts start-up on `Err`.
     pub fn open(data_dir: &Path) -> Result<Store, String> {
-        let _ = data_dir; // W1-A
-        Ok(Store { _private: () })
+        Self::open_with_clock(data_dir, Box::new(system_now))
     }
 
-    /// Insert a captured record, or bump the existing one with the same hash.
-    #[allow(dead_code)] // W1-B calls it
-    pub fn insert_clip(&self, clip: NewClip) -> Result<InsertOutcome, String> {
-        let _ = clip; // W1-A
-        Err("unimplemented: store::insert_clip".into())
+    pub(crate) fn open_with_clock(data_dir: &Path, clock: Clock) -> Result<Store, String> {
+        let paths = media::Paths::new(data_dir);
+        paths.create_dirs()?;
+        let conn = schema::open_or_recover(&paths, clock())?;
+        Ok(Store {
+            conn: Mutex::new(conn),
+            paths,
+            clock,
+            undo: Mutex::new(lifecycle::UndoBook::default()),
+            maint: Mutex::new(None),
+        })
     }
 
-    /// Store the PNG icon of a source app (`icons\<app_id>.png`).
-    #[allow(dead_code)] // W1-B calls it
-    pub fn set_app_icon(&self, app_id: i64, png: &[u8]) -> Result<(), String> {
-        let _ = (app_id, png); // W1-A
-        Err("unimplemented: store::set_app_icon".into())
+    pub(crate) fn now(&self) -> i64 {
+        (self.clock)()
     }
 
-    /// Data of one record for the clipboard writer. `Err("not_found: …")` for a missing or
-    /// deleted id.
-    #[allow(dead_code)] // W1-C calls it
-    pub fn get_for_paste(&self, id: i64) -> Result<PastePayload, String> {
-        let _ = id; // W1-A
-        Err("unimplemented: store::get_for_paste".into())
+    pub(crate) fn lock(&self) -> MutexGuard<'_, Connection> {
+        self.conn.lock()
     }
 
-    /// Record a paste/copy from Liqlip: `used_at = now`, `use_count += 1`; with `bump`
-    /// (`settings.picker.bumpOnPaste`) also `copied_at = now`. The caller emits
-    /// `clips:changed { origin: 'user', change: 'updated', ids }`.
-    #[allow(dead_code)] // W1-C calls it
-    pub fn mark_used(&self, ids: &[i64], bump: bool) -> Result<(), String> {
-        let _ = (ids, bump); // W1-A
-        Err("unimplemented: store::mark_used".into())
+    pub(crate) fn paths(&self) -> &media::Paths {
+        &self.paths
     }
 
-    /// Hard-delete everything copied in the last `minutes` (files included); returns the
-    /// count. Shared by the `clips_delete_recent` command and the tray. The caller emits.
-    pub fn delete_recent(&self, minutes: i64) -> Result<i64, String> {
-        let _ = minutes; // W1-A
-        Err("unimplemented: store::delete_recent".into())
+    /// Nudge the background thread (no-op before [`init`] / in tests).
+    pub(crate) fn wake(&self, w: maint::Wake) {
+        if let Some(tx) = self.maint.lock().as_ref() {
+            let _ = tx.send(w);
+        }
     }
 }
 
-/// `setup()` step 4, right after `manage`: background work (retention at start / hourly,
-/// purge of soft-deleted rows, `settings::subscribe` for `storage.*`). Keeps `app` for
-/// emitting `clips:changed { origin: 'retention' }`.
+/// `setup()` step 4, right after `manage`: background work (retention at start / hourly /
+/// after inserts / on `storage.*` changes, purge of soft-deleted rows, orphan media sweep,
+/// `PRAGMA optimize`). Keeps `app` for emitting `clips:changed { origin: 'retention' }`.
 pub fn init(app: &AppHandle) {
-    let _ = app; // W1-A
+    maint::start(app);
 }
 
 /// Body of the `liq` URI scheme (`http://liq.localhost/<path>`, §9.8): `/thumb/<id>`,
 /// `/media/<id>`, `/icon/<appId>` → `(mime, bytes)`; `None` → 404. `path` excludes the
 /// query (`?v=` is cache-busting only). Called on a blocking thread.
 pub fn serve_uri(app: &AppHandle, path: &str) -> Option<(String, Vec<u8>)> {
-    let _ = (app, path); // W1-A
-    None
+    app.try_state::<Store>()?.serve_path(path)
 }
+
+/// Set once a query hits `SQLITE_CORRUPT` / `SQLITE_NOTADB`; the background thread then
+/// drops a marker so the next start runs `PRAGMA quick_check` (and recovers if needed).
+static CORRUPTION_SEEN: AtomicBool = AtomicBool::new(false);
+
+pub(crate) fn corruption_seen() -> bool {
+    CORRUPTION_SEEN.load(Ordering::Relaxed)
+}
+
+/// Map a SQLite error to the command error convention (`busy` / `failed`). The message
+/// never contains user content (rusqlite errors carry SQL text, not bound values).
+pub(crate) fn db_err(e: rusqlite::Error) -> String {
+    match e.sqlite_error().map(|s| s.code) {
+        Some(ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked) => format!("busy: {e}"),
+        Some(ErrorCode::DatabaseCorrupt | ErrorCode::NotADatabase) => {
+            CORRUPTION_SEEN.store(true, Ordering::Relaxed);
+            format!("failed: {e}")
+        }
+        _ => format!("failed: {e}"),
+    }
+}
+
+/// `true` for a UNIQUE / PRIMARY KEY constraint violation.
+pub(crate) fn is_unique_violation(e: &rusqlite::Error) -> bool {
+    matches!(e.sqlite_error(), Some(s) if s.code == ErrorCode::ConstraintViolation)
+}
+
+/// Deduplicate ids, keeping the first occurrence order.
+pub(crate) fn dedup_ids(ids: &[i64]) -> Vec<i64> {
+    let mut seen = std::collections::HashSet::with_capacity(ids.len());
+    ids.iter().copied().filter(|id| seen.insert(*id)).collect()
+}
+
+/// `?,?,…` with `n` placeholders (n ≥ 1).
+pub(crate) fn placeholders(n: usize) -> String {
+    let mut s = String::with_capacity(n * 2);
+    for i in 0..n {
+        if i > 0 {
+            s.push(',');
+        }
+        s.push('?');
+    }
+    s
+}
+
+/// Ids per `IN (…)` statement (well under SQLITE_MAX_VARIABLE_NUMBER = 32766).
+pub(crate) const CHUNK: usize = 500;
 
 /// W0 probe (kept as a regression guard): the bundled SQLite has FTS5 with the `trigram`
 /// tokenizer, external-content tables work, and matching is case-insensitive for Latin
@@ -181,7 +261,8 @@ mod sqlite_probe {
         let c = rusqlite::Connection::open_in_memory().unwrap();
         let version: String = c.query_row("SELECT sqlite_version()", [], |r| r.get(0)).unwrap();
         let parts: Vec<u32> = version.split('.').map(|p| p.parse().unwrap()).collect();
-        assert!(parts[0] == 3 && parts[1] >= 34, "trigram needs SQLite ≥ 3.34, got {version}");
+        // trigram needs 3.34; FTS5 'secure-delete' (used by schema v1) needs 3.42.
+        assert!(parts[0] == 3 && parts[1] >= 42, "schema v1 needs SQLite ≥ 3.42, got {version}");
         c.execute_batch(
             "CREATE TABLE clips (id INTEGER PRIMARY KEY, title TEXT, text TEXT, ocr_text TEXT);
              CREATE VIRTUAL TABLE clips_fts USING fts5(
