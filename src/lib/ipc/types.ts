@@ -420,7 +420,8 @@ export interface HotkeysCaptured {
   combo: string;
 }
 
-export type HudKind = "copied" | "stack_empty" | "paused" | "elevated";
+/** `resumed` / `skip_next` — W1-D, additive: feedback for the pause / skip hotkeys. */
+export type HudKind = "copied" | "stack_empty" | "paused" | "elevated" | "resumed" | "skip_next";
 
 export interface HudShow {
   kind: HudKind;

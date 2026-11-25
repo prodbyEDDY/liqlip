@@ -53,4 +53,16 @@ windows = { version = "0.62", features = [
     "Win32_Globalization",
     # RegGetValueW (tray icon variant for a light / dark taskbar).
     "Win32_System_Registry",
+    # W1-D: RegisterHotKey / GetAsyncKeyState (hotkey engine, shelf poll).
+    "Win32_UI_Input_KeyboardAndMouse",
+    # W1-D: GetCurrentThreadId (registrar / hook threads), GetCurrentProcessId (own windows).
+    "Win32_System_Threading",
+    # W1-D: GetModuleHandleW for SetWindowsHookExW(WH_KEYBOARD_LL).
+    "Win32_System_LibraryLoader",
+    # W1-D: MonitorFromPoint / GetMonitorInfoW (display-change signature of the docked monitor).
+    "Win32_Graphics_Gdi",
+    # W1-D: GetDpiForMonitor (a monitor's scale changed while the shelf is docked on it).
+    "Win32_UI_HiDpi",
+    # W1-D: QueryDisplayConfig / DisplayConfigGetDeviceInfo (monitor friendly names).
+    "Win32_Devices_Display",
 ] }
