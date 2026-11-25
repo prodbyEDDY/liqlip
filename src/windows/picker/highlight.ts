@@ -1,6 +1,7 @@
 // Search-match highlighting in card previews and titles (SPEC §3.4). Matching mirrors the
-// backend's: case-insensitive substrings, Cyrillic and Latin alike. Each whitespace-separated
-// term (a quoted phrase is one term) is highlighted wherever it occurs. Pure — node-tested.
+// store's (ARCHITECTURE §4.4): the text is split into terms (a quoted phrase is one term), each
+// a case-insensitive substring, Cyrillic and Latin alike; every term is highlighted wherever
+// it occurs. Pure — node-tested.
 
 export interface Segment {
   text: string;
@@ -17,9 +18,6 @@ export function searchTerms(text: string): string[] {
     const term = (m[1] ?? m[2] ?? "").trim();
     if (term) terms.push(term);
   }
-  // The whole text as typed is also a term (the backend matches it as one substring).
-  const whole = text.trim();
-  if (whole && !terms.includes(whole)) terms.unshift(whole);
   return [...new Set(terms)].sort((a, b) => b.length - a.length);
 }
 

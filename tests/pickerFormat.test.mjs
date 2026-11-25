@@ -74,7 +74,8 @@ test("highlight: case-insensitive, Cyrillic, longest term first", () => {
   ]);
   const s = segments("GitHub releases on github.com", searchTerms("github"));
   assert.equal(s.filter((x) => x.hit).length, 2);
-  assert.deepEqual(searchTerms('"brown fox" quick'), ['"brown fox" quick', "brown fox", "quick"]);
-  assert.deepEqual(segments("a+b (c)", searchTerms("+b (")).map((x) => x.hit), [false, true, false]);
+  assert.deepEqual(searchTerms('"brown fox" quick'), ["brown fox", "quick"]);
+  assert.deepEqual(segments("a+b (c)", searchTerms('"+b ("')).map((x) => x.hit), [false, true, false], "regex characters are literal");
+  assert.deepEqual(segments("a+b (c)", searchTerms("+b (")).map((x) => x.hit), [false, true, false, true, false], "terms highlight separately");
   assert.deepEqual(segments("plain", []), [{ text: "plain", hit: false }]);
 });

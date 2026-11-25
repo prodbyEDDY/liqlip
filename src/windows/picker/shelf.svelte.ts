@@ -165,8 +165,11 @@ class Shelf {
       onClipsChanged((c) => this.#onChanged(c)),
       onCaptureStatus((s) => (this.capture = s)),
       onStackChanged((s) => (this.stack = s)),
-      onSettingsChanged((s) => (this.settings = s)),
+      onSettingsChanged((s) => this.#onSettings(s)),
     ]);
+    // A cursor of another order (e.g. favoritesFirst flipped between pages) is rejected by
+    // the store with `invalid: cursor`: start the feed again from the first page.
+    feed.onInvalidCursor = () => void this.#reload(true);
     const stopEffects = $effect.root(() => {
       $effect(() => {
         view.horizontal = this.horizontal;
@@ -210,6 +213,13 @@ class Shelf {
       clearTimeout(this.#searchTimer);
       clearTimeout(this.#changedTimer);
     };
+  }
+
+  #onSettings(s: Settings): void {
+    const prev = this.settings;
+    this.settings = s;
+    // The feed order changed: the old cursor is now `invalid: cursor` — start from page one.
+    if (prev && prev.picker.favoritesFirst !== s.picker.favoritesFirst && this.open) void this.#reload(false);
   }
 
   #onOpen(p: PickerOpen): void {
@@ -371,7 +381,13 @@ class Shelf {
       return;
     }
     const foreign = batch.filter((c) => !this.#isOwn(c));
-    if (foreign.length === 0 || feed.mode === "snippets") return;
+    if (foreign.length === 0) return;
+    // No ids = "re-read everything" (folder / snippet edits, the tray's "delete recent").
+    if (foreign.some((c) => !c.ids?.length)) {
+      await this.#reload(true);
+      return;
+    }
+    if (feed.mode === "snippets") return;
 
     const deleted = foreign.filter((c) => c.change === "deleted").flatMap((c) => c.ids ?? []);
     if (deleted.length) this.#dropRows(deleted);

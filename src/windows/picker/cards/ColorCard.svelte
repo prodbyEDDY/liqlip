@@ -9,11 +9,26 @@
   let { css, value }: Props = $props();
 </script>
 
-<div class="swatch" style:background={css ?? "var(--color-track)"}>
-  <span class="hex">{value}</span>
+<!-- A translucent colour (`#8B5CF6CC`, `rgba(…, 0.8)`) shows its alpha over the checkerboard. -->
+<div class="checker">
+  <div class="swatch" style:background={css ?? "var(--color-track)"}>
+    <span class="hex">{value}</span>
+  </div>
 </div>
 
 <style>
+  .checker {
+    width: 100%;
+    height: 100%;
+    background-color: var(--color-paper);
+    background-image: conic-gradient(
+      var(--color-checker) 25%,
+      transparent 0 50%,
+      var(--color-checker) 0 75%,
+      transparent 0
+    );
+    background-size: 16px 16px;
+  }
   .swatch {
     width: 100%;
     height: 100%;

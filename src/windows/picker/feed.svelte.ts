@@ -6,6 +6,7 @@
 // - `release()` drops the rows when the shelf is closed (called 260 ms after `picker:close`,
 //   after the exit animation), so the hidden window holds nothing.
 import { clipsList, snippetsList } from "$lib/ipc/commands";
+import { errorCode } from "$lib/ipc/errors";
 import type { Clip, FeedQuery, Snippet } from "$lib/ipc/types";
 
 export const PAGE = 40;
@@ -30,6 +31,8 @@ class Feed {
   /** The last "load more" failed — the grid offers a retry instead of the skeleton row. */
   moreFailed = $state(false);
 
+  /** Called when the store rejects the cursor (`invalid: cursor` — the order changed). */
+  onInvalidCursor: (() => void) | null = null;
   #cursor: string | null = null;
   #query: FeedQuery | null = null;
   #seq = 0;
@@ -127,8 +130,14 @@ class Feed {
       this.#cursor = page.nextCursor;
       this.hasMore = page.nextCursor !== null;
       return fresh.length > 0;
-    } catch {
-      if (seq === this.#seq) this.moreFailed = true;
+    } catch (e) {
+      if (seq !== this.#seq) return false;
+      if (errorCode(e) === "invalid" && this.onInvalidCursor) {
+        this.loadingMore = false;
+        this.onInvalidCursor();
+      } else {
+        this.moreFailed = true;
+      }
       return false;
     } finally {
       if (seq === this.#seq) this.loadingMore = false;

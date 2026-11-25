@@ -105,7 +105,7 @@
     {:else if detail.kind === "image"}
       <img class="image" src={detail.imageUrl ?? detail.thumbUrl ?? ""} alt={title} draggable="false" />
     {:else if detail.kind === "color"}
-      <div class="swatch" style:background={colorValue(detail) ?? "var(--color-track)"}></div>
+      <div class="checker"><div class="swatch" style:background={colorValue(detail) ?? "var(--color-track)"}></div></div>
       <div class="values selectable">
         {#each [detail.meta.color?.hex, detail.meta.color?.rgb, detail.meta.color?.hsl].filter(Boolean) as v (v)}
           <code>{v}</code>
@@ -229,10 +229,18 @@
     min-height: 0;
     object-fit: contain;
   }
-  .swatch {
+  .checker {
+    display: flex;
     flex: 1 1 auto;
     min-height: 120px;
     border-radius: 16px;
+    overflow: hidden;
+    background-color: var(--color-paper);
+    background-image: conic-gradient(var(--color-checker) 25%, transparent 0 50%, var(--color-checker) 0 75%, transparent 0);
+    background-size: 16px 16px;
+  }
+  .swatch {
+    flex: 1 1 auto;
   }
   .values {
     display: flex;

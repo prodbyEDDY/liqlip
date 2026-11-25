@@ -25,7 +25,8 @@ const p = (s) => parseQuery(s, ctx);
 
 test("plain text, Cyrillic and quoted phrases", () => {
   assert.deepEqual(p("встреча четверг").text, "встреча четверг");
-  assert.deepEqual(p('"quick brown" fox').text, "quick brown fox");
+  assert.deepEqual(p('"quick brown" fox').text, '"quick brown" fox', "phrases keep their quotes for the store");
+  assert.deepEqual(p('"" fox').text, "fox", "an empty phrase is dropped");
   assert.deepEqual(p("  ").text, "");
   assert.deepEqual(p("hello").filter, {});
 });

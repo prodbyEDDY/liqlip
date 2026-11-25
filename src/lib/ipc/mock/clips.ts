@@ -136,19 +136,33 @@ function decodeCursor(s: string): Key {
   throw fail("invalid", "cursor");
 }
 
-function haystack(c: MockClip): string {
-  return [c.title, c.text, c.preview, c.meta.url, c.ocrText, ...(c.files ?? []).map((f) => f.path)]
-    .filter(Boolean)
-    .join("\n")
-    .toLowerCase();
+/** Free text → terms like the store (ARCHITECTURE §4.4): whitespace splits, `"…"` keeps a
+ *  phrase (an unclosed quote runs to the end), empty and repeated terms are dropped, ≤ 32. */
+export function searchTermsOf(text: string): string[] {
+  const out: string[] = [];
+  for (const m of text.matchAll(/"([^"]*)"?|(\S+)/g)) {
+    const t = (m[1] ?? m[2] ?? "").trim().toLowerCase();
+    if (t && !out.includes(t)) out.push(t);
+  }
+  return out.slice(0, 32);
+}
+
+/** Terms of ≥ 3 characters search the full text, title and OCR (FTS trigram); shorter ones
+ *  only the preview and title. */
+function matchesTerm(c: MockClip, term: string): boolean {
+  const short = [...term].length < 3;
+  const fields = short
+    ? [c.preview, c.title]
+    : [c.title, c.text, c.preview, c.meta.url, c.ocrText, ...(c.files ?? []).map((f) => f.path)];
+  return fields.some((f) => !!f && f.toLowerCase().includes(term));
 }
 
 function clipsList({ q }: Args): Page {
   if (flags.error) throw fail("busy", "mock-error");
   const query = q as FeedQuery;
   const f = query.filter ?? {};
-  const text = (query.text ?? "").trim().toLowerCase();
-  const exclude = (query.exclude ?? []).map((w) => w.toLowerCase()).filter(Boolean);
+  const terms = searchTermsOf(query.text ?? "");
+  const exclude = (query.exclude ?? []).map((w) => w.trim().toLowerCase()).filter(Boolean);
   let items = db().clips.filter((c) => {
     if (!visible(c)) return false;
     if (f.kinds?.length && !f.kinds.includes(c.kind)) return false;
@@ -157,11 +171,8 @@ function clipsList({ q }: Args): Page {
     if (f.appIds?.length && (c.appId === null || !f.appIds.includes(c.appId))) return false;
     if (f.since !== undefined && c.copiedAt < f.since) return false;
     if (f.until !== undefined && c.copiedAt > f.until) return false;
-    if (text || exclude.length) {
-      const h = haystack(c);
-      if (text && !h.includes(text)) return false;
-      if (exclude.some((w) => h.includes(w))) return false;
-    }
+    if (!terms.every((t) => matchesTerm(c, t))) return false;
+    if (exclude.some((t) => matchesTerm(c, t))) return false;
     return true;
   });
   const { key, dir } = ordering(query);
@@ -412,6 +423,7 @@ function folderCreate({ name }: Args): Folder {
   const n = checkFolderName(name);
   const id = Math.max(0, ...d.folders.map((f) => f.id)) + 1;
   d.folders.push({ id, name: n, position: Math.max(0, ...d.folders.map((f) => f.position)) + 1, createdAt: now() });
+  changed("updated");
   return folderOut(id);
 }
 
@@ -419,6 +431,7 @@ function folderRename({ id, name }: Args): Folder {
   const f = db().folders.find((x) => x.id === id);
   if (!f) throw fail("not_found", `folder ${String(id)}`);
   f.name = checkFolderName(name, f.id);
+  changed("updated");
   return folderOut(f.id);
 }
 
@@ -430,6 +443,7 @@ function folderMove({ id, beforeId }: Args): void {
   const before = beforeId === null ? null : (others.find((x) => x.id === beforeId)?.position ?? null);
   if (beforeId !== null && before === null) throw fail("not_found", `folder ${String(beforeId)}`);
   f.position = between(others.map((x) => x.position).sort((a, b) => a - b), before);
+  changed("updated");
 }
 
 function folderDelete({ id, withClips }: Args): UndoResult {
@@ -444,7 +458,7 @@ function folderDelete({ id, withClips }: Args): UndoResult {
     if (withClips) c.deletedAt = at;
   }
   pruneStack();
-  changed(withClips ? "deleted" : "updated", members.map((c) => c.id));
+  changed("updated");
   return {
     undoToken: undoToken(() => {
       d.folders.push(f);
@@ -452,7 +466,7 @@ function folderDelete({ id, withClips }: Args): UndoResult {
         c.folderId = f.id;
         c.deletedAt = null;
       }
-      changed("updated", members.map((c) => c.id));
+      changed("updated");
     }),
   };
 }
@@ -463,9 +477,9 @@ const snippetOut = (s: MockSnippet): Snippet => ({ ...s });
 
 function snippetsList({ text }: Args): Snippet[] {
   if (flags.error) throw fail("busy", "mock-error");
-  const q = String(text ?? "").trim().toLowerCase();
+  const terms = searchTermsOf(String(text ?? ""));
   return db()
-    .snippets.filter((s) => !q || s.name.toLowerCase().includes(q) || s.body.toLowerCase().includes(q))
+    .snippets.filter((s) => terms.every((t) => s.name.toLowerCase().includes(t) || s.body.toLowerCase().includes(t)))
     .sort((a, b) => a.position - b.position)
     .map(snippetOut);
 }
@@ -482,6 +496,7 @@ function snippetSave({ input }: Args): Snippet {
     const s = d.snippets.find((x) => x.id === i.id);
     if (!s) throw fail("not_found", `snippet ${i.id}`);
     Object.assign(s, { name, body: i.body, keyword, updatedAt: t });
+    changed("updated");
     return snippetOut(s);
   }
   const s: MockSnippet = {
@@ -495,6 +510,7 @@ function snippetSave({ input }: Args): Snippet {
     useCount: 0,
   };
   d.snippets.push(s);
+  changed("updated");
   return snippetOut(s);
 }
 
@@ -727,6 +743,7 @@ export const clipsHandlers: Record<string, (args: Args) => unknown> = {
   snippet_delete: ({ id }) => {
     const s = snippetById(id);
     db().snippets = db().snippets.filter((x) => x !== s);
+    changed("updated");
   },
   snippet_mark_used: ({ id }) => {
     snippetById(id).useCount++;

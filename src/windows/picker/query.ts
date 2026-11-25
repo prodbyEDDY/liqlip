@@ -31,7 +31,8 @@ export interface QueryContext {
 }
 
 export interface ParsedQuery {
-  /** Free text without tokens (terms joined by one space). */
+  /** Free text without tokens: terms joined by one space, phrases kept in quotes (the store
+   *  ANDs the terms). */
   text: string;
   exclude: string[];
   filter: Filter;
@@ -182,7 +183,12 @@ function looksLikeToken(w: Word): boolean {
 
 function interpret(w: Word, ctx: QueryContext): Interpreted {
   if (w.neg) return { type: "exclude", term: w.key !== null ? w.raw.slice(1) : w.value };
-  if (!looksLikeToken(w)) return { type: "text", term: w.key !== null ? w.raw : w.value };
+  if (!looksLikeToken(w)) {
+    // A quoted phrase stays quoted: the store splits the text into AND-ed terms and keeps
+    // `"…"` together (ARCHITECTURE §4.4).
+    const term = w.key !== null ? w.raw : w.quoted ? `"${w.value}"` : w.value;
+    return { type: "text", term: w.quoted && !w.value.trim() ? "" : term };
+  }
   const key = w.key as TokenKey;
   const value = w.value.trim();
   const token = (canonical: string): QueryToken => ({ key, value: canonical, raw: w.raw });
