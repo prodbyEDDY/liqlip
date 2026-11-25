@@ -44,6 +44,8 @@ export interface ClipMeta {
   ext?: string;
   /** text truncated to 2 MB */
   truncated?: boolean;
+  /** file: parent directory of the first file — the path tail on the card (FIX-08, W3) */
+  dir?: string;
 }
 
 export type OcrState = "none" | "pending" | "done" | "error";

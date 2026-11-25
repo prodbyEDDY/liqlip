@@ -770,6 +770,9 @@ export const clipsHandlers: Record<string, (args: Args) => unknown> = {
   clip_copy: clipCopy,
   text_paste: textPaste,
   text_copy: ({ text }) => writeClipboard(String(text ?? "")),
+  // Browsers gate clipboard reads behind a permission prompt — the mock answers "no text",
+  // so the shelf falls back to the newest history record, as it would in Rust on failure.
+  clipboard_text: () => null,
   clip_open: openLike(["link", "file", "image"]),
   clip_open_with: openLike(["file", "image"]),
   clip_reveal: openLike(["file", "image"]),

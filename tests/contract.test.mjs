@@ -38,7 +38,7 @@ test("every §9.6 command is documented, registered, wrapped and mocked", async 
 
   const { MOCK_COMMANDS } = await importTs("src/lib/ipc/mock/index.ts");
 
-  assert.equal(documented.length, 66, "ARCHITECTURE §9.6 lists 66 commands");
+  assert.equal(documented.length, 67, "ARCHITECTURE §9.6 lists 67 commands");
   assert.deepEqual(sorted(registered), sorted(documented), "lib.rs generate_handler! ≡ §9.6");
   assert.deepEqual(sorted(wrapped), sorted(documented), "commands.ts ≡ §9.6");
   assert.deepEqual(sorted(MOCK_COMMANDS), sorted(documented), "mock router ≡ §9.6");

@@ -205,6 +205,9 @@ pub struct ClipMeta {
     pub ext: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub truncated: Option<bool>,
+    /// file: parent directory of the first file, for the path tail on the card (FIX-08, W3)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dir: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

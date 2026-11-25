@@ -163,6 +163,7 @@ pub fn run() {
             paste::commands::clip_copy,
             paste::commands::text_paste,
             paste::commands::text_copy,
+            paste::commands::clipboard_text,
             paste::commands::clip_open,
             paste::commands::clip_open_with,
             paste::commands::clip_reveal,

@@ -256,6 +256,7 @@ fn merge_meta(old: ClipMeta, new: &ClipMeta) -> ClipMeta {
         contact: new.contact.or(old.contact),
         ext: new.ext.clone().or(old.ext),
         truncated: new.truncated.or(old.truncated),
+        dir: new.dir.clone().or(old.dir),
     }
 }
 

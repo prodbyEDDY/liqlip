@@ -1131,6 +1131,7 @@ export interface ClipMeta {
   contact?: 'email' | 'phone';
   ext?: string;                                      // file: расширение первого файла
   truncated?: boolean;                               // текст усечён до 2 МБ
+  dir?: string;                                      // file: каталог первого файла (хвост пути; W3, FIX-08)
 }
 
 export interface Clip {
@@ -1257,6 +1258,7 @@ export interface ImportReport { imported: number; skipped: number; folders: numb
 | `clip_copy` | `{ ids, mode, separator? }` → `PasteOutcome` | paste |
 | `text_paste` | `TextPasteRequest` → `PasteOutcome` | paste |
 | `text_copy` | `text` → `()` | paste |
+| `clipboard_text` | → `string\|null` (текущий `CF_UNICODETEXT`, для `{clipboard}` в сниппетах; W3, FIX-09) | paste |
 | `clip_open` / `clip_open_with` / `clip_reveal` | `id` → `()` | paste |
 | `clip_drag_out` | `ids` → `'dropped'\|'cancelled'` | paste |
 | `stack_get` / `stack_add` / `stack_remove` / `stack_move` / `stack_reverse` / `stack_clear` | → `Stack` | paste |

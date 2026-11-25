@@ -188,6 +188,10 @@ export const textPaste = (req: TextPasteRequest): Promise<PasteOutcome> =>
 export const textCopy = (text: string): Promise<void> =>
   call<void>("text_copy", { text });
 
+/** `clipboard_text` — The clipboard's current text (`{clipboard}` in snippets); `null` = no text. */
+export const clipboardText = (): Promise<string | null> =>
+  call<string | null>("clipboard_text", {});
+
 /** `clip_open` — Open a link in the browser / a file with its default app. */
 export const clipOpen = (id: number): Promise<void> =>
   call<void>("clip_open", { id });

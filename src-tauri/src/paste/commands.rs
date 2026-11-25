@@ -37,6 +37,13 @@ pub async fn text_copy(_app: AppHandle, text: String) -> Result<(), String> {
     blocking(move || super::copy_text(&text)).await
 }
 
+/// The clipboard's current `CF_UNICODETEXT` (`{clipboard}` in snippets), `None` when there is
+/// no text. Coordinator stub for W3 (FIX-09) — W3-A replaces it with a short, retried read.
+#[tauri::command]
+pub async fn clipboard_text(_app: AppHandle) -> Result<Option<String>, String> {
+    Ok(None)
+}
+
 fn payload(app: &AppHandle, id: i64) -> Result<crate::store::PastePayload, String> {
     use tauri::Manager;
     app.state::<crate::store::Store>().get_for_paste(id)
