@@ -17,6 +17,7 @@ use base64::Engine;
 use rusqlite::types::Value;
 use rusqlite::{params_from_iter, Connection, OptionalExtension};
 use std::collections::BTreeMap;
+use std::time::{Duration, Instant};
 
 pub(crate) const PAGE_DEFAULT: i64 = 40;
 pub(crate) const PAGE_MAX: i64 = 200;
@@ -24,6 +25,8 @@ pub(crate) const PAGE_MAX: i64 = 200;
 const TERMS_MAX: usize = 32;
 /// Trigram tokenizer: shorter substrings never match (fts5.html §4.3.5).
 const TRIGRAM_MIN_CHARS: usize = 3;
+/// Total time `clip_detail` spends checking file paths.
+const STAT_BUDGET: Duration = Duration::from_secs(2);
 
 /// Columns of a feed row (no full text — it can be 2 MB). Indexes used by [`row_to_clip`].
 pub(crate) const CLIP_COLS: &str = "c.id, c.kind, c.title, c.preview, c.app_id, c.created_at, c.copied_at, \
@@ -393,12 +396,20 @@ impl Store {
                 .and_then(FilesBlob::parse)
                 .map(|f| f.paths)
                 .unwrap_or_else(|| text.as_deref().unwrap_or("").lines().filter(|l| !l.is_empty()).map(str::to_string).collect());
+            // An offline network share can make each stat slow: past the budget the rest is
+            // reported as "exists, size unknown" rather than as a false "file not found".
+            let deadline = Instant::now() + STAT_BUDGET;
             paths
                 .into_iter()
                 .take(FILES_MAX)
-                .map(|path| match std::fs::metadata(&path) {
-                    Ok(m) => ClipFile { size: m.is_file().then(|| m.len() as i64), exists: true, path },
-                    Err(_) => ClipFile { path, exists: false, size: None },
+                .map(|path| {
+                    if Instant::now() > deadline {
+                        return ClipFile { path, exists: true, size: None };
+                    }
+                    match std::fs::metadata(&path) {
+                        Ok(m) => ClipFile { size: m.is_file().then(|| m.len() as i64), exists: true, path },
+                        Err(_) => ClipFile { path, exists: false, size: None },
+                    }
                 })
                 .collect()
         });
