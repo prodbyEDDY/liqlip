@@ -71,6 +71,9 @@ pub enum Key {
     Cancel,
     PickExeTitle,
     PickExeFilter,
+    BackupExportTitle,
+    BackupRestoreTitle,
+    BackupFilter,
 }
 
 pub fn tr(lang: Lang, key: Key) -> &'static str {
@@ -134,6 +137,12 @@ pub fn tr(lang: Lang, key: Key) -> &'static str {
         (Lang::Ru, PickExeTitle) => "Выберите приложение",
         (Lang::En, PickExeFilter) => "Applications",
         (Lang::Ru, PickExeFilter) => "Приложения",
+        (Lang::En, BackupExportTitle) => "Export a Liqlip backup",
+        (Lang::Ru, BackupExportTitle) => "Экспорт резервной копии Liqlip",
+        (Lang::En, BackupRestoreTitle) => "Restore from a Liqlip backup",
+        (Lang::Ru, BackupRestoreTitle) => "Восстановление из резервной копии Liqlip",
+        (Lang::En, BackupFilter) => "Liqlip backup",
+        (Lang::Ru, BackupFilter) => "Резервная копия Liqlip",
     }
 }
 
@@ -151,6 +160,7 @@ mod tests {
             TrayDelete5m, TrayDelete15m, TrayDelete30m, TrayDelete1h, TrayDelete24h, TrayStack,
             TraySettings, TrayQuit, SettingsWindowTitle, ConfirmDeleteRecentTitle,
             ConfirmDeleteRecentBody, ConfirmDelete, Cancel, PickExeTitle, PickExeFilter,
+            BackupExportTitle, BackupRestoreTitle, BackupFilter,
         ];
         for k in keys {
             assert!(!tr(Lang::En, k).is_empty());
