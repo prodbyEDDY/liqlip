@@ -32,12 +32,16 @@
     min-height: var(--h-md);
     margin-top: 6px;
   }
+  /* Hints that don't fit wrap onto a second line that is clipped away whole — a hint is
+     shown completely or not at all, never cut mid-word. */
   .foot__hints {
     display: flex;
     flex: 1 1 auto;
+    flex-wrap: wrap;
     align-items: center;
-    gap: 14px;
+    gap: 12px 14px;
     min-width: 0;
+    height: var(--h-xs);
     padding-left: 6px;
     overflow: hidden;
     color: var(--color-ink-2);

@@ -26,6 +26,7 @@ export type Command =
   | { type: "escape" } // Esc
   | { type: "preview" } // Space (empty search) / Ctrl+Y   → overlays (W2-C)
   | { type: "actions" } // Ctrl+K                          → overlays (W2-C)
+  | { type: "edit" } // Ctrl+E                            → Quick Look in edit mode (W2-C)
   | { type: "stack" }; // Ctrl+Shift+S                    → paste stack
 
 export interface KeyInput {
@@ -72,6 +73,7 @@ const NO_REPEAT: ReadonlySet<Command["type"]> = new Set<Command["type"]>([
   "settings",
   "preview",
   "actions",
+  "edit",
   "stack",
   "selectAll",
 ]);
@@ -180,6 +182,8 @@ function resolveRaw(e: KeyInput, ctx: KeyContext): Command | null {
         return shift ? null : { type: "preview" };
       case "KeyK":
         return shift ? null : { type: "actions" };
+      case "KeyE":
+        return shift ? null : { type: "edit" };
       case "KeyS":
         return shift ? { type: "stack" } : null;
     }

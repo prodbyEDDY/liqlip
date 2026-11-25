@@ -133,7 +133,12 @@ class Keyboard {
         if (ids.length) overlays.open("preview", { ids });
         return;
       case "actions":
-        if (ids.length) overlays.open("actions", { ids, anchor: cardAnchor(selection.current) });
+        if (ids.length) overlays.open("actions", { ids, anchor: cardAnchor(selection.current), snippet: snippet ?? null });
+        return;
+      case "edit":
+        // Text records open Quick Look in edit mode; a snippet opens its editor sheet.
+        if (snippet) overlays.open("snippet", { mode: "edit", snippet });
+        else if (selection.current !== null && feed.clip(selection.current)) overlays.open("preview", { ids: [selection.current], edit: true });
         return;
       case "stack":
         if (feed.mode === "clips") return runAction("stack", ids);

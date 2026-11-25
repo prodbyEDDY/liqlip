@@ -2,7 +2,8 @@
   // Hint row (SPEC §3.1): "↵ Paste into <icon> <app>" for the real target (no target →
   // "↵ Copy"; elevated → "↵ Copy · administrator window"), ⇧↵ plain text, Space preview,
   // Ctrl K actions; on the right the pause indicator (click → resume) and "Stack N" (click →
-  // the stack layer; also a drop target for dragged cards). A 32 px row with 4 px side
+  // the stack popover, again → closes it; also a drop target for dragged cards; shown at 0
+  // while "Collect new copies" is on, with a pulsing dot). A 32 px row with 4 px side
   // padding: its 24 px keycaps / status capsules sit 16 px from the panel's bottom corners —
   // concentric (12 + 16 = 28). Labels shorten on narrow strips (container queries). Hidden
   // when `settings.picker.hints` is off.
@@ -23,6 +24,8 @@
 
   const target = $derived(shelf.target);
   const stackCount = $derived(shelf.stack.items.length);
+  /** "Collect new copies" is on: the stack indicator stays visible (even at 0) and pulses a dot. */
+  const collecting = $derived(shelf.capture.collectToStack);
   const selected = $derived(selection.ids.size);
 </script>
 
@@ -64,17 +67,20 @@
         <span class="status__label">{t("picker.hint.paused")}</span>
       </button>
     {/if}
-    {#if stackCount > 0 || drag.active}
+    {#if stackCount > 0 || drag.active || collecting}
       <button
         type="button"
         class="status__btn"
+        class:status__btn--collect={collecting && !drag.active}
         class:status__btn--drop={drag.active}
         class:status__btn--over={drag.active && drag.over === "stack"}
         data-drop={drag.active ? "stack" : undefined}
-        title={t("picker.hint.stackTitle")}
+        title={t(collecting ? "picker.hint.stackCollecting" : "picker.hint.stackTitle")}
         aria-haspopup="dialog"
-        onclick={() => overlays.open("stack")}
+        onmousedown={(e) => e.preventDefault()}
+        onclick={() => (overlays.isOpen("stack") ? overlays.close(overlays.layers.find((l) => l.kind === "stack")) : overlays.open("stack"))}
       >
+        {#if collecting}<span class="status__dot" aria-hidden="true"></span>{/if}
         <Ico name="stack" size={12} />
         <span class="status__label">{t("picker.hint.stack")}</span>
         <span class="status__n">{stackCount}</span>
@@ -136,7 +142,9 @@
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    min-width: 0;
+    min-width: 16px;
+    /* Squeezed by "N selected": the name ellipsizes, nothing spills onto the next hint. */
+    overflow: hidden;
     color: var(--color-ink);
     font-weight: 600;
   }
@@ -184,6 +192,18 @@
   }
   .status__n {
     font-variant-numeric: tabular-nums;
+  }
+  .status__dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 999px;
+    background: var(--color-ink);
+    animation: collect-pulse 1.6s var(--ease-in-out) infinite;
+  }
+  @keyframes collect-pulse {
+    50% {
+      opacity: 0.25;
+    }
   }
   .status__btn--drop {
     transform: scale(1.04);

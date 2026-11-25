@@ -1,6 +1,7 @@
 <script lang="ts">
   // Toast dock: bottom centre of the panel, above the hint row (it rides the panel's
-  // entrance). Renders the shared capsule `Toast` (with the "Undo" action). The container
+  // entrance) and above the overlay layers (z 40/41) — a toast from Quick Look or the actions
+  // menu stays visible. Renders the shared capsule `Toast` (with the "Undo" action). The container
   // is a polite live region, so screen readers announce every toast.
   import Toast from "$lib/components/Toast.svelte";
   import { toasts } from "./toasts.svelte";
@@ -14,7 +15,7 @@
         icon={cur.icon}
         message={cur.message}
         error={cur.error}
-        action={cur.action ? { label: cur.action.label, icon: "undo", run: cur.action.run } : null}
+        action={cur.action ? { label: cur.action.label, icon: cur.action.icon ?? "undo", run: cur.action.run } : null}
         onClose={() => toasts.dismiss()}
       />
     {/key}
@@ -26,7 +27,7 @@
     position: absolute;
     left: 50%;
     bottom: calc(var(--pad-panel) + var(--h-md) + 12px);
-    z-index: 30;
+    z-index: 50;
     display: flex;
     justify-content: center;
     width: max-content;

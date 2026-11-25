@@ -11,8 +11,9 @@
   //   popover  r24 · pad 8   anchored (or docked bottom-end above the hint row)
   //   sheet    r24 · pad 8   covers the panel, inset 4 px (concentric with the panel)
   //   dialog   r28 · pad 12  centred, dim scrim
-  import { onMount, type Snippet } from "svelte";
+  import { getContext, onMount, type Snippet } from "svelte";
   import { shelf } from "../../shelf.svelte";
+  import { LAYER_DEPTH } from "./depth";
 
   interface Props {
     variant?: "menu" | "popover" | "sheet" | "dialog";
@@ -56,6 +57,9 @@
   }: Props = $props();
 
   const anchored = $derived((variant === "menu" || variant === "popover") && !dock);
+  /** Depth in the layer stack (OverlayHost): each layer's scrim covers the ones below. */
+  const depth = getContext<(() => number) | undefined>(LAYER_DEPTH);
+  const z = $derived(40 + 2 * (depth?.() ?? 0));
   let pos = $state<{ x: number; y: number } | null>(null);
 
   onMount(() => {
@@ -71,14 +75,21 @@
     let x = a.x - panel.left;
     let y = a.y - panel.top;
     if (x + box.width > panel.width - pad) x = panel.width - pad - box.width;
-    if (y + box.height > panel.height - pad) y = Math.max(pad, y - box.height - 8);
+    // Doesn't fit below the point: flip above it if there's room, otherwise slide up just
+    // enough to fit (rather than jumping to the panel's top edge).
+    if (y + box.height > panel.height - pad) {
+      const above = y - box.height - 8;
+      y = above >= pad ? above : panel.height - pad - box.height;
+    }
     pos = { x: Math.max(pad, x), y: Math.max(pad, y) };
   });
 
   const style = $derived.by(() => {
-    const parts: string[] = [];
+    const parts: string[] = [`z-index:${z + 1}`];
     if (width !== undefined) parts.push(`width:${typeof width === "number" ? `${width}px` : width}`);
-    if (anchored) parts.push(pos ? `left:${pos.x}px;top:${pos.y}px` : "left:0;top:0;visibility:hidden");
+    // Before it is measured and placed the surface is transparent, not hidden: its content
+    // can take focus right away (a menu's filter field focuses on mount).
+    if (anchored) parts.push(pos ? `left:${pos.x}px;top:${pos.y}px` : "left:0;top:0;opacity:0");
     return parts.join(";");
   });
 </script>
@@ -86,6 +97,7 @@
 <div
   class="scrim"
   class:scrim--dim={dim}
+  style:z-index={z}
   role="presentation"
   onpointerdown={onclose}
   oncontextmenu={(e) => {
