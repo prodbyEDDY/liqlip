@@ -2,7 +2,7 @@
 // change replaces only the objects it touches — so consecutive snapshots share everything
 // else (structural sharing instead of LT's full clones, defect П-26). One finished operation =
 // one step; a series with the same key faster than 500 ms (nudges, wheel, `]` repeats) is
-// merged into one step. Pure, node-tested (tests/editorHistory.test.mjs).
+// merged into one step. Pure, node-tested (tests/editorDoc.test.mjs, "history: …").
 import type { EdObject, Rect } from "./doc";
 
 /** What a step restores. */

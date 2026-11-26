@@ -54,6 +54,11 @@ export function layoutText(s: AnnotationText, measure: MeasureText): TextLayout 
   return out;
 }
 
+/** Forget the cached layouts of `measure` (a font finished loading: widths changed). */
+export function resetLayout(measure: MeasureText): void {
+  caches.get(measure)?.clear();
+}
+
 function computeLayout(s: AnnotationText, measure: MeasureText): TextLayout {
   const pad = textPadding(s.type, s.fontSize);
   const limit = s.textWidth == null ? Infinity : Math.max(1, s.textWidth - pad.x * 2);

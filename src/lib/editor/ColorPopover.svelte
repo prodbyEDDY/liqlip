@@ -3,15 +3,19 @@
   // system palette, a HEX field and the 3 most recent custom colours. One palette (LT had two).
   // The swatches are user content — the only colour in the editor's chrome. A raised popover
   // (r24 / pad 8 → r16 inside); Esc closes it without reaching the editor's Esc ladder.
+  import { onMount } from "svelte";
   import Ico from "$lib/components/Ico.svelte";
+  import { isBrowserShortcut } from "$lib/browserKeys";
   import { t } from "$lib/i18n/index.svelte";
   import { PRESETS, PRESET_KEYS } from "./defaults";
   import { contrastInk } from "./textLayout";
+  import { popSide } from "./ui";
 
   interface Props {
     value: string;
     recent: readonly string[];
-    onpick: (color: string) => void;
+    /** `live` — the system picker is still being dragged (applied, but not "recent" yet) */
+    onpick: (color: string, live?: boolean) => void;
     onclose: () => void;
   }
   let { value, recent, onpick, onclose }: Props = $props();
@@ -19,9 +23,16 @@
   let hex = $state("");
   let hexBad = $state(false);
   let root: HTMLDivElement;
+  /** opens below its swatch; above when the window/monitor edge leaves no room (overlay panel low on screen) */
+  let side = $state<"below" | "above">("below");
   $effect(() => {
     hex = value.replace(/^#/, "").toUpperCase();
     hexBad = false;
+  });
+
+  onMount(() => {
+    const anchor = root.parentElement?.getBoundingClientRect();
+    if (anchor) side = popSide(anchor, root.offsetHeight + 8, window.innerHeight);
   });
 
   const HEX = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/i;
@@ -38,8 +49,9 @@
   }
 
   function onKeydown(e: KeyboardEvent): void {
-    // nothing typed here reaches the editor's shortcuts
+    // nothing typed here reaches the editor's shortcuts — nor WebView2's (F5 would reload the window)
     e.stopPropagation();
+    if (isBrowserShortcut(e, { find: true })) e.preventDefault();
     if (e.code === "Escape") {
       e.preventDefault();
       onclose();
@@ -65,7 +77,7 @@
 <svelte:window onpointerdown={onWindowDown} />
 
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-<div class="pop squircle" role="dialog" aria-label={t("editor.prop.color")} tabindex="-1" bind:this={root} onkeydown={onKeydown} onmousedown={keep}>
+<div class="pop squircle" class:pop--above={side === "above"} role="dialog" aria-label={t("editor.prop.color")} tabindex="-1" bind:this={root} onkeydown={onKeydown} onmousedown={keep}>
   <div class="pop__grid" role="group" aria-label={t("editor.color.presets")}>
     {#each PRESETS as c, i (c)}
       <button
@@ -96,7 +108,13 @@
   </div>
   <div class="pop__row">
     <label class="custom" title={t("editor.color.custom")}>
-      <input type="color" value={value} aria-label={t("editor.color.custom")} oninput={(e) => onpick((e.currentTarget as HTMLInputElement).value.toLowerCase())} />
+      <input
+        type="color"
+        {value}
+        aria-label={t("editor.color.custom")}
+        oninput={(e) => onpick((e.currentTarget as HTMLInputElement).value.toLowerCase(), true)}
+        onchange={(e) => onpick((e.currentTarget as HTMLInputElement).value.toLowerCase())}
+      />
       <span class="custom__icon" aria-hidden="true"><Ico name="plus" size={16} /></span>
     </label>
     <span class="hex" class:hex--bad={hexBad}>
@@ -131,10 +149,26 @@
     box-shadow: var(--shadow-pop);
     animation: pop-in var(--dur-base) var(--ease-liquid);
   }
+  .pop--above {
+    top: auto;
+    bottom: calc(100% + 8px);
+    animation-name: pop-in-up;
+  }
   @keyframes pop-in {
     from {
       opacity: 0;
       transform: translateY(-4px) scale(0.98);
+    }
+  }
+  @keyframes pop-in-up {
+    from {
+      opacity: 0;
+      transform: translateY(4px) scale(0.98);
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .pop {
+      animation: none;
     }
   }
   .pop__grid {

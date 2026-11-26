@@ -91,8 +91,9 @@ export class EditorState {
     this.dispatch({ type: "tool", tool });
   }
 
-  setProp<P extends StyleProp>(prop: P, value: ToolStyle[P]): void {
-    this.dispatch({ type: "prop", prop, value, time: performance.now() });
+  /** `recent: false` — a live preview (the system colour picker while dragging): not "recent" yet. */
+  setProp<P extends StyleProp>(prop: P, value: ToolStyle[P], opts: { recent?: boolean } = {}): void {
+    this.dispatch({ type: "prop", prop, value, time: performance.now(), recent: opts.recent ?? true });
   }
 
   undo(): void {

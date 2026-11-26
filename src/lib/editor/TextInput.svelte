@@ -3,13 +3,16 @@
   // same font, size and colour as the canvas draws it. Enter — new line; Ctrl+Enter, Esc or a
   // click outside — done (the text is KEPT; LT discarded it on Esc, П-9); empty text is removed.
   // Every key typed here stops at the field (rule 12): no tool shortcut fires while typing, and
-  // Esc travels on to the host, which calls `editor.escape()` (that commits the text).
+  // Esc travels on to the host, which calls `editor.escape()` (that commits the text) — except
+  // while an IME composes (its Esc cancels the composition). Ctrl+S / Ctrl+P / Ctrl+W finish the
+  // text and go on to the host; WebView2 accelerators (F5, Ctrl+R…) are swallowed (`textKey`).
   import { onMount, tick } from "svelte";
   import { t } from "$lib/i18n/index.svelte";
   import { TEXT_FONT, TEXT_WEIGHT, type TextObj } from "./doc";
   import { TEXT_LINE_HEIGHT, contrastInk, type MeasureText } from "./textLayout";
   import { textFieldLayout } from "./render";
   import { toScreen, type View } from "./view";
+  import { textKey } from "./interaction";
   import type { EditorState } from "./state.svelte";
 
   interface Props {
@@ -41,12 +44,30 @@
   });
 
   function onKeydown(e: KeyboardEvent): void {
-    if (e.code === "Escape") return; // the host's Esc → editor.escape() → commit
-    e.stopPropagation();
-    if (e.code === "Tab") e.preventDefault(); // focus stays in the text while typing
-    if ((e.code === "Enter" || e.code === "NumpadEnter") && (e.ctrlKey || e.metaKey)) {
-      e.preventDefault();
-      st.dispatch({ type: "textCommit" });
+    switch (textKey(e)) {
+      case "escape":
+        return; // the host's Esc → editor.escape() → commit
+      case "action":
+        // Ctrl+S / Ctrl+Shift+S / Ctrl+P / Ctrl+W: the text is done, then the same key as at rest
+        // (→ the host's save / save as / pin / close intent)
+        e.preventDefault();
+        e.stopPropagation();
+        st.dispatch({ type: "textCommit" });
+        st.dispatch({ type: "key", code: e.code, ctrl: true, shift: e.shiftKey, alt: false, repeat: e.repeat, composing: false, time: e.timeStamp });
+        return;
+      case "commit":
+        e.preventDefault();
+        e.stopPropagation();
+        st.dispatch({ type: "textCommit" });
+        return;
+      case "browser":
+        e.preventDefault(); // F5 / Ctrl+R would reload the window and lose the drawing
+        e.stopPropagation();
+        return;
+      default:
+        // "ime" (the IME owns every key, Esc too) and ordinary keys stay in the field
+        e.stopPropagation();
+        if (e.code === "Tab") e.preventDefault(); // focus stays in the text while typing
     }
   }
 </script>

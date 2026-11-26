@@ -31,6 +31,27 @@ export const TOOL_META: readonly ToolMeta[] = [
   { id: "eyedropper", glyph: "eyedropper", key: "I", label: "editor.tool.eyedropper" },
 ];
 
+/** Keep-off distance from the window (monitor, in the overlay) edge, CSS px. */
+export const EDGE = 8;
+
+/**
+ * Horizontal shift that brings a tooltip spanning `left…right` back inside a `vw`-wide window
+ * (a centred tooltip of the first / last button would be cut by the edge). 0 — it fits.
+ */
+export function tipShift(left: number, right: number, vw: number, margin = EDGE): number {
+  if (right - left > vw - margin * 2) return margin - left; // wider than the window: pin to the left
+  if (left < margin) return margin - left;
+  if (right > vw - margin) return vw - margin - right;
+  return 0;
+}
+
+/** Where a popover of height `h` opens from an anchor: below, or above when only there it fits. */
+export function popSide(anchor: { top: number; bottom: number }, h: number, vh: number, margin = EDGE): "below" | "above" {
+  const below = vh - margin - anchor.bottom;
+  const above = anchor.top - margin;
+  return below < h && above > below ? "above" : "below";
+}
+
 export const ARROW_STYLES: readonly { v: ArrowStyle; glyph: GlyphName; label: TranslationKey }[] = [
   { v: "straight", glyph: "arrowStraight", label: "editor.arrow.straight" },
   { v: "curved", glyph: "arrowCurved", label: "editor.arrow.curved" },

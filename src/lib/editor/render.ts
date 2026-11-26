@@ -5,7 +5,7 @@
 // light canvas. Nothing here runs in a loop: the component calls it when state changes.
 import { contrastInk, layoutText, paintText, textShape, type MeasureText } from "./textLayout";
 import { counterNumbers, MARKER_ALPHA, MARKER_SCALE, strokePx, TEXT_FONT, TEXT_WEIGHT, type EdDoc, type EdObject, type Pt, type Rect } from "./doc";
-import { applyEffect, effectMargin, pixelRect, type EffectMode } from "./effects";
+import { applyEffect, blurRadius, effectMargin, pixelRect, type EffectMode } from "./effects";
 import { arrowGeometry, arrowHead, paintArrow, tracePath } from "./geometry";
 import { counterRadius, cropHandles, HANDLE_R, handlesOf, lineWidth, shapeBox, type HitEnv } from "./hit";
 import type { View } from "./view";
@@ -108,6 +108,35 @@ export interface RenderEnv {
   skip: string | null;
   /** the area the spotlight dims (the whole picture, or the overlay's frame) */
   area: Rect;
+  /** screen only: objects a live gesture is reshaping — a blur is previewed with the canvas
+   *  filter (the exact one costs 100+ ms per move on a big area); the export never passes it */
+  live?: ReadonlySet<string> | null;
+}
+
+/** σ of the canvas filter matching `blur()` (three box passes of radius round(r / 2)). */
+export function blurSigma(size: 1 | 2 | 3 | 4 | 5, unit: number): number {
+  const rad = Math.max(1, Math.round(blurRadius(size, unit) / 2));
+  return Math.sqrt((3 * ((2 * rad + 1) ** 2 - 1)) / 12);
+}
+
+/** Live preview of a blur plate: the source around it, blurred by the GPU canvas filter. */
+function blurPreview(ctx: Ctx, o: Extract<EdObject, { kind: "redact" }>, doc: EdDoc, base: Source): void {
+  const sigma = blurSigma(o.size, doc.unit);
+  const m = Math.ceil(sigma * 3);
+  const pr = pixelRect(o.r);
+  const gx = Math.max(0, pr.x - m),
+    gy = Math.max(0, pr.y - m);
+  const gw = Math.min(doc.w, pr.x + pr.w + m) - gx,
+    gh = Math.min(doc.h, pr.y + pr.h + m) - gy;
+  if (gw < 1 || gh < 1) return;
+  const tile = new OffscreenCanvas(gw, gh);
+  const t = tile.getContext("2d")!;
+  t.filter = `blur(${sigma}px)`;
+  t.drawImage(base, gx, gy, gw, gh, 0, 0, gw, gh);
+  ctx.beginPath();
+  ctx.rect(o.r.x, o.r.y, o.r.w, o.r.h);
+  ctx.clip();
+  ctx.drawImage(tile, gx, gy);
 }
 
 /** A canvas 2D `measureText`-backed text measure (Inter weight 600). */
@@ -160,6 +189,8 @@ function drawObject(ctx: Ctx, o: EdObject, doc: EdDoc, env: RenderEnv, numbers: 
       if (o.mode === "solid") {
         ctx.fillStyle = o.color;
         ctx.fillRect(o.r.x, o.r.y, o.r.w, o.r.h);
+      } else if (o.mode === "blur" && env.live?.has(o.id)) {
+        blurPreview(ctx, o, doc, env.base);
       } else {
         const fx = env.effects.get(env.base, o.r, o.mode, o.size, unit, doc.w, doc.h);
         if (fx) {
