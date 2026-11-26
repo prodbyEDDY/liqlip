@@ -17,7 +17,7 @@
 
   // THIRD-PARTY.txt points to heroicons.txt for the icons' MIT notice: show it here too.
   const LICENSES = [
-    { key: "own", src: "licenses/LICENSE.txt", icon: "lock" },
+    { key: "own", src: "licenses/LICENSE.txt", icon: "code" },
     { key: "third", src: "licenses/THIRD-PARTY.txt", icon: "document" },
     { key: "icons", src: "licenses/heroicons.txt", icon: "sparkles" },
   ] as const;

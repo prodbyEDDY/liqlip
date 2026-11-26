@@ -1,7 +1,7 @@
 # Шелф (`src/windows/picker/`) — реверс-док
 
 > Как устроено ядро шелфа Liqlip (W1-E; вид переработан в W2-E; слои — W2-C; ревью и исправления —
-> W3-C, [`review/W3-C.md`](review/W3-C.md)). Что строим —
+> W3-C). Что строим —
 > [SPEC.md](SPEC.md) §3; контракт — [ARCHITECTURE.md](ARCHITECTURE.md) §9; нативное окно — §7;
 > правила вида — [design-system.md](design-system.md). Источник переноса — Liquid Tools
 > `src/windows/shotlibrary/**` (только чтение). Замер: 2026-11-26 (W3-C: браузер на моке `:1440` —

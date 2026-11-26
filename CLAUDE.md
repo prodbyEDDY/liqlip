@@ -8,7 +8,7 @@ Liquid Tools shelf.
 
 Lives in the workspace `C:\Coding\My Projects\LiquidTools\` next to `liquid-tools-app` (the
 source we port from — **read-only for this project**). The workspace root is not a git repo.
-Repo: `github.com/prodbyEDDY/liqlip` (private), branch `main`.
+Repo: `github.com/prodbyEDDY/liqlip` (open source, [MIT](LICENSE)), branch `main`.
 
 ## Sources of truth — read before coding
 - [`docs/SPEC.md`](docs/SPEC.md) — what we build: every surface, key map, action, setting, state.
@@ -17,7 +17,9 @@ Repo: `github.com/prodbyEDDY/liqlip` (private), branch `main`.
   port map from Liquid Tools (§14).
 - [`docs/ROADMAP.md`](docs/ROADMAP.md) — status and waves (§10) + decision journal (§11).
   **Current status lives ONLY there.**
-- Your task prompt in `docs/prompts/`.
+- Your task prompt (wave agents): `docs/prompts/` in the main checkout. Agent prompts, wave
+  reports (`docs/progress/`) and reviews (`docs/review/`) are the coordinator's local working
+  files: git-ignored, never published.
 
 **doc-as-code:** when you change code, update the matching section of `ARCHITECTURE.md`
 (or the area doc you were told to keep) in the same change. Status/decisions go to
@@ -110,8 +112,9 @@ Liquid Tools after the W1 design review) and the audit [`docs/design-audit.md`](
     commit there (its working tree has uncommitted work).
 11. **Commits only on the coordinator's request.** Wave agents work in their own git
     worktree/branch and do not merge into `main`.
-12. **Language:** `docs/` and coordination are Russian; code, comments, `CLAUDE.md` and
-    `README.md` are English; product strings are EN + RU keys.
+12. **Language:** `docs/` and coordination are Russian; code, comments, `CLAUDE.md` and the
+    public files (`README.md`, `CONTRIBUTING.md`, `SECURITY.md`, `.github/`) are English; product
+    strings are EN + RU keys.
 
 ## Key files
 
@@ -126,5 +129,5 @@ Liquid Tools after the W1 design review) and the audit [`docs/design-audit.md`](
 | Hotkeys | `src-tauri/src/hotkeys/` | ARCHITECTURE §8 |
 | Settings | `src-tauri/src/settings.rs` · `src/windows/settings/` | SPEC §4 |
 | Shelf UI | `src/windows/picker/` | SPEC §3 |
-| Design tokens | `src/app.css` | Liquid Tools `docs/design-system.md` |
+| Design tokens | `src/app.css` | `docs/design-system.md` |
 | Tests | `tests/*.test.mjs` | ARCHITECTURE §12 |

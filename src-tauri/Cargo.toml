@@ -2,7 +2,9 @@
 name = "liqlip"
 version = "1.0.0"
 description = "Liqlip — a keyboard-first clipboard manager for Windows."
-authors = ["Liqlip"]
+authors = ["prodbyEDDY"]
+license = "MIT"
+repository = "https://github.com/prodbyEDDY/liqlip"
 edition = "2021"
 rust-version = "1.90"
 

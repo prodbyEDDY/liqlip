@@ -8,3 +8,8 @@ src-tauri/gen/schemas/
 .DS_Store
 .vscode/
 .idea/
+
+# Internal coordination notes (agent prompts, wave reports, reviews): kept locally, not published
+docs/prompts/
+docs/progress/
+docs/review/

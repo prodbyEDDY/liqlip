@@ -131,7 +131,9 @@
   }
   .ph__ex {
     grid-area: ex;
-    justify-self: end;
+    /* Stretch over the column and align the text right: `justify-self: end` sizes the box to
+       its content, so a long example overflowed leftwards over the placeholder name. */
+    text-align: right;
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;

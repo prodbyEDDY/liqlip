@@ -25,7 +25,7 @@
     "active": true,
     "targets": ["nsis"],
     "publisher": "Liqlip",
-    "copyright": "© 2026 Liqlip. All rights reserved.",
+    "copyright": "© 2026 prodbyEDDY. MIT License.",
     "shortDescription": "Keyboard-first clipboard manager for Windows",
     "longDescription": "Liqlip keeps everything you copy (text, links, code, colors, contacts, images and files) on your computer, one Alt + V away: a monochrome shelf of cards with full-text search and filter tokens, Quick Look, an actions menu, text transforms, folders, favorites, snippets, a paste stack and OCR on images. Password-manager copies are never stored.",
     "icon": [

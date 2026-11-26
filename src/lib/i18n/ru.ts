@@ -793,7 +793,7 @@ export const ru: Record<TranslationKey, string> = {
   "settings.about.licenses": "Лицензии",
   "settings.about.licenses.desc": "Собственная лицензия Liqlip и открытое ПО, на котором он построен.",
   "settings.about.license.own": "Лицензия Liqlip",
-  "settings.about.license.own.desc": "Проприетарная программа для личного использования.",
+  "settings.about.license.own.desc": "Бесплатная программа с открытым кодом, лицензия MIT.",
   "settings.about.license.third": "Сторонние лицензии",
   "settings.about.license.third.desc": "Компоненты с открытым кодом внутри Liqlip и их лицензии.",
   "settings.about.license.icons": "Иконки интерфейса",

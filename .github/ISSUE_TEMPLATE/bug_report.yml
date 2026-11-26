@@ -1,0 +1,54 @@
+name: Bug report
+description: Something doesn't work as it should.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Please don't paste real clipboard contents, passwords or keys here.
+        For security problems, use the private report described in SECURITY.md instead.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Copy an image in Paint
+        2. Press Alt + V in Notepad
+        3. …
+    validations:
+      required: true
+  - type: input
+    id: app
+    attributes:
+      label: Where you pasted or copied
+      description: The apps involved, e.g. Chrome, Telegram, Windows Terminal (as admin?).
+  - type: input
+    id: version
+    attributes:
+      label: Liqlip version
+      description: Settings → About Liqlip.
+      placeholder: "1.0.0"
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Windows version
+      placeholder: Windows 11 24H2, 150% scaling, Russian layout
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: >
+        Optional. Settings → About Liqlip → Logs folder. The logs never contain what you copied,
+        but please look them over before attaching.
+      render: text

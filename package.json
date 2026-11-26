@@ -1,6 +1,12 @@
 {
   "name": "liqlip",
   "version": "1.0.0",
+  "description": "A keyboard-first clipboard manager for Windows.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/prodbyEDDY/liqlip.git"
+  },
   "private": true,
   "type": "module",
   "scripts": {

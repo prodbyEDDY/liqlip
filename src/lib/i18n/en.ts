@@ -792,7 +792,7 @@ export const en = {
   "settings.about.licenses": "Licenses",
   "settings.about.licenses.desc": "Liqlip's own license and the open-source software it's built with.",
   "settings.about.license.own": "Liqlip license",
-  "settings.about.license.own.desc": "Proprietary software for personal use.",
+  "settings.about.license.own.desc": "Free and open source under the MIT License.",
   "settings.about.license.third": "Third-party licenses",
   "settings.about.license.third.desc": "Open-source components inside Liqlip and their licenses.",
   "settings.about.license.icons": "Interface icons",

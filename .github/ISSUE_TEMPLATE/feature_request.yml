@@ -1,0 +1,28 @@
+name: Feature request
+description: An idea that makes working with the clipboard better.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Liqlip is a clipboard-only app. Ideas about capturing, finding, organizing and pasting
+        what you copy are in scope; unrelated tools are not.
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to do, and what gets in the way today?
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: The idea
+      description: How you'd like it to work, including keys or menu items if you have them in mind.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives
+      description: Workarounds you use now, or how other tools handle it.

@@ -145,7 +145,7 @@ Alt+Tab, а tao пересчитывает `GWL_EXSTYLE` из своих фла�
 > исправления — удаления выбирают строки внутри своей транзакции, ретенция щадит записи под undo и
 > ждёт настроек восстановленной копии, приватные действия чистят старые копии данных, `-"фраза"`,
 > спецсимволы и длинные термы в поиске, `ClipMeta.dir` (FIX-08), восстановление прерванного
-> `replace`, уведомления настроек вне замка записи (находка W3-A); `cargo test` 334/334 дважды (после слияния W3-A), отчёт — `docs/review/W3-B.md`.
+> `replace`, уведомления настроек вне замка записи (находка W3-A); `cargo test` 334/334 дважды (после слияния W3-A).
 
 ### 4.1. Файлы
 
@@ -418,7 +418,7 @@ JSON `meta`, без миграции; при изменениях — `clips:cha
 > вместе с `paste::`) на 28 потоках — все зелёные, стенд p50 ≈ 38 мс, max < 200 мс.
 > W3-A (2026-11-26): `clipboard_text` (FIX-09, `textread.rs`, 8 тестов на фейковом буфере); `cargo test`
 > 313/313 дважды, 6 параллельных прогонов `capture::`+`paste::flow`+`tray`+`hotkeys`+`picker::geometry`
-> (125 тестов) — зелёные. Ревью — `docs/review/W3-A.md`.
+> (125 тестов) — зелёные.
 > W4-A (2026-11-26): текст из копии с файлами при выключенном типе «Файлы» (FIX-11); тест на фейковом
 > буфере; нативно не запускалось.
 
@@ -1949,7 +1949,7 @@ UTF-16 (предел `szTip`, тест).
 |---|---|---|
 | `productName` / `version` | `Liqlip` / `1.0.0` (так же в `Cargo.toml` и `package.json`) | `app_info.version` = `package_info().version` = версия из конфига |
 | `bundle.targets` | `["nsis"]` | только `…-setup.exe` |
-| `bundle.publisher` / `copyright` | `Liqlip` / `© 2026 Liqlip. All rights reserved.` | «Приложения» Windows, свойства exe, строка внизу окон установщика |
+| `bundle.publisher` / `copyright` | `Liqlip` / `© 2026 prodbyEDDY. MIT License.` | «Приложения» Windows, свойства exe, строка внизу окон установщика |
 | `bundle.shortDescription` / `longDescription` | EN | описание exe и пакета |
 | `nsis.installMode` | `currentUser` | без прав администратора, `%LOCALAPPDATA%\Liqlip`, ключи в HKCU |
 | `nsis.languages` | `["English", "Russian"]`, `displayLanguageSelector: false` | язык по языку системы, иначе первый (английский); строки Tauri для русского есть (`Russian.nsh`) |
@@ -2038,10 +2038,10 @@ release-сборка.
 
 ### 16.7. Лицензии
 
-**Собственная лицензия Liqlip** — проприетарная, «все права защищены», для личного использования:
-`public/licenses/LICENSE.txt`, `bundle.copyright`, README. MIT не выбран: он безвозвратно разрешил
-бы любому копировать и распространять код. Личной v1 из приватного репозитория это не нужно;
-открыть код позже можно всегда, а отозвать MIT нельзя.
+**Собственная лицензия Liqlip** — MIT с 2026-11-26 (решение Eddy: открытый бесплатный проект,
+ROADMAP §11). Где: `LICENSE` в корне; его копия для окна «О Liqlip» — `public/licenses/LICENSE.txt`;
+`bundle.copyright`; поле `license` в `Cargo.toml` и `package.json`. Правообладатель — `prodbyEDDY`.
+До этого v1 была проприетарной («все права защищены»).
 
 **Сторонние компоненты** — `node scripts/licenses.mjs` → `public/licenses/THIRD-PARTY.txt`.
 Запускать после изменения зависимостей; вывод детерминирован. Что попадает в список:
@@ -2062,8 +2062,7 @@ release-сборка.
 На 2026-11-26: 234 крейта + 36 npm-пакетов, 131 уникальный текст, 285 КБ.
 
 **Где лежит.** Vite копирует `public/licenses/` в `dist`, и Tauri вшивает файлы в exe. Раздел «О
-Liqlip» пока ссылается только на `licenses/heroicons.txt`; ссылки на `LICENSE.txt` и
-`THIRD-PARTY.txt` подключают W2-E или координатор (INT-2).
+Liqlip» показывает все три текста (`LICENSE.txt`, `THIRD-PARTY.txt`, `heroicons.txt`) внутри окна.
 
 ### 16.8. Как собрать установщик
 
