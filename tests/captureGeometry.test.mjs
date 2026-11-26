@@ -61,7 +61,7 @@ test("the frame moves and resizes inside the monitor; an edge dragged past the o
   assert.deepEqual(g.resizeRect(r, "s", 999, 999, F), { x: 100, y: 100, w: 200, h: 400 }, "a side handle moves one edge");
 });
 
-test("Ctrl+arrows move the frame by 1 / 10, Ctrl+Alt+arrows resize it from the right/bottom", () => {
+test("Ctrl+arrows move the frame by 1 / 10, Alt+arrows resize it from the right/bottom", () => {
   const F = { w: 1000, h: 500 };
   const r = { x: 100, y: 100, w: 200, h: 100 };
   assert.deepEqual(g.nudgeRect(r, g.arrowDelta("ArrowRight"), 1, "move", F), { x: 101, y: 100, w: 200, h: 100 });

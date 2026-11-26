@@ -90,6 +90,11 @@ pub enum Key {
     ShotSaveAsTitle,
     ShotFilterPng,
     ShotFilterJpg,
+    /// Editor window: the name of a record without a title or a saved file (INT-5, §18.9)
+    EditorUntitledShot,
+    EditorUntitledImage,
+    /// "Choose a folder" dialog of the screenshot folder (INT-5, `pick_folder`)
+    PickFolderTitle,
 }
 
 pub fn tr(lang: Lang, key: Key) -> &'static str {
@@ -185,6 +190,12 @@ pub fn tr(lang: Lang, key: Key) -> &'static str {
         (Lang::Ru, ShotFilterPng) => "Изображение PNG",
         (Lang::En, ShotFilterJpg) => "JPEG image",
         (Lang::Ru, ShotFilterJpg) => "Изображение JPEG",
+        (Lang::En, EditorUntitledShot) => "Screenshot",
+        (Lang::Ru, EditorUntitledShot) => "Снимок экрана",
+        (Lang::En, EditorUntitledImage) => "Image",
+        (Lang::Ru, EditorUntitledImage) => "Картинка",
+        (Lang::En, PickFolderTitle) => "Choose a folder for screenshots",
+        (Lang::Ru, PickFolderTitle) => "Папка для снимков",
     }
 }
 
@@ -205,6 +216,7 @@ mod tests {
             BackupExportTitle, BackupRestoreTitle, BackupFilter, TrayShotRegion, TrayShotScreen,
             TrayShotWindow, TrayShotRepeat, TrayShotDelay, TrayShotDelay3s, TrayShotDelay5s,
             TrayShotDelay10s, TrayShotText, ShotSaveAsTitle, ShotFilterPng, ShotFilterJpg,
+            EditorUntitledShot, EditorUntitledImage, PickFolderTitle,
         ];
         for k in keys {
             assert!(!tr(Lang::En, k).is_empty());

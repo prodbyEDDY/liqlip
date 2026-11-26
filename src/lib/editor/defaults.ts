@@ -112,12 +112,16 @@ export function saveDefaults(d: Defaults, storage?: Store | null): void {
   }
 }
 
-/** "Reset tool defaults" (Settings → Screenshots → Editor, W6-F). */
-export function resetDefaults(storage?: Store | null): void {
+/** "Reset tool defaults" (Settings → Screenshots → Editor, W6-F). `true` — saved defaults
+ *  were there and are gone; `false` — nothing was saved (or the storage is blocked). */
+export function resetDefaults(storage?: Store | null): boolean {
   try {
-    store(storage)?.removeItem(STORAGE_KEY);
+    const s = store(storage);
+    if (!s || s.getItem(STORAGE_KEY) === null) return false;
+    s.removeItem(STORAGE_KEY);
+    return true;
   } catch {
-    /* ignore */
+    return false;
   }
 }
 

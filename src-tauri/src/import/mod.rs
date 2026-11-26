@@ -1,4 +1,4 @@
-//! Import from Liquid Tools (read-only, idempotent, no screenshots / dictations) and
+//! Import from Liquid Tools (read-only, idempotent; screenshots too since W6-B, no dictations) and
 //! `.liqlip` backups (SPEC §4 "Импорт и экспорт"). Owner: **W2-B**. ARCHITECTURE §16.
 //!
 //! `lt` reads a copy of the Liquid Tools database, `backup` writes / reads the zip, `runner`

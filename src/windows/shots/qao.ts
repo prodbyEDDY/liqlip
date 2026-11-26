@@ -17,7 +17,7 @@ import type {
   ShotCorner,
   UndoResult,
 } from "$lib/ipc/types";
-import { addShot, makeShot, removeShot, stackHeight, tickShots, type Shot, type ShotBusy } from "./stack";
+import { addShot, makeShot, removeShot, stackHeight, tempName, tickShots, type Shot, type ShotBusy } from "./stack";
 
 /** What the buttons of a card do (SPEC §9.4) + the save notice's "Change folder". */
 export type ShotCmd = ShotBusy | "close" | "folder";
@@ -58,6 +58,9 @@ export interface QaoApi {
   shotPin(id: number): Promise<void>;
   shotSave(id: number): Promise<string>;
   shotReveal(id: number): Promise<void>;
+  /** a card without a record (`clip: null`): its temp file by name (INT-5) */
+  shotTempCopy(name: string): Promise<void>;
+  shotTempSaveAs(name: string): Promise<string | null>;
   shotsHudLayout(height: number): Promise<void>;
   shotsHudHide(): Promise<void>;
   settingsOpen(section: string | null): Promise<void>;
@@ -179,7 +182,7 @@ export function createQao(state: QaoState, api: QaoApi) {
     }
   }
 
-  async function run(key: string, cmd: ShotBusy, id: number): Promise<void> {
+  async function run(key: string, cmd: Exclude<ShotBusy, "saveAs">, id: number): Promise<void> {
     switch (cmd) {
       case "copy": {
         let out: PasteOutcome;
@@ -266,8 +269,31 @@ export function createQao(state: QaoState, api: QaoApi) {
     }
   }
 
+  /** A card without a record (screenshots not kept, or > 64 MP): Copy and Save as… work on its
+   *  temp file by name; a missing file (the stack let it go, or a restart) says so. */
+  async function runTemp(key: string, cmd: "copy" | "saveAs", name: string): Promise<void> {
+    const gone = (e: unknown) => errorCode(e) === "not_found";
+    if (cmd === "copy") {
+      try {
+        await api.shotTempCopy(name);
+        toast(key, "shots.toast.copied", "check");
+      } catch (e) {
+        console.error("[shots] shot_temp_copy", e);
+        toast(key, gone(e) ? "shots.toast.tempGone" : errorCode(e) === "busy" ? "shots.toast.busy" : "shots.toast.copyFailed", "warning", true);
+      }
+      return;
+    }
+    try {
+      const path = await api.shotTempSaveAs(name);
+      if (path) toast(key, "shots.toast.saved", "check"); // null — the dialog was cancelled
+    } catch (e) {
+      console.error("[shots] shot_temp_save_as", e);
+      toast(key, gone(e) ? "shots.toast.tempGone" : "shots.toast.saveFailed", "warning", true);
+    }
+  }
+
   /** A button of a card. One command at a time per card; a card without a record (`clip: null`)
-   *  can only be closed. */
+   *  copies or saves its temp file, or closes. */
   function act(key: string, cmd: ShotCmd): Promise<void> {
     const s = find(key);
     if (!s) return Promise.resolve();
@@ -278,8 +304,14 @@ export function createQao(state: QaoState, api: QaoApi) {
     if (cmd === "folder") {
       return track(api.settingsOpen("screenshot").catch((e) => console.error("[shots] settings_open", e)));
     }
-    const id = s.clip?.id;
-    if (id === undefined || s.busy) return Promise.resolve();
+    if (s.busy) return Promise.resolve();
+    if (!s.clip) {
+      if ((cmd !== "copy" && cmd !== "saveAs") || !s.tempPath) return Promise.resolve();
+      patch(key, { busy: cmd });
+      return track(runTemp(key, cmd, tempName(s.tempPath)).finally(() => patch(key, { busy: null })));
+    }
+    const id = s.clip.id;
+    if (cmd === "saveAs") return Promise.resolve(); // a record saves with Save / Show in folder
     if (cmd === "text" && state.ocr !== "ready") return Promise.resolve();
     patch(key, { busy: cmd });
     return track(run(key, cmd, id).finally(() => patch(key, { busy: null })));

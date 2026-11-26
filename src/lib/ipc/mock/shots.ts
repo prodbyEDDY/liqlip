@@ -18,6 +18,11 @@
 // URL flags (also listed in bus.ts): ?mock-shot=text (OCR session) · ?mock-shot-quick=1 (skip
 // the frame stage) · ?mock-scale=1.5 (monitor scale) · ?mock-snipping=1 (Windows gives PrtSc
 // to the Snipping Tool) · ?mock-shot-dialog=cancel (Save as… is cancelled).
+//
+// INT-5: `shots_pending` answers `[]` (the mock emits `shot:added` only to live listeners);
+// `shot_temp_copy` / `shot_temp_save_as` accept the bare file names the mock hands out in
+// `tempPath`; the editor commit follows Rust (`done` without pixels = nothing changed, `pin`
+// with pixels applies the edit first).
 import type {
   AnnotDoc,
   Clip,
@@ -281,7 +286,7 @@ function fileName(): string {
   const s = currentSettings().screenshot;
   const vars: Record<string, string> = {
     date: `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`,
-    time: `${pad(d.getHours())}.${pad(d.getMinutes())}.${pad(d.getSeconds())}`,
+    time: `${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`, // HHmmss, as files.rs
     app: "Google Chrome",
     n: String(shotSeq),
   };
@@ -341,7 +346,7 @@ async function finishShot(region: Rect, rgba: Uint8Array | null, size: { w: numb
     mockEmit<ShotAdded>("shot:added", {
       clip,
       savedPath: path,
-      tempPath: clip ? null : `C:\\Users\\me\\AppData\\Local\\Temp\\Liqlip\\shots\\${shotSeq}.png`,
+      tempPath: clip ? null : `C:\\Users\\me\\AppData\\Local\\Temp\\Liqlip\\shots\\shot-${now()}-${shotSeq}.png`,
       monitor: MONITOR_ID,
       error: null,
     });
@@ -361,6 +366,8 @@ async function capture({ mode, delay }: Args): Promise<void> {
     if (session) return; // a trigger while a session is open is ignored (§18.3)
     const f = shotFlags();
     const { width, height, windows } = fakeDesktop(f.scale);
+    // INT-5: "copy text from screen" without OCR language packs → the HUD, no overlay (as Rust)
+    if (m === "text" && param("mock-ocr") === "nolang") return hud({ kind: "text_unavailable" });
     if (m === "region" || m === "text" || (m === "repeat" && !lastRegion)) {
       await openSession(m === "text" ? "text" : "region");
       return;
@@ -428,22 +435,31 @@ function editorGet(): ShotEditorPayload | null {
   };
 }
 
+/** Rust's `editor::commit` (§18.9): `done` / `pin` WITH pixels apply the edit (pin then pins);
+ *  `done` without pixels changes nothing; `copy` / `save_as` never touch the record. */
 async function editorCommit(args: Args): Promise<Clip> {
   const { head, rgba } = parseFrameBody<ShotEditorCommit>(body(args as Args | Uint8Array));
   if (!EDITOR_ACTIONS.includes(head.action)) throw fail("invalid", `action ${String(head.action)}`);
   if (!head.doc || typeof head.doc !== "object") throw fail("invalid", "doc");
   const c = picture(head.clipId);
-  if (head.action === "done") {
+  if ((head.action === "done" || head.action === "pin") && rgba) {
     if (!bases.has(c.id) && c.imageUrl) bases.set(c.id, c.imageUrl); // first edit keeps the original
-    if (rgba) {
-      const url = await pictureFromRgba(rgba, head.width, head.height);
-      Object.assign(c, { imageUrl: url, thumbUrl: url, width: head.width, height: head.height });
-    }
+    const url = await pictureFromRgba(rgba, head.width, head.height);
+    Object.assign(c, { imageUrl: url, thumbUrl: url, width: head.width, height: head.height });
     docs.set(c.id, structuredClone(head.doc));
-    c.meta = { ...c.meta, shot: { savedPath: c.meta.shot?.savedPath ?? null, edited: head.doc.objects.length > 0 } };
+    const edited = head.doc.objects.length > 0 || head.doc.crop !== null;
+    c.meta = { ...c.meta, shot: { savedPath: c.meta.shot?.savedPath ?? null, edited } };
     emitChanged("updated", [c.id]);
   }
+  if (head.action === "pin") console.info("[mock] shot pinned", c.id);
+  if (head.action === "save_as" && !shotFlags().dialogCancel) savePicture(c, `C:\\Users\\me\\Documents\\${nameOf(c)}.png`);
   return toClip(c);
+}
+
+/** A temp file name the mock handed out (`shot-<ms>-<n>.png`); anything else is refused like Rust. */
+function tempName(name: unknown): string {
+  if (typeof name !== "string" || !/^[A-Za-z0-9_-][A-Za-z0-9._-]{0,127}$/.test(name)) throw fail("invalid", "temp file name");
+  return name;
 }
 
 function savePicture(c: MockClip, path: string): string {
@@ -511,6 +527,11 @@ export const shotsHandlers: Record<string, (args: Args) => unknown> = {
     finite(height, "height", 0);
   },
   shots_hud_hide: () => {},
+  shots_pending: (): ShotAdded[] => [],
+  shot_temp_copy: ({ name }) => {
+    console.info("[mock] copy temp shot", tempName(name));
+  },
+  shot_temp_save_as: ({ name }) => (shotFlags().dialogCancel ? null : `C:\\Users\\me\\Documents\\${tempName(name)}`),
   shot_status: (): ShotStatus => {
     const snipping = shotFlags().snipping;
     const taken = snipping && currentSettings().hotkeys.shotRegion === "PrtSc";

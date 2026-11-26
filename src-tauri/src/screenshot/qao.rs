@@ -11,17 +11,22 @@
 //!   hidden with `ShowWindow(SW_HIDE)`, never tao `show()`), like the HUD (§7.7). Every show /
 //!   hide / move runs on the main thread (`run_on_main_thread`), so tao's posted moves and the
 //!   Win32 show stay in order. Callers never block.
-//! - **Geometry**: fixed width [`QAO_WIDTH`], height from the page (`shots_hud_layout`) capped by
-//!   the work area, in the configured bottom corner (`settings.screenshot.corner`) of the work
-//!   area (`rcWork` — above the taskbar) of the shot's monitor, [`MARGIN`] logical px inset.
-//! - **First event**: `shot:added` reaches a page only after it subscribed. Payloads that arrive
-//!   before the page finished loading wait in [`QaoState`] and are flushed [`FLUSH_DELAY`] after
-//!   `PageLoadEvent::Finished` (the page subscribes while its module script runs, before that).
+//! - **Geometry** (W6-E's page, INT-5): fixed width [`QAO_WIDTH`] (a 256 px card + the page's
+//!   24 px shadow margin on each side), height from the page (`shots_hud_layout`) capped by the
+//!   work area; the window's bottom edge is the bottom of the work area (`rcWork` — above the
+//!   taskbar) of the shot's monitor, its side the configured corner (`settings.screenshot.corner`),
+//!   no inset: the page's margin is the visual gap.
+//! - **First event** (`shots_pending`, INT-5): `shot:added` reaches a page only after it
+//!   subscribed. Until the page has asked [`pending`] (it does right after subscribing), payloads
+//!   wait in [`QaoState`] and come back as that command's answer; from then on they are emitted.
+//!   A reload (`PageLoadEvent::Started`) or a rebuilt window starts waiting again.
 //! - **Temporary files** (§18.4, a shot not kept in history: `ShotAdded.tempPath` in
-//!   `%TEMP%\Liqlip\shots\`): removed when the stack empties (`shots_hud_hide`), when more than
-//!   [`TEMP_KEEP`] were handed out (the page keeps 4 cards), and at start-up. Only plain files
-//!   directly inside that folder are ever removed.
+//!   `%TEMP%\Liqlip\shots\`, served as `liq://temp/<name>`): removed when the stack empties
+//!   (`shots_hud_hide`), when more than [`TEMP_KEEP`] were handed out (the page keeps 4 cards),
+//!   and at start-up. Only plain files directly inside that folder are ever removed
+//!   (`files::is_temp_file`).
 
+use super::files;
 use super::windows::{self as w, Mon, PxRect};
 use crate::events;
 use crate::logx;
@@ -33,15 +38,11 @@ use std::time::{Duration, Instant};
 use tauri::webview::PageLoadEvent;
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 
-/// Window width in logical px: a 248 px card + its shadow margin (the page draws inside it).
-/// W6-E's report fixes the final number; only this constant changes.
-pub(crate) const QAO_WIDTH: f64 = 296.0;
-/// Inset from the work-area corner, logical px (SPEC §9.4 / §18.8).
-pub(crate) const MARGIN: f64 = 16.0;
+/// Window width in logical px: W6-E's card (256) + its shadow margin (24) on each side
+/// (`src/windows/shots/stack.ts::WINDOW_W`).
+pub(crate) const QAO_WIDTH: f64 = 304.0;
 /// Height before the page reported one (the window is hidden until it does).
-const INITIAL_HEIGHT: f64 = 200.0;
-/// After `PageLoadEvent::Finished`, wait this long before the first `shot:added`.
-const FLUSH_DELAY: Duration = Duration::from_millis(400);
+const INITIAL_HEIGHT: f64 = 216.0;
 /// Temp files handed to the page that may still back a card (the stack holds up to 4).
 const TEMP_KEEP: usize = 4;
 /// A temp file is removed on an empty stack only once the page has had time to show it.
@@ -59,9 +60,9 @@ enum Phase {
 #[derive(Default)]
 pub(crate) struct QaoState {
     phase: Phase,
-    /// The page finished loading (+ [`FLUSH_DELAY`]): events reach it.
-    loaded: bool,
-    /// `shot:added` payloads waiting for the page.
+    /// The page has subscribed and asked `shots_pending`: events reach it.
+    claimed: bool,
+    /// `shot:added` payloads waiting for the page (`shots_pending` hands them over).
     pending: Vec<ShotAdded>,
     /// Device name of the last shot's monitor.
     monitor: Option<String>,
@@ -73,21 +74,34 @@ pub(crate) struct QaoState {
     temps: VecDeque<(PathBuf, Instant)>,
 }
 
+impl QaoState {
+    /// A new payload: `true` → emit it now (the page listens); `false` → it waits for
+    /// `shots_pending`.
+    fn offer(&mut self, payload: &ShotAdded) -> bool {
+        if self.phase == Phase::Built && self.claimed {
+            return true;
+        }
+        self.pending.push(payload.clone());
+        false
+    }
+
+    /// `shots_pending`: from now on payloads are emitted; the waiting ones are the answer.
+    fn claim(&mut self) -> Vec<ShotAdded> {
+        self.claimed = true;
+        std::mem::take(&mut self.pending)
+    }
+}
+
 fn with<T>(app: &AppHandle, f: impl FnOnce(&mut QaoState) -> T) -> Option<T> {
     let st = app.try_state::<super::ScreenshotState>()?;
     let mut guard = st.qao.lock();
     Some(f(&mut guard))
 }
 
-/// `%TEMP%\Liqlip\shots\` (§18.4).
-pub(crate) fn temp_dir() -> PathBuf {
-    std::env::temp_dir().join("Liqlip").join("shots")
-}
-
 /// Start-up (`windows::init`): clear temp files a previous run left behind, off the main thread.
 pub(crate) fn init(_app: &AppHandle) {
     let spawned = std::thread::Builder::new().name("liqlip-shots-sweep".into()).spawn(|| {
-        let n = sweep(&temp_dir());
+        let n = sweep(&files::temp_dir());
         if n > 0 {
             logx::warn("screenshot", &format!("removed {n} stale QAO temp files"));
         }
@@ -97,26 +111,23 @@ pub(crate) fn init(_app: &AppHandle) {
     }
 }
 
-// ── API for W6-A (session / commit) ─────────────────────────────────────────
+// ── API for the capture side (session / commit) ─────────────────────────────
 
-/// A shot was taken and `afterCapture` is `overlay`: show its card. Builds the window on first
-/// use (a spawned thread); the payload waits until the page can receive it. The window appears
-/// once the page reports its height (`shots_hud_layout`), not before. Any thread; never blocks.
-#[allow(dead_code)] // called by W6-A (`session.rs` / `commit.rs`)
+/// A shot was taken and `afterCapture` is `overlay` (or the save failed): show its card. Builds
+/// the window on first use (a spawned thread); the payload waits until the page claims it. The
+/// window appears once the page reports its height (`shots_hud_layout`), not before. Any
+/// thread; never blocks.
 pub(crate) fn show_added(app: &AppHandle, payload: ShotAdded) {
-    let ready = with(app, |st| {
+    let Some((now, visible)) = with(app, |st| {
         st.monitor = Some(payload.monitor.clone());
         if let Some(t) = payload.temp_path.as_deref().map(PathBuf::from) {
             st.temps.push_back((t, Instant::now()));
         }
-        let ready = st.phase == Phase::Built && st.loaded;
-        if !ready {
-            st.pending.push(payload.clone());
-        }
-        (ready, st.height > 0.0)
-    });
-    let Some((ready, visible)) = ready else { return };
-    if ready {
+        (st.offer(&payload), st.height > 0.0)
+    }) else {
+        return;
+    };
+    if now {
         events::shot_added(app, &payload);
         if visible {
             // A new monitor: move the stack there now; the page's layout call follows.
@@ -130,7 +141,6 @@ pub(crate) fn show_added(app: &AppHandle, payload: ShotAdded) {
 
 /// A capture session starts: hide the stack (it keeps its cards) and build the window if it
 /// does not exist yet, so it has loaded by the time the shot is committed. Never blocks.
-#[allow(dead_code)] // called by W6-A (`session.rs` / `commit.rs`)
 pub(crate) fn hide_for_capture(app: &AppHandle) {
     if with(app, |st| st.suspended = true).is_none() {
         return;
@@ -140,7 +150,6 @@ pub(crate) fn hide_for_capture(app: &AppHandle) {
 }
 
 /// The session ended (committed or cancelled): show the stack again if it has cards.
-#[allow(dead_code)] // called by W6-A (`session.rs` / `commit.rs`)
 pub(crate) fn restore_after_capture(app: &AppHandle) {
     if with(app, |st| st.suspended = false).is_some() {
         refresh(app);
@@ -148,6 +157,12 @@ pub(crate) fn restore_after_capture(app: &AppHandle) {
 }
 
 // ── Commands ────────────────────────────────────────────────────────────────
+
+/// `shots_pending` — the page subscribed to `shot:added`: hand over the payloads that arrived
+/// before (oldest first); later ones are emitted.
+pub(crate) fn pending(app: &AppHandle) -> Result<Vec<ShotAdded>, String> {
+    with(app, QaoState::claim).ok_or_else(|| "failed: screenshot state".to_string())
+}
 
 /// `shots_hud_layout { height }` — the stack's height in logical px (the window follows; it is
 /// shown here, without activation, unless a session is open).
@@ -177,7 +192,7 @@ fn ensure_built(app: &AppHandle) {
             return false;
         }
         st.phase = Phase::Building;
-        st.loaded = false;
+        st.claimed = false;
         true
     });
     if start != Some(true) {
@@ -224,6 +239,8 @@ fn build(app: &AppHandle) -> Result<(), String> {
         .visible(false)
         .inner_size(QAO_WIDTH, INITIAL_HEIGHT)
         .theme(w::native_theme(app))
+        // Same WebView2 environment arguments as every window of the process (§18.2).
+        .additional_browser_args(w::BROWSER_ARGS)
         // WebView2's own drop handler would swallow the OLE drag-out of a card (as the shelf).
         .disable_drag_drop_handler()
         .on_page_load(|win, payload| on_page_load(win.app_handle(), payload.event()))
@@ -249,7 +266,7 @@ fn build(app: &AppHandle) -> Result<(), String> {
         WindowEvent::Destroyed => {
             with(&app2, |st| {
                 st.phase = Phase::None;
-                st.loaded = false;
+                st.claimed = false;
                 st.height = 0.0;
             });
         }
@@ -258,27 +275,11 @@ fn build(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// Main thread (WebView2 event): `Started` — a (re)load, events wait; `Finished` — flush the
-/// waiting payloads after [`FLUSH_DELAY`] on a short thread.
+/// Main thread (WebView2 event): a (re)load starts — the new page has not subscribed yet, so
+/// payloads wait for its `shots_pending` again.
 fn on_page_load(app: &AppHandle, event: PageLoadEvent) {
-    match event {
-        PageLoadEvent::Started => {
-            with(app, |st| st.loaded = false);
-        }
-        PageLoadEvent::Finished => {
-            let app = app.clone();
-            let _ = std::thread::Builder::new().name("liqlip-shots-flush".into()).spawn(move || {
-                std::thread::sleep(FLUSH_DELAY);
-                let pending = with(&app, |st| {
-                    st.loaded = true;
-                    std::mem::take(&mut st.pending)
-                })
-                .unwrap_or_default();
-                for p in &pending {
-                    events::shot_added(&app, p);
-                }
-            });
-        }
+    if event == PageLoadEvent::Started {
+        with(app, |st| st.claimed = false);
     }
 }
 
@@ -312,18 +313,18 @@ fn refresh(app: &AppHandle) {
     }
 }
 
-/// The stack's window: [`QAO_WIDTH`] × `height` logical px, at most the work area minus the
-/// margins, in the bottom `corner` of the monitor's work area.
+/// The stack's window: [`QAO_WIDTH`] × `height` logical px (at most the work area), its bottom
+/// edge on the bottom of the monitor's work area, in the `corner` side — no inset (the page's
+/// 24 px margin is the gap).
 fn qao_rect(mon: &Mon, height: f64, corner: ShotCorner) -> PxRect {
     let (s, wa) = (mon.scale, mon.work);
-    let m = w::px(MARGIN, s);
-    let width = w::px(QAO_WIDTH, s).min((wa.w - 2 * m).max(1));
-    let h = w::px(height, s).clamp(1, (wa.h - 2 * m).max(1));
+    let width = w::px(QAO_WIDTH, s).clamp(1, wa.w.max(1));
+    let h = w::px(height, s).clamp(1, wa.h.max(1));
     let x = match corner {
-        ShotCorner::Left => wa.x + m,
-        ShotCorner::Right => wa.x + wa.w - m - width,
+        ShotCorner::Left => wa.x,
+        ShotCorner::Right => wa.x + wa.w - width,
     };
-    PxRect { x, y: wa.y + wa.h - m - h, w: width, h }
+    PxRect { x, y: wa.y + wa.h - h, w: width, h }
 }
 
 // ── Temp files ──────────────────────────────────────────────────────────────
@@ -335,7 +336,7 @@ fn trim_temps(app: &AppHandle) {
         st.temps.drain(..extra).map(|(p, _)| p).collect()
     })
     .unwrap_or_default();
-    remove_temps(&old);
+    remove_temps(&files::temp_dir(), &old);
 }
 
 /// The stack is empty: every temp file handed out more than [`TEMP_GRACE`] ago is unused.
@@ -347,13 +348,12 @@ fn clear_temps(app: &AppHandle) {
         gone.into_iter().map(|(p, _)| p).collect()
     })
     .unwrap_or_default();
-    remove_temps(&old);
+    remove_temps(&files::temp_dir(), &old);
 }
 
-fn remove_temps(paths: &[PathBuf]) {
-    let root = temp_dir();
+fn remove_temps(root: &Path, paths: &[PathBuf]) {
     for p in paths {
-        if is_temp_file(&root, p) {
+        if files::is_temp_file(root, p) {
             if let Err(e) = std::fs::remove_file(p) {
                 if e.kind() != std::io::ErrorKind::NotFound {
                     logx::warn("screenshot", &format!("temp file not removed: {e}"));
@@ -361,13 +361,6 @@ fn remove_temps(paths: &[PathBuf]) {
             }
         }
     }
-}
-
-/// A plain file directly inside `root` (after resolving `..` and links) — nothing else is ever
-/// removed, whatever a payload says.
-fn is_temp_file(root: &Path, p: &Path) -> bool {
-    let (Ok(root), Ok(file)) = (root.canonicalize(), p.canonicalize()) else { return false };
-    file.parent() == Some(root.as_path()) && file.is_file()
 }
 
 /// Remove every plain file directly inside `dir`; the folder stays. Returns how many.
@@ -389,24 +382,51 @@ mod tests {
     }
 
     #[test]
-    fn the_stack_sits_in_the_work_area_corner() {
-        // 1920×1080 at 100 %, taskbar 40 px at the bottom: work area 1920×1040.
+    fn the_stack_sits_on_the_bottom_corner_of_the_work_area() {
+        // 1920×1080 at 100 %, taskbar 40 px at the bottom: work area 1920×1040. One card = 216.
         let m = mon(0, 0, 1920, 1040, 1.0);
-        assert_eq!(qao_rect(&m, 340.0, ShotCorner::Left), PxRect { x: 16, y: 1040 - 16 - 340, w: 296, h: 340 });
-        assert_eq!(qao_rect(&m, 340.0, ShotCorner::Right), PxRect { x: 1920 - 16 - 296, y: 684, w: 296, h: 340 });
+        assert_eq!(qao_rect(&m, 216.0, ShotCorner::Left), PxRect { x: 0, y: 1040 - 216, w: 304, h: 216 });
+        assert_eq!(qao_rect(&m, 396.0, ShotCorner::Right), PxRect { x: 1920 - 304, y: 1040 - 396, w: 304, h: 396 });
         // A second monitor left of the primary at 150 %: logical sizes scale, coordinates stay physical.
         let m2 = mon(-2560, 0, 2560, 1380, 1.5);
-        let r = qao_rect(&m2, 200.0, ShotCorner::Left);
-        assert_eq!(r, PxRect { x: -2560 + 24, y: 1380 - 24 - 300, w: 444, h: 300 });
+        let r = qao_rect(&m2, 216.0, ShotCorner::Left);
+        assert_eq!(r, PxRect { x: -2560, y: 1380 - 324, w: 456, h: 324 });
+        // A taskbar on top: the work area starts lower, the stack still ends at its bottom.
+        let top = Mon { name: None, rect: PxRect { x: 0, y: 0, w: 1920, h: 1080 }, work: PxRect { x: 0, y: 48, w: 1920, h: 1032 }, scale: 1.0 };
+        assert_eq!(qao_rect(&top, 216.0, ShotCorner::Right).y + 216, 1080);
     }
 
     #[test]
     fn the_stack_never_outgrows_the_work_area() {
         let m = mon(0, 0, 1366, 728, 1.0);
-        let r = qao_rect(&m, 5000.0, ShotCorner::Left);
-        assert_eq!((r.y, r.h), (16, 728 - 32));
+        let r = qao_rect(&m, 756.0, ShotCorner::Left);
+        assert_eq!((r.y, r.h), (0, 728), "four cards on a short screen: the page squeezes them");
         // A tiny height still makes a valid window.
         assert_eq!(qao_rect(&m, 0.2, ShotCorner::Left).h, 1);
+    }
+
+    fn added(n: i64) -> ShotAdded {
+        ShotAdded { clip: None, saved_path: None, temp_path: Some(format!("C:\\t\\{n}.png")), monitor: "M".into(), error: None }
+    }
+
+    #[test]
+    fn payloads_wait_until_the_page_claims_them() {
+        let mut st = QaoState::default();
+        // Before the window exists, while it builds, and after it is built but not yet claimed.
+        assert!(!st.offer(&added(1)));
+        st.phase = Phase::Building;
+        assert!(!st.offer(&added(2)));
+        st.phase = Phase::Built;
+        assert!(!st.offer(&added(3)));
+        let got = st.claim();
+        assert_eq!(got.iter().map(|p| p.temp_path.clone().unwrap()).collect::<Vec<_>>(), ["C:\\t\\1.png", "C:\\t\\2.png", "C:\\t\\3.png"]);
+        // Claimed: emitted at once, nothing waits, a second claim is empty.
+        assert!(st.offer(&added(4)));
+        assert!(st.claim().is_empty());
+        // A reload: waiting again until the new page claims.
+        st.claimed = false;
+        assert!(!st.offer(&added(5)));
+        assert_eq!(st.claim().len(), 1);
     }
 
     #[test]
@@ -420,14 +440,8 @@ mod tests {
         for f in [&inside, &nested, &outside] {
             std::fs::write(f, b"x").unwrap();
         }
-        assert!(is_temp_file(&root, &inside));
-        assert!(!is_temp_file(&root, &nested), "only direct children");
-        assert!(!is_temp_file(&root, &outside));
-        assert!(!is_temp_file(&root, &root.join("sub").join("..").join("..").join("keep.png")));
-        assert!(!is_temp_file(&root, &root.join("missing.png")));
-        assert!(!is_temp_file(&root, &root.join("sub")), "a folder is not a file");
-        remove_temps(&[outside.clone(), nested.clone()]); // not under the real %TEMP%\Liqlip\shots
-        assert!(outside.exists() && nested.exists());
+        remove_temps(&root, &[outside.clone(), nested.clone()]);
+        assert!(outside.exists() && nested.exists(), "never outside the folder or in a sub-folder");
         assert_eq!(sweep(&root), 1);
         assert!(!inside.exists() && nested.exists(), "the sweep keeps sub-folders");
         assert_eq!(sweep(&base.join("nope")), 0);

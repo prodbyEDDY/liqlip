@@ -196,8 +196,13 @@ test("defaults: per tool, persisted and read back field by field; broken values 
   assert.equal(fb.tools.pen.fill, true);
   mem.set(D.STORAGE_KEY, "{broken");
   assert.deepEqual(D.loadDefaults(storage), D.factoryDefaults());
-  D.resetDefaults(storage);
+  mem.set("liqlip.other", "1");
+  assert.equal(D.resetDefaults(storage), true);
   assert.equal(mem.has(D.STORAGE_KEY), false);
+  assert.equal(mem.get("liqlip.other"), "1", "only the editor's key goes");
+  assert.equal(D.resetDefaults(storage), false, "nothing stored → nothing to reset");
+  assert.equal(D.resetDefaults(null), false);
+  assert.equal(D.resetDefaults({ getItem: () => { throw new Error("blocked"); }, setItem: () => {}, removeItem: () => {} }), false);
 });
 
 test("recent colours: custom only, newest first, 3 at most", () => {

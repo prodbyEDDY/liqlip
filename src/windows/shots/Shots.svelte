@@ -4,6 +4,8 @@
   // shot's monitor and sizes it from `shots_hud_layout({height})`; this page owns the stack
   // (`qao.ts`), its timers and the buttons. The window is never activated — no keys reach it in
   // Tauri. Window = stack + a transparent BLEED (24 px) on every side for the shadows (stack.ts).
+  // First shot (INT-5): Rust keeps `shot:added` until this page has subscribed and asked
+  // `shots_pending()` — the answer is every shot that came before.
   // Browser preview on the mock: /shots.html — small mock buttons add shots (also a failed save
   // and a shot kept out of history).
   import { onMount, untrack } from "svelte";
@@ -28,6 +30,9 @@
     shotSave,
     shotsHudHide,
     shotsHudLayout,
+    shotsPending,
+    shotTempCopy,
+    shotTempSaveAs,
     textCopy,
   } from "$lib/ipc/commands";
   import { onClipsChanged, onSettingsChanged, onShotAdded, onShotEnd, onShotSession } from "$lib/ipc/events";
@@ -51,6 +56,8 @@
     shotPin,
     shotSave,
     shotReveal,
+    shotTempCopy,
+    shotTempSaveAs,
     shotsHudLayout,
     shotsHudHide,
     settingsOpen,
@@ -106,8 +113,15 @@
     void settingsGet()
       .then(applySettings)
       .catch((e) => console.error("[shots] settings_get", e));
+    const added = onShotAdded((p) => qao.add(mock ? devShape(p) : p));
+    // Subscribed → claim what came before (Rust emits nothing until this call, so no shot is
+    // lost or shown twice).
+    void added
+      .then(() => shotsPending())
+      .then((list) => list.forEach((p) => qao.add(p)))
+      .catch((e) => console.error("[shots] shots_pending", e));
     const offs = [
-      onShotAdded((p) => qao.add(mock ? devShape(p) : p)),
+      added,
       onShotSession(() => qao.sessionStarted()),
       onShotEnd(() => qao.sessionEnded()),
       onClipsChanged((p) => void qao.clipsChanged(p)),

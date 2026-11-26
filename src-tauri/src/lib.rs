@@ -38,8 +38,11 @@ pub fn run() {
     let app = tauri::Builder::default()
         // MUST be the first plugin (its docs): a second launch summons the running
         // instance's shelf and exits, instead of a second tray icon / hook set.
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            picker::summon(app);
+        // `liqlip --capture [mode]` starts a capture instead (W6-A, ARCHITECTURE §18.3).
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            if !screenshot::handle_args(app, &args) {
+                picker::summon(app);
+            }
         }))
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
@@ -146,6 +149,7 @@ pub fn run() {
             settings::app_info,
             settings::open_path,
             settings::pick_exe,
+            settings::pick_folder,
             // store (W1-A)
             store::commands::clips_list,
             store::commands::clips_counts,
@@ -232,8 +236,11 @@ pub fn run() {
             screenshot::shot_save,
             screenshot::shot_save_as,
             screenshot::shot_reveal,
+            screenshot::shot_temp_copy,
+            screenshot::shot_temp_save_as,
             screenshot::shots_hud_layout,
             screenshot::shots_hud_hide,
+            screenshot::shots_pending,
             screenshot::shot_status,
             screenshot::open_windows_settings,
         ])
@@ -256,7 +263,9 @@ pub fn run() {
 const EXIT_SAVE_WAIT: Duration = Duration::from_millis(1000);
 
 /// `setup()` step 6. Geometry/visibility after this point belongs to `picker` (W1-D);
-/// these are only the creation parameters of ARCHITECTURE §2.
+/// these are only the creation parameters of ARCHITECTURE §2. Every window of the process —
+/// these and the on-demand screenshot windows — passes the same WebView2 browser arguments
+/// (`screenshot::windows::BROWSER_ARGS`: one shared environment, ARCHITECTURE §18.2).
 fn build_windows(app: &AppHandle, current: &model::Settings) -> tauri::Result<()> {
     // Shelf: transparent, frameless, always-on-top, no taskbar button. Sized for the
     // centre layout + bleed; `picker` re-docks it on every summon.
@@ -271,6 +280,7 @@ fn build_windows(app: &AppHandle, current: &model::Settings) -> tauri::Result<()
         .focusable(true)
         .visible(false)
         .inner_size(760.0 + 2.0 * PICKER_BLEED, 640.0 + 2.0 * PICKER_BLEED)
+        .additional_browser_args(screenshot::windows::BROWSER_ARGS)
         // WebView2's own drag-drop handler would swallow the native OLE drag-out of cards
         // (Tauri docs: disabling it is required for HTML5 drag and drop on Windows).
         .disable_drag_drop_handler()
@@ -288,6 +298,7 @@ fn build_windows(app: &AppHandle, current: &model::Settings) -> tauri::Result<()
         .focusable(false)
         .visible(false)
         .inner_size(440.0, 112.0) // = picker::geometry::HUD_SIZE: HUD capsule + shadow bleed
+        .additional_browser_args(screenshot::windows::BROWSER_ARGS)
         .build()?;
     hud.set_ignore_cursor_events(true)?;
 
@@ -300,6 +311,7 @@ fn build_windows(app: &AppHandle, current: &model::Settings) -> tauri::Result<()
             .resizable(true)
             .min_inner_size(720.0, 520.0)
             .inner_size(960.0, 680.0)
+            .additional_browser_args(screenshot::windows::BROWSER_ARGS)
             .center()
             .visible(false)
             .disable_drag_drop_handler()
@@ -325,6 +337,7 @@ fn build_windows(app: &AppHandle, current: &model::Settings) -> tauri::Result<()
         .focusable(true)
         .visible(false)
         .inner_size(800.0, 600.0)
+        .additional_browser_args(screenshot::windows::BROWSER_ARGS)
         .disable_drag_drop_handler()
         .build()
     {

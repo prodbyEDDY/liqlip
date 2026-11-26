@@ -10,13 +10,16 @@
   import SegmentedControl from "$lib/components/SegmentedControl.svelte";
   import Toggle from "$lib/components/Toggle.svelte";
   import { untrack } from "svelte";
+  // the editor's own reset (`$lib/editor`); the module itself, so no editor component enters this bundle
+  import { resetDefaults } from "$lib/editor/defaults";
   import { t, type TranslationKey } from "$lib/i18n/index.svelte";
+  import { openPath, pickFolder } from "$lib/ipc/commands";
+  import { errorMessage } from "$lib/ipc/errors";
   import type { ShotAfterCapture, ShotCorner, ShotFormat } from "$lib/ipc/types";
   import {
     comboKeys,
     JPG_QUALITY_PRESETS,
     jpgQualityValid,
-    resetEditorTools,
     SHOT_PLACEHOLDERS,
     SHOT_TIMEOUT_PRESETS,
     shotFileName,
@@ -76,8 +79,24 @@
     ),
   );
 
-  // ── folder (read-only until the native folder picker lands — see the W6-F report) ──
+  // ── folder: the native picker (`pick_folder`) and Explorer (`open_path('shots')`) ──
   const folderPath = $derived(sh.folder || t("settings.shot.folder.default"));
+  let picking = $state(false);
+  async function changeFolder() {
+    if (picking) return;
+    picking = true;
+    try {
+      const dir = await pickFolder();
+      if (dir) settings.set("screenshot.folder", dir);
+    } catch (e) {
+      toasts.show({ message: errorMessage(e), icon: "warning" });
+    } finally {
+      picking = false;
+    }
+  }
+  function openFolder() {
+    void openPath("shots").catch((e) => toasts.show({ message: errorMessage(e), icon: "warning" }));
+  }
 
   // ── file name: a local draft, saved once valid (debounced; at once on blur / Enter) ──
   const nameId = $props.id();
@@ -142,13 +161,7 @@
 
   // ── editor ──
   function resetTools() {
-    let storage: Storage | null = null;
-    try {
-      storage = localStorage;
-    } catch {
-      storage = null;
-    }
-    const done = resetEditorTools(storage);
+    const done = resetDefaults(); // the editor owns its stored defaults (`$lib/editor`)
     toasts.show({ message: t(done ? "settings.shot.editor.resetDone" : "settings.shot.editor.resetNothing"), icon: done ? "check" : "info" });
   }
 
@@ -178,6 +191,8 @@
     [[["Ctrl", "P"]], "pin"],
     [[["Ctrl", "Z"], ["Ctrl", "Shift", "Z"]], "undo"],
     [[["Ctrl"]], "move"],
+    [[["Ctrl", "←↑→↓"]], "frameMove"],
+    [[["Alt", "←↑→↓"]], "frameSize"],
     [[["1…5"], ["[", "]"]], "size"],
     [[["Shift", "1…8"]], "color"],
     [[["F"]], "fill"],
@@ -230,14 +245,13 @@
     label={t("settings.shot.folder")}
     desc={t("settings.shot.folder.desc")}
     error={settings.message("screenshot.folder")}
-    note={t("settings.shot.folder.soon")}
     stack
   >
     {#snippet control()}
       <div class="folder">
         <span class="folder__path" class:folder__path--default={!sh.folder} title={folderPath}>{folderPath}</span>
-        <Button variant="secondary" size="sm" icon="folder" disabled title={t("settings.shot.folder.soon")}>{t("settings.shot.folder.change")}</Button>
-        <Button variant="ghost" size="sm" icon="folderOpen" disabled title={t("settings.shot.folder.soon")}>{t("settings.shot.folder.open")}</Button>
+        <Button variant="secondary" size="sm" icon="folder" loading={picking} onclick={() => void changeFolder()}>{t("settings.shot.folder.change")}</Button>
+        <Button variant="ghost" size="sm" icon="folderOpen" onclick={openFolder}>{t("settings.shot.folder.open")}</Button>
       </div>
     {/snippet}
   </Row>

@@ -851,10 +851,8 @@ mod tests {
         assert_eq!((r.imported, r.skipped, r.errors), (1, 3, 0), "{r:?}");
     }
 
-    /// Needs W6-A: `store/bulk.rs::normalize` treating `Kind::Screenshot` like `Image`
-    /// (ARCHITECTURE §18.5). Un-ignore at INT-5.
+    /// `store/bulk.rs::normalize` treats `Kind::Screenshot` like `Image` (W6-A, ARCHITECTURE §18.5).
     #[test]
-    #[ignore = "needs W6-A screenshot support in store/bulk.rs (INT-5)"]
     fn screenshots_land_as_screenshot_records_once() {
         let c = cache();
         let db = lt_db(&c);

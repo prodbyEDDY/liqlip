@@ -24,8 +24,22 @@ use tauri::{AppHandle, PhysicalPosition, PhysicalSize, Theme, WebviewWindow};
 
 static MAIN_THREAD: OnceLock<ThreadId> = OnceLock::new();
 
+/// WebView2 browser arguments of EVERY window of the process (`lib.rs` and the three on-demand
+/// windows here). All windows share one WebView2 environment (one data directory), and wry
+/// 0.55.1 warns: "Webview instances with different browser arguments must also have different
+/// data directories" — so the string is identical everywhere. Setting it replaces wry's default
+/// (`webview2/mod.rs::create_environment`: `--disable-features=msWebOOUI,msPdfOOUI,
+/// msSmartScreenProtection`, plus `--autoplay-policy=no-user-gesture-required` only when wry's
+/// `autoplay` is on, which Tauri 2.11.2 never sets), so the default is kept verbatim and the
+/// autoplay switch is added: the QAO's shutter sound (Web Audio, `shots/shutter.ts`) plays in a
+/// window that is never activated, so it never gets a user gesture (Chromium autoplay policy).
+/// Switches are space-separated (learn.microsoft.com `ICoreWebView2EnvironmentOptions::
+/// put_AdditionalBrowserArguments`); tauri docs: `WebviewWindowBuilder::additional_browser_args`.
+pub(crate) const BROWSER_ARGS: &str =
+    "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --autoplay-policy=no-user-gesture-required";
+
 /// `setup()` step 5 (via `screenshot::init`, on the main thread): remember the main thread,
-/// clear stale QAO temp files, follow the language in the editor title.
+/// clear stale temp shots (`qao.rs`), follow the language in the editor title.
 pub(crate) fn init(app: &AppHandle) {
     let _ = MAIN_THREAD.set(std::thread::current().id());
     super::qao::init(app);

@@ -6,6 +6,9 @@
   // the second press with `detail === 2`); wheel → `shot_pin_resize({ scale })` (absolute,
   // pinMath.ts); Ctrl+wheel → opacity 20–100 % (CSS); double click → 100 % ↔ the opening size;
   // Esc / × (on hover) → `shot_pin_close()`; right click → a menu in the shelf's menu style.
+  // `clips:changed` naming this record (INT-5: Rust sends it to every `pin-*`) → `shot_pin_get()`
+  // again: an edited picture reloads (new `?v=`), a new size keeps the scale, a deleted record
+  // shows "unavailable".
   // Browser preview on the mock: /pin.html?clip=<id> — the picture is scaled inside the page.
   import { onMount, tick } from "svelte";
   import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -14,6 +17,7 @@
   import type { IconName } from "$lib/icons";
   import { t, type TranslationKey } from "$lib/i18n/index.svelte";
   import { clipCopy, shotEdit, shotPinClose, shotPinGet, shotPinResize, shotSaveAs } from "$lib/ipc/commands";
+  import { onClipsChanged } from "$lib/ipc/events";
   import { errorCode } from "$lib/ipc/errors";
   import { isTauri } from "$lib/ipc/runtime";
   import type { PinPayload } from "$lib/ipc/types";
@@ -74,7 +78,39 @@
         console.error("[pin] shot_pin_get", e);
         status = "empty";
       });
+    const off = onClipsChanged((c) => {
+      const id = payload?.clipId;
+      if (id === undefined || c.change === "added" || (c.ids && !c.ids.includes(id))) return;
+      void refresh();
+    });
+    return () => void off.then((f) => f());
   });
+
+  /** The record changed (edited, deleted, `reset`): fetch it again. */
+  async function refresh(): Promise<void> {
+    let p: PinPayload | null;
+    try {
+      p = await shotPinGet();
+    } catch (e) {
+      console.error("[pin] shot_pin_get", e);
+      return;
+    }
+    const before = payload;
+    if (!p) {
+      status = "empty"; // deleted: the "unavailable" notice with Close
+      return;
+    }
+    if (before && p.imageUrl === before.imageUrl && p.width === before.width && p.height === before.height) return;
+    loaded = false;
+    broken = false;
+    payload = p;
+    status = "ready";
+    // Same scale on the new size (an edit may have cropped it): Rust re-sizes the window.
+    if (tauri && before && (p.width !== before.width || p.height !== before.height)) {
+      wanted = scale;
+      void pump();
+    }
+  }
 
   /** A picture already decoded before the listener was attached counts as loaded. */
   function settle(img: HTMLImageElement): void {

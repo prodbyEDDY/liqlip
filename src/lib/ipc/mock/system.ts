@@ -407,8 +407,13 @@ export const systemHandlers: Record<string, (args: Args) => unknown> = {
     dataDir: "C:\\Users\\me\\AppData\\Roaming\\com.liqlip.app",
     logDir: "C:\\Users\\me\\AppData\\Roaming\\com.liqlip.app\\logs",
   }),
-  open_path: () => undefined,
+  open_path: ({ which }) => {
+    if (which !== "data" && which !== "logs" && which !== "shots") throw fail("invalid", `which ${String(which)}`);
+  },
   pick_exe: () => "C:\\Program Files\\Example App\\example.exe",
+  // INT-5: the screenshot folder (`?mock-shot-dialog=cancel` — the dialog is cancelled)
+  pick_folder: () =>
+    typeof location !== "undefined" && new URLSearchParams(location.search).get("mock-shot-dialog") === "cancel" ? null : "C:\\Users\\me\\Pictures\\Shots",
 
   ocr_status: ocrStatus,
   ocr_reindex: ocrReindexCmd,

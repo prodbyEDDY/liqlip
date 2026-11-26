@@ -413,7 +413,8 @@ export interface ClearResult {
 
 export type ClearScope = "history" | "all";
 export type DragOutcome = "dropped" | "cancelled";
-export type PathKind = "data" | "logs";
+/** `shots` — the screenshot folder (INT-5, additive). */
+export type PathKind = "data" | "logs" | "shots";
 export type BackupMode = "replace" | "merge";
 
 /** apps_running item. */
@@ -486,7 +487,7 @@ export interface HotkeysCaptured {
 
 /** `resumed` / `skip_next` — W1-D, additive: feedback for the pause / skip hotkeys.
  *  `countdown` (text = seconds left) / `shot_failed` / `text_copied` / `text_empty` — W5, additive (§18.10). */
-export type HudKind = "copied" | "stack_empty" | "paused" | "elevated" | "resumed" | "skip_next" | "countdown" | "shot_failed" | "text_copied" | "text_empty";
+export type HudKind = "copied" | "stack_empty" | "paused" | "elevated" | "resumed" | "skip_next" | "countdown" | "shot_failed" | "text_copied" | "text_empty" | "text_unavailable";
 
 export interface HudShow {
   kind: HudKind;
@@ -645,11 +646,14 @@ interface Obj {
   /** #rrggbb */
   color: string;
 }
-/** `counter.n = null` — automatic (previous + 1); `image.src` — `data:image/png;base64,…`. */
+/** `counter.n = null` — automatic (previous + 1); `image.src` — `data:image/png;base64,…`.
+ *  `arrow.bend` — signed offset (source px) of the curve's midpoint from the chord's midpoint,
+ *  perpendicular to the chord (0 — straight). `rect.round` — rounded corners (INT-5, additive,
+ *  optional: a document without it draws square corners; ignored on an ellipse). */
 export type AnnotObject =
   | (Obj & { kind: "arrow"; a: Pt; b: Pt; bend: number; style: "straight" | "curved" | "double"; size: Size })
   | (Obj & { kind: "line"; a: Pt; b: Pt; size: Size })
-  | (Obj & { kind: "rect" | "ellipse"; r: Rect; fill: boolean; size: Size })
+  | (Obj & { kind: "rect" | "ellipse"; r: Rect; fill: boolean; size: Size; round?: boolean })
   | (Obj & { kind: "pen" | "marker"; points: Pt[]; size: Size })
   | (Obj & { kind: "text"; at: Pt; width: number | null; text: string; fontSize: number; style: "plain" | "badge" })
   | (Obj & { kind: "counter"; at: Pt; n: number | null; size: Size })

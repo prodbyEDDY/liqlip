@@ -10,7 +10,10 @@
   //     centre, Space moves it); magnifier (M, wheel); arrows move the cursor, Enter starts and
   //     ends an area; F — the monitor; R — the last area; Esc — cancel.
   //   frame (stage 2) — the frame with handles OUTSIDE it and the editor (`mode:'overlay'`,
-  //     `clip` = the frame) inside; the docked panel; Enter — Done; Ctrl+C/S/Shift+S/P.
+  //     `clip` = the frame) inside; the docked panel; Enter / a double click on empty space with
+  //     Select (the editor's `done` intent) — Done; Ctrl+C/S/Shift+S/P; Ctrl+arrows move the
+  //     frame, Alt+arrows resize it (Shift — 10 px; INT-5: Ctrl+Alt+arrows rotate the screen on
+  //     some Intel drivers).
   //   committing — `shot_commit` with the framed body (§18.4); an error keeps the overlay.
   //
   // Text sessions (OCR) stop after stage 1; "capture on release" (`session.quick`) skips stage 2.
@@ -22,12 +25,20 @@
   import { errorMessage } from "$lib/ipc/errors";
   import { onShotEnd, onShotSession } from "$lib/ipc/events";
   import type { AnnotDoc, Rect, ShotAction, ShotSession, ShotStage } from "$lib/ipc/types";
-  // The ONE place the overlay imports the editor (W6-C, ARCHITECTURE §18.6). Integration:
-  // `./editorStub` → `$lib/editor`.
-  import { createEditorState, Editor, PropsBar, Toolbar, type EditorApi, type EditorIntent, type EditorState } from "./editorStub";
+  // The ONE place the overlay imports the editor (W6-C, ARCHITECTURE §18.6).
+  import {
+    createEditorState,
+    Editor,
+    emptyDoc,
+    frameDoc,
+    PropsBar,
+    Toolbar,
+    type EditorApi,
+    type EditorIntent,
+    type EditorState,
+  } from "$lib/editor";
   import { targetAt } from "./captureTargets";
   import { dockPanel } from "./dock";
-  import { docForFrame, emptyDoc, isEmptyAt } from "./frameDoc";
   import {
     arrowDelta,
     clampPoint,
@@ -43,7 +54,6 @@
     regionFrom,
     resizeRect,
     snapRect,
-    toFrame,
     toView,
     viewScale,
     type Handle,
@@ -63,8 +73,8 @@
   const DIM_FRAME = 0.3;
   /** Error notices stay this long. */
   const ERROR_MS = 6000;
-  /** Double-click → Done only farther than this from any object (view px). */
-  const DBL_EMPTY_PX = 6;
+  /** A tooltip row needs this much room below / above the panel (view px). */
+  const TIP_ROOM = 44;
 
   // ── session ──
   let session = $state.raw<ShotSession | null>(null);
@@ -143,6 +153,15 @@
   const panelRect = $derived(panelW ? { x: docked.x, y: docked.y, w: panelW, h: panelH } : null);
   const anyGesture = $derived(gesture !== null || editorGesture);
   const panelGhost = $derived(anyGesture && !!cursorView && !!panelRect && contains(panelRect, cursorView));
+  /** Tooltips of the editor's bars open away from the frame (below a panel under it, above
+   *  otherwise) and flip when the monitor edge leaves no room. */
+  const tips = $derived.by((): "below" | "above" => {
+    if (!panelRect) return "below";
+    const want = docked.side === "below" ? "below" : "above";
+    if (want === "below" && panelRect.y + panelRect.h + TIP_ROOM > vh) return "above";
+    if (want === "above" && panelRect.y < TIP_ROOM) return "below";
+    return want;
+  });
 
   const sizeText = (r: Rect) => `${r.w} × ${r.h}`;
   const loupeOn = $derived(selecting && magnifier && !!bitmap && !!cursor && !!cursorView && !busy);
@@ -301,7 +320,7 @@
       let rgba: Uint8Array | null = null;
       // the drawing goes as the flattened crop + the frame-relative document (§18.4); text reads the screen
       if (action !== "text" && editor?.hasObjects()) {
-        const doc = docForFrame(editor.doc(), rect);
+        const doc = frameDoc(editor.doc(), rect);
         if (doc.objects.length) {
           const px = await editor.exportRGBA(rect);
           header = commitHeader(id, rect, action, doc, { width: px.width, height: px.height });
@@ -493,15 +512,6 @@
     if (e.button === 0) editorGesture = true;
   }
 
-  /** Double click on an empty place with the Select tool — Done (SPEC §9.2). The editor may also
-   *  ask for it (`onintent('done')`); a second request is ignored while committing. */
-  function onEditorDblClick(e: MouseEvent): void {
-    if (host.stage !== "frame" || !host.frame || !editor || editor.tool() !== "select") return;
-    const p = toFrame({ x: e.clientX, y: e.clientY }, k);
-    if (!contains(host.frame, p) || !isEmptyAt(editor.doc(), p.x, p.y, DBL_EMPTY_PX * k.kx)) return;
-    void commit("done");
-  }
-
   function onWheel(e: WheelEvent): void {
     if (!loupeOn || e.deltaY === 0) return;
     e.preventDefault();
@@ -589,9 +599,12 @@
       void commit(action);
       return true;
     }
+    // Ctrl+arrows move the frame, Alt+arrows resize it (Shift — 10 px). Not Ctrl+Alt+arrows:
+    // some Intel graphics drivers rotate the screen on it (INT-5).
     const d = arrowDelta(e.code);
-    if (d && ctrl && host.frame && !gesture) {
-      host = { ...host, frame: nudgeRect(host.frame, d, e.shiftKey ? 10 : 1, e.altKey ? "resize" : "move", frameSize) };
+    const mode = ctrl && !e.altKey ? "move" : e.altKey && !ctrl ? "resize" : null;
+    if (d && mode && host.frame && !gesture) {
+      host = { ...host, frame: nudgeRect(host.frame, d, e.shiftKey ? 10 : 1, mode, frameSize) };
       return true;
     }
     return false;
@@ -646,7 +659,7 @@
 
     {#if inFrame && bitmap && editorState && editorDoc}
       {#key host.sessionId}
-        <div class="editor-host" onpointerdowncapture={onEditorDown} ondblclick={onEditorDblClick} role="presentation">
+        <div class="editor-host" onpointerdowncapture={onEditorDown} role="presentation">
           <Editor bind:this={editor} state={editorState} base={bitmap} doc={editorDoc} mode="overlay" clip={host.frame} onintent={onIntent} />
         </div>
       {/key}
@@ -684,10 +697,10 @@
     {#if inFrame && frameView && !drawing}
       <FrameChrome frame={frameView} {view} size={session.dimensions && host.frame ? sizeText(host.frame) : null} avoid={panelRect} {busy} onhandle={onHandle} onchip={onChip} />
       {#snippet tools()}
-        {#if editorState}<Toolbar state={editorState} />{/if}
+        {#if editorState}<Toolbar state={editorState} {tips} />{/if}
       {/snippet}
       {#snippet props()}
-        {#if editorState}<PropsBar state={editorState} />{/if}
+        {#if editorState}<PropsBar state={editorState} {tips} />{/if}
       {/snippet}
       <Panel
         tools={bitmap ? tools : null}

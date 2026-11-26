@@ -39,6 +39,9 @@ test("keys and cards: a record, a temporary file (clip: null), neither", () => {
   assert.equal(s.shotKey(added(0, { clip: null, tempPath: "C:\\t\\1.png" })), "tmp:C:\\t\\1.png");
   assert.equal(s.shotKey(added(0, { clip: null })), null);
   assert.equal(s.makeShot(added(0, { clip: null }), 10), null);
+  // INT-5: a card without a record previews its temp file by bare name (`liq://temp/<name>`)
+  assert.equal(s.tempName("C:\\Users\\me\\AppData\\Local\\Temp\\Liqlip\\shots\\shot-9-1.png"), "shot-9-1.png");
+  assert.equal(s.makeShot(added(0, { clip: null, tempPath: "C:\\t\\shot 1.png" }), 10).preview, "http://liq.localhost/temp/shot%201.png");
   const c = s.makeShot(added(3, { savedPath: "C:\\a.png", error: "save_failed" }), 5);
   assert.deepEqual(
     { preview: c.preview, savedPath: c.savedPath, error: c.error, timeout: c.timeout, remaining: c.remaining },

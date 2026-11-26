@@ -41,7 +41,7 @@
     class="chip"
     class:chip--measuring={!chipW}
     style="left:{chip.x}px; top:{chip.y}px; cursor:{busy ? 'wait' : 'move'}"
-    title={t("capture.frame.move")}
+    title={`${t("capture.frame.move")} · ${t("capture.frame.keys")}`}
     bind:clientWidth={chipW}
     bind:clientHeight={chipH}
     onpointerdown={onchip}

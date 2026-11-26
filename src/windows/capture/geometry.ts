@@ -162,8 +162,9 @@ export function arrowDelta(code: string): Point | null {
 }
 
 /**
- * `Ctrl+arrows` move the frame, `Ctrl+Alt+arrows` resize it from the right/bottom edge
- * (→ / ↓ grow, ← / ↑ shrink, never below 1 px, never past the frame) — SPEC §9.2.
+ * `Ctrl+arrows` move the frame, `Alt+arrows` resize it from the right/bottom edge
+ * (→ / ↓ grow, ← / ↑ shrink, never below 1 px, never past the frame) — SPEC §9.2 (INT-5: not
+ * `Ctrl+Alt+arrows`, which some Intel drivers take for screen rotation).
  */
 export function nudgeRect(r: Rect, d: Point, step: number, mode: "move" | "resize", frame: Size): Rect {
   if (mode === "move") return moveRect(r, d.x * step, d.y * step, frame);

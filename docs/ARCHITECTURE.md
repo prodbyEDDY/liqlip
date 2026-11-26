@@ -65,7 +65,9 @@ liqlip/
       picker/                   шелф (Picker.svelte + компоненты, cards/, layout.ts, query.ts, transforms.ts …)
       settings/                 окно настроек + онбординг
       hud/                      HUD-тост
-      capture/ · shots/ · editor/ · pin/   окна скриншотов (W5 — заглушки корней; W6-C/D/E, §18)
+      capture/                  оверлей захвата: выбор цели, рамка, редактор `$lib/editor` внутри, панель (W6-D, §18.7)
+      shots/ · pin/             QAO (стопка миниатюр) и закреплённые картинки (W6-E, §18.8)
+      editor/                   окно редактора (W6-C, §18.9); сам редактор — src/lib/editor/ (§18.6)
   src-tauri/
     src/
       lib.rs                    ← ФАЙЛ-УЗЕЛ: run(), плагины, окна, порядок init, регистрация команд, URI-схема
@@ -129,7 +131,7 @@ Alt+Tab, а tao пересчитывает `GWL_EXSTYLE` из своих фла�
 ## 3. Порядок `setup()`
 
 1. `logx::init` (файл с ротацией в `%APPDATA%\com.liqlip.app\logs\`).
-2. Плагины: `single-instance` (второй запуск → показать шелф), `autostart`, `dialog`, `opener`.
+2. Плагины: `single-instance` (второй запуск → показать шелф; `--capture [mode]` → захват, §18.3), `autostart`, `dialog`, `opener`. Все окна — с одними аргументами WebView2 (§18.2, INT-5).
 3. `settings::load` (+ миграция версии) → `manage`.
 4. `store::open` (миграции схемы, WAL) → `manage`. **До создания любого окна** (окна шлют IPC сразу).
 5. `capture::start` (listener-поток) · `paste::init` · `ocr::start` (W2) · W5:
@@ -1475,8 +1477,9 @@ export interface ImportReport { imported: number; skipped: number; folders: numb
 | `settings_get` / `settings_set` | → `Settings` / `Settings` → `SettingsResult` | settings (+ хуки модулей) |
 | `hotkey_record_start` / `hotkey_record_stop` | `()` | hotkeys |
 | `app_info` | → `{ version, dataDir, logDir }` | settings |
-| `open_path` | `which: 'data'\|'logs'` → `()` | settings |
+| `open_path` | `which: 'data'\|'logs'\|'shots'` → `()` (`shots` — папка снимков: настройка, иначе `Изображения\Liqlip`; INT-5, аддитивно) | settings |
 | `pick_exe` | → `string \| null` (диалог) | settings |
+| `pick_folder` | → `string \| null` (диалог выбора папки снимков, родитель — окно настроек; INT-5, аддитивно) | settings |
 | `ocr_status` / `ocr_reindex` / `clip_ocr` | → `{ available, languages, pending }` / `()` / `id` → `string` | ocr (W2) |
 | `import_lt_probe` / `import_lt_run` | → `ImportProbe` / `ImportReport` | import (W2) |
 | `backup_export` / `backup_import` | → `string\|null` / `mode: 'replace'\|'merge'` → `ImportReport` (отмена диалога: экспорт → `null`, восстановление → `invalid: cancelled`; §17.6) | import (W2) |
@@ -1488,7 +1491,7 @@ export interface ImportReport { imported: number; skipped: number; folders: numb
 | `shot_edit` | `id` → `()` (открыть окно редактора) | screenshot · editor (W6-B) |
 | `shot_editor_get` | → `ShotEditorPayload \| null` | screenshot · editor (W6-B) |
 | `shot_editor_switch` | `accept: boolean` → `()` | screenshot · editor (W6-B) |
-| `shot_editor_commit` | **сырое тело** (JSON `ShotEditorCommit`) → `Clip` | screenshot · commit (W6-A) + editor (W6-B) |
+| `shot_editor_commit` | **сырое тело** (JSON `ShotEditorCommit`) → `Clip` (без пикселей — текущая картинка записи; `done` без пикселей = «ничего не менялось», §18.9) | screenshot · editor (W6-B) + шаги commit/files (W6-A) |
 | `shot_pin` | `id` → `()` | screenshot · pin (W6-B) |
 | `shot_pin_get` | → `PinPayload \| null` (по метке вызывающего окна) | screenshot · pin (W6-B) |
 | `shot_pin_resize` | `scale: number` → `()` | screenshot · pin (W6-B) |
@@ -1496,8 +1499,11 @@ export interface ImportReport { imported: number; skipped: number; folders: numb
 | `shot_save` | `id` → `string` (путь в папке снимков) | screenshot · files (W6-A) |
 | `shot_save_as` | `id` → `string \| null` (диалог) | screenshot · files (W6-A) |
 | `shot_reveal` | `id` → `()` (Проводник с выделением сохранённого файла) | screenshot · files (W6-A) |
+| `shot_temp_copy` | `name` → `()` (карточка QAO «не в истории»: временный файл по голому имени, §18.4) — INT-5 | screenshot · files |
+| `shot_temp_save_as` | `name` → `string \| null` («Сохранить как…» для временного файла; записи нет) — INT-5 | screenshot · files |
 | `shots_hud_layout` | `height: number` → `()` (логические px стопки QAO) | screenshot · qao (W6-B) |
 | `shots_hud_hide` | → `()` | screenshot · qao (W6-B) |
+| `shots_pending` | → `ShotAdded[]` (страница QAO подписалась: `shot:added`, пришедшие раньше; дальше — событием) — INT-5 | screenshot · qao |
 | `shot_status` | → `ShotStatus` | screenshot · status (W6-B) |
 | `open_windows_settings` | `page: WindowsSettingsPage` → `()` (`keyboard` = `ms-settings:easeofaccess-keyboard`) | screenshot · status (W6-B) |
 
@@ -1510,7 +1516,7 @@ export interface ImportReport { imported: number; skipped: number; folders: numb
 
 | Событие | Payload | Кто шлёт → кому |
 |---|---|---|
-| `clips:changed` | `{ origin: ChangeOrigin; change: 'added'\|'updated'\|'deleted'\|'reset'; ids?: number[] }` | store/capture → picker, settings, shots, editor (W5) |
+| `clips:changed` | `{ origin: ChangeOrigin; change: 'added'\|'updated'\|'deleted'\|'reset'; ids?: number[] }` | store/capture → picker, settings, shots, editor (W5), все `pin-*` (фильтр по префиксу метки, INT-5) |
 | `picker:open` | `{ mode: 'summon'\|'hover'; target: TargetInfo \| null; interactive: boolean }` | picker → picker |
 | `picker:close` | `{}` | picker → picker (освободить строки через 260 мс) |
 | `picker:layout` | `{ position; centerRow; width; height; bleed }` | picker → picker |
@@ -1519,13 +1525,13 @@ export interface ImportReport { imported: number; skipped: number; folders: numb
 | `settings:changed` ⚑ | `Settings` | settings → все |
 | `settings:navigate` | `{ section: string }` | picker (`settings_open`) → settings |
 | `hotkeys:captured` | `{ combo: string }` | hotkeys → settings |
-| `hud:show` | `{ kind: 'copied'\|'stack_empty'\|'paused'\|'elevated'\|'resumed'\|'skip_next'\|'countdown'\|'shot_failed'\|'text_copied'\|'text_empty'; text?: string }` (`resumed`/`skip_next` — W1-D, аддитивно; `text` — подпись чипа сочетания `{keys}`, напр. «Shift+Insert», W2-F; нет — «Ctrl+V»; W5: `countdown` — `text` = оставшиеся секунды в том же чипе, `shot_failed` / `text_copied` / `text_empty` — §18.3–18.4) | picker/paste/hotkeys/screenshot → hud |
+| `hud:show` | `{ kind: 'copied'\|'stack_empty'\|'paused'\|'elevated'\|'resumed'\|'skip_next'\|'countdown'\|'shot_failed'\|'text_copied'\|'text_empty'\|'text_unavailable'; text?: string }` (`resumed`/`skip_next` — W1-D, аддитивно; `text` — подпись чипа сочетания `{keys}`, напр. «Shift+Insert», W2-F; нет — «Ctrl+V»; W5: `countdown` — `text` = оставшиеся секунды в том же чипе, `shot_failed` / `text_copied` / `text_empty` — §18.3–18.4; INT-5: `text_unavailable` — «Текст с экрана» без языковых пакетов OCR) | picker/paste/hotkeys/screenshot → hud |
 | `ocr:progress` | `{ done: number; total: number }` | ocr → settings |
 | `import:progress` | `{ phase: string; done: number; total: number }` | import → settings |
 | `theme://changed` ⚑ | `'light'\|'dark'` | theme → все |
-| `shot:session` | `ShotSession` | screenshot → capture (начало сессии, смена монитора) — W5 |
+| `shot:session` | `ShotSession` | screenshot → capture (начало сессии, смена монитора), shots (таймеры QAO на паузе до `shot:end`, INT-5) — W5 |
 | `shot:end` | `ShotEnd { sessionId }` | screenshot → capture, shots — W5 |
-| `shot:added` | `ShotAdded { clip: Clip\|null; savedPath; tempPath; monitor; error: 'save_failed'\|null }` | screenshot → shots — W5 |
+| `shot:added` | `ShotAdded { clip: Clip\|null; savedPath; tempPath; monitor; error: 'save_failed'\|null }` | screenshot → shots — W5 (до первого `shots_pending` страницы — копится в Rust, INT-5) |
 | `shot:editor` | `ShotEditorPayload` | screenshot → editor — W5 |
 
 **Фронт отличает свои изменения от чужих по `origin`:** плашка «Новые записи» — только для
@@ -1554,12 +1560,14 @@ no-store`: это содержимое буфера, и превью удалё�
 в памяти страницы новая запись не «унаследует».
 
 **Скриншоты (W5, §18.3).** Замыкание схемы в `lib.rs` отдаёт пути `screenshot::owns_uri` (`/shot/…`,
-`/base/…`) в `screenshot::serve_uri(app, path) -> Option<(mime, bytes)>` (заглушка W5 — всегда `None`
-→ 404; наполняет W6-A в `screenshot/frame.rs`), остальное — `store::serve_uri`, как было. Ответ тот же:
+`/base/…`, `/temp/…` — INT-5) в `screenshot::serve_uri(app, path) -> Option<(mime, bytes)>`
+(`screenshot/frame.rs`, `/temp/` — `files::serve_temp`), остальное — `store::serve_uri`, как было. Ответ тот же:
 `Cache-Control` из `store::cache_control` (для `/shot` и `/base` — `no-store`, тест
 `screenshot::tests::liq_routes_and_their_cache_policy`), ACAO `*`.
 `/shot/<sessionId>/<monitorIndex>.bmp` — кадр монитора сессии; `/base/<clipId>?v=<n>` — исходник
-картинки для редактора.
+картинки для редактора; `/temp/<имя>` — PNG карточки QAO «не в истории» (INT-5): только голое имя
+(ASCII-буквы, цифры, `.`, `-`, `_`, без ведущей точки) обычного файла прямо в `%TEMP%\Liqlip\shots\`,
+проверка после `canonicalize` (`files::temp_file`); иначе 404.
 
 ### 9.9. Уточнения контракта (W0, 2026-11-26)
 
@@ -1765,7 +1773,7 @@ stroke 1.5, `1em`), реестр `src/lib/icons.ts`, лицензия `public/li
 
 **W5 (скриншоты, фундамент).** Node: `shotFrame` (кадрирование тела ≡ Rust `body.rs`), `shotsMock`
 (мок скриншотов: сессия и фальшивый рабочий стол, коммит → запись + события, редактор, закрепление,
-файлы, статус); `contract` считает 87 команд и держит `AnnotDoc` TS-only; `ocrMock` — очередь OCR
+файлы, статус); `contract` считает 87 команд (INT-5 — 91) и держит `AnnotDoc` TS-only; `ocrMock` — очередь OCR
 охватывает и `screenshot`. Rust: `screenshot::body::tests` (5), `screenshot::tests` (маршруты `liq`),
 `settings::tests::{a_v1_0_file_upgrades_without_loss, screenshot_fields_are_validated}` (фикстура
 `tests/fixtures/settings.v1.0.json`), `model::tests::screenshot_wire_shapes`,
@@ -1802,6 +1810,24 @@ W6-A (`screenshots_land_as_screenshot_records_once`). `import::tests` — ожи
 `cancelled`, ошибка, устаревший drag, `pointercancel`, клик; кнопки и их ошибки, OCR, `clip: null`,
 `clips:changed`), `pinMath` (8: колесо, масштаб и его пределы, непрозрачность, 100 % ↔ исходный,
 масштаб окна, радиус, форма и место меню).
+
+**W6-C (редактор).** Node, 83: `editorRules` 39 (правила SPEC §9.3 1–12, лестница Esc, интенты, в т. ч.
+двойной клик → `done` в оверлее), `editorGeometry` 13, `editorText` 11, `editorDoc` 11, `editorEffects` 5,
+`editorView` 4 (подробно — §18.6).
+
+**W6-D (оверлей захвата).** Node, 34 → 32 на INT-5: `captureTargets` (перенос LT), `captureGeometry`,
+`captureDock`, `captureMachine` (документ рамки — теперь через `cropDoc` + `bounds` редактора, как
+`frameDoc`; тесты своих `objectBounds`/`isEmptyAt` ушли вместе с кодом).
+
+**INT-5 (склейка W6, 2026-11-27).** Rust: `screenshot::qao::tests::payloads_wait_until_the_page_claims_them`
+(буфер `shots_pending`: до заявки страницы копится, после — сразу; перезагрузка — снова копит), геометрия QAO
+по фронту E (304 px, низ = низ рабочей области, без отступа, зажим высоты, панель задач сверху), пин с полем 24,
+окно редактора `CHROME` 48×156, маршрут `/temp/` и его `no-store`, `PathKind::Shots` / `HudKind::TextUnavailable`
+на проводе, `import::lt::tests::screenshots_land_as_screenshot_records_once` без `#[ignore]`; удалены тесты
+кода, которого больше нет (`editor::png_round_trip`). Node: `shotsQao` + 2 (карточка «не в истории»: Копировать /
+Сохранить как… по имени временного файла, остальное не работает; файла нет — тост, отмена диалога — тишина),
+`shotsStack` (имя и превью временного файла), `editorDoc` (`resetDefaults()` → `true`/`false`, только свой
+ключ), `contract` — 91 команда. **Итог: `cargo test` 414 (0 ignored) ×2, `pnpm test` 343, `pnpm check` 0/0.**
 
 ## 13. Владение файлами и правила для агентов
 
@@ -2067,9 +2093,9 @@ pub fn apply_settings(app: &AppHandle, prev: &HotkeySettings, next: &HotkeySetti
 ```rust
 pub struct ScreenshotState { capture: Mutex<session::SessionState>, qao: Mutex<qao::QaoState>,
                              editor: Mutex<editor::EditorState>, pins: Mutex<pin::PinState> } // manage() в шаге 5
-pub fn init(app: &AppHandle);                           // шаг 5: session::init + windows::init
+pub fn init(app: &AppHandle);                           // шаг 5: windows::init (INT-5: уборка temp — одна, в qao::init)
 pub fn on_capture_close(app: &AppHandle);               // ← lib.rs CloseRequested окна capture → session::on_capture_close
-pub fn owns_uri(path: &str) -> bool;                    // `/shot/…` | `/base/…`
+pub fn owns_uri(path: &str) -> bool;                    // `/shot/…` | `/base/…` | `/temp/…` (INT-5)
 pub fn serve_uri(app: &AppHandle, path: &str) -> Option<(String, Vec<u8>)>;   // → frame::serve (404 до W6-A)
 pub(crate) mod windows { pub(crate) fn exclude_from_capture(win: &WebviewWindow) -> Result<(), String>; } // WDA_EXCLUDEFROMCAPTURE
 // model.rs: Kind::is_image(self) -> bool  (image | screenshot)
@@ -2083,8 +2109,12 @@ screenshot::qao::hide_for_capture(app: &AppHandle);                 // нача�
 screenshot::qao::restore_after_capture(app: &AppHandle);            // конец сессии: коммит или отмена
 screenshot::editor::open(app: &AppHandle, id: i64) -> Result<(), String>;   // afterCapture: editor
 screenshot::pin::open(app: &AppHandle, id: i64) -> Result<(), String>;      // action: pin
-// W6-A → W6-B (швы `editor::seam`, подключаются на INT-5): store::shots::doc, store::shots::apply_edit,
-// paste::copy_png, files: перезапись saved_path, files: «Сохранить как…» для PNG-байт.
+// W6-A → W6-B (INT-5: `editor::commit` зовёт напрямую, швов нет): Store::shot_doc, commit::apply_edit,
+// paste::copy_png, files::overwrite_saved, files::save_png_as (async), Store::shot_source / shot_clip.
+screenshot::qao::pending(app: &AppHandle) -> Result<Vec<ShotAdded>, String>;  // INT-5: команда shots_pending
+screenshot::handle_args(app: &AppHandle, args: &[String]) -> bool;  // INT-5: lib.rs single-instance (`--capture`)
+screenshot::shot_folder(s: &ScreenshotSettings) -> Result<PathBuf, String>;  // INT-5: open_path('shots'), pick_folder
+crate::ocr::has_languages() -> bool; crate::ocr::NO_LANGUAGE: &str;          // INT-5: HUD text_unavailable
 ```
 
 **Фронт.** Окна общаются с Rust только через `src/lib/ipc/commands.ts` (`call` → `invoke` или мок) и
@@ -2617,7 +2647,15 @@ impl Store {
 > «Как сделано»; `cargo test` 394/394 дважды. W6-B (2026-11-27): окна по требованию `shots` / `editor` /
 > `pin-*` (§18.2, правило окон сверено с docs.rs tauri 2.11.2), нативная сторона QAO, редактора и
 > закрепления (§18.8–18.9), статус `PrtSc`/«Ножниц» (§18.11), импорт снимков LT (§17.1). Нативно не
-> запускалось (сценарии — в отчётах W6). W6-E (2026-11-27): фронт QAO и закреплённых окон — §18.8.1–18.8.2. Продукт — SPEC §9. Источник переноса и разбор его
+> запускалось (сценарии — в отчётах W6). W6-E (2026-11-27): фронт QAO и закреплённых окон — §18.8.1–18.8.2.
+> W6-D (2026-11-27): оверлей захвата — §18.7 (браузер на моке). INT-5 (2026-11-27, склейка): швы зон
+> закрыты — коммит редактора `editor::commit` на шагах A, хуки QAO, `--capture`, строки редактора в
+> `i18n_native`, импорт снимков LT (тест без `#[ignore]`); оверлей на настоящем редакторе (заглушка
+> удалена, `frameDoc`/двойной клик — редактора), геометрия QAO/пина по фронту E, `shots_pending`,
+> карточки «не в истории» (`liq://temp`), `pick_folder` + `open_path('shots')`, HUD `text_unavailable`,
+> `clips:changed` → `pin-*`, `shot:session` → `shots`, одни аргументы WebView2 у всех окон (звук QAO),
+> рамка `Alt+стрелки`; гейты: `pnpm check` 0/0 · `pnpm test` 343 · `cargo test` 414 ×2; браузер —
+> `/capture.html` на моке (обе темы, `?mock-scale=1.5`). Нативно не запускалось. Продукт — SPEC §9. Источник переноса и разбор его
 > дефектов — `docs/prompts/_RESEARCH-W5-SCREENSHOT-SOURCE.md`; эталоны взаимодействия —
 > `docs/prompts/_RESEARCH-W5-ANNOTATION-UX.md` (локальные файлы координатора, абсолютные пути — в
 > промптах). Studio не переносится; всё, что в LT существует только ради studio (кнопка Mockup,
@@ -2645,9 +2683,9 @@ W6-B присылает свои строки сниппетом в отчёте
 | Окно | Создание | Свойства |
 |---|---|---|
 | `capture` | **заранее в `setup()`**, скрытое (захват должен показываться мгновенно) | прозрачное, без рамки, always-on-top, skip-taskbar, focusable, `shadow(false)`, `disable_drag_drop_handler`; размер/позиция = монитор захвата (физ. px, позиция → размер → позиция, как §7.4); `SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE)`; `CloseRequested` → отмена сессии + hide |
-| `shots` (QAO) | **по требованию** при первом снимке, затем живёт скрытым | прозрачное, без рамки, always-on-top, skip-taskbar, `focusable(false)` (`WS_EX_NOACTIVATE`; клики и drag-out работают без активации), показ через `show_no_activate`, `disable_drag_drop_handler`, `WDA_EXCLUDEFROMCAPTURE`; угол рабочей области монитора снимка; высота от числа карточек (`shots_hud_layout`) |
+| `shots` (QAO) | **по требованию** при первом снимке, затем живёт скрытым | прозрачное, без рамки, always-on-top, skip-taskbar, `focusable(false)` (`WS_EX_NOACTIVATE`; клики и drag-out работают без активации), показ через `show_no_activate`, `disable_drag_drop_handler`, `WDA_EXCLUDEFROMCAPTURE`; ширина 304 логических px, низ окна = низ рабочей области монитора снимка, сторона — `corner`, без отступа (поле 24 страницы — зазор); высота от числа карточек (`shots_hud_layout`), не больше рабочей области |
 | `editor` | **по требованию**, одно; закрытие = уничтожение (память) | обычное окно: системный заголовок, на панели задач, мин. 640×420, по умолчанию вписать картинку в 80 % рабочей области; заголовок из `i18n_native` («Имя — Liqlip») |
-| `pin-<n>` | **по требованию**, до 6; закрытие = уничтожение | прозрачное, без рамки, always-on-top, skip-taskbar, focusable, `shadow(false)`; размер = картинка в логических px (≤ 80 % монитора) |
+| `pin-<n>` | **по требованию**, до 6; закрытие = уничтожение | прозрачное, без рамки, always-on-top, skip-taskbar, focusable, `shadow(false)`; размер = картинка × `scale` в физ. px (1 = 100 %, при открытии ≤ 80 % монитора) + поле 24 логических px с каждой стороны |
 
 **Исключение из правила «окна только в `setup()`»** (CLAUDE.md, правило 2). Документация Tauri
 (`WebviewWindowBuilder::new`, раздел Known issues) говорит, что построение окна дедлочит на Windows
@@ -2684,6 +2722,18 @@ synchronous command or event handlers»; у `build` своего раздела 
 - `editor` и `pin-*` уничтожаются при закрытии (`destroy()`); `WindowEvent::Destroyed` чистит состояние зоны.
   `shots` не уничтожается: `CloseRequested` → `prevent_close` + hide; если окно всё же умерло (сбой
   WebView2) — следующий снимок построит его заново.
+- **Аргументы WebView2 (INT-5).** Все окна процесса — четыре из `setup()` и три по требованию — строятся
+  с одной строкой `additional_browser_args(screenshot::windows::BROWSER_ARGS)` =
+  `--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --autoplay-policy=no-user-gesture-required`.
+  Окна делят одно окружение WebView2 (одна папка данных), а wry 0.55.1 (`WebViewBuilderExtWindows::
+  with_additional_browser_args`): «Webview instances with different browser arguments must also have
+  different data directories» — поэтому строка одна на всех. Заданная явно, она **заменяет** умолчание
+  wry (`webview2/mod.rs::create_environment`: первая часть строки; автозапуск wry добавляет только при
+  своём `autoplay`, который Tauri 2.11.2 не выставляет) — умолчание сохранено дословно. Документация:
+  docs.rs tauri 2.11.2 `WebviewWindowBuilder::additional_browser_args` (предупреждение про умолчание wry);
+  learn.microsoft.com `ICoreWebView2EnvironmentOptions::put_AdditionalBrowserArguments` (ключи через
+  пробел, значения одного `--disable-features` — через запятую). Зачем: щелчок затвора QAO — Web Audio в
+  окне, которое никогда не активируется и не получает жеста пользователя (политика автозапуска Chromium).
 
 `setup()` (§3): шаг 6 добавляет `capture`; шаг 7 применяет 5 новых хоткеев; новых `manage()` —
 `ScreenshotState` (сессия, кадры, последняя область, стопка-счётчик окон) **до** создания окон.
@@ -2744,7 +2794,7 @@ synchronous command or event handlers»; у `build` своего раздела 
   (`SessionState::begin` — токен подготовки; триггер при подготовке или открытой сессии игнорируется
   с логом), поток `liqlip-shot`: отсчёт `hud:show countdown` по секунде → `focus_context` → шелф
   прячется (`picker::hide_now`, если виден), HUD-тост прячется (`ShowWindow(SW_HIDE)` на главном
-  потоке — последняя секунда отсчёта не попадёт в кадр), QAO прячется (`qao_bridge::hide_for_capture`),
+  потоке — последняя секунда отсчёта не попадёт в кадр), QAO прячется (`qao::hide_for_capture`),
   `DwmFlush` (если что-то спрятали) → мониторы → `screen` / `window` / `repeat` замораживают один
   монитор, снимают занятость сразу после заморозки и идут в `commit::direct`; `region` / `text` —
   все мониторы, дерево окон монитора курсора, `SessionState::open` (id сессий растут с 1),
@@ -2763,18 +2813,19 @@ synchronous command or event handlers»; у `build` своего раздела 
   пропал → обычный выбор области. `last_region` запоминает коммит оверлея (кроме `text`).
 - **Конец сессии**: коммит забирает сессию (`session::take`) и закрывает её (`session::close`: скрыть
   окно → фокус → `shot:end`); отмена (`shot_cancel`, Alt+F4 → `on_capture_close` с главного потока
-  уходит на короткий поток) — то же + кадры освобождаются + `qao_bridge::restore_after_capture`.
+  уходит на короткий поток) — то же + кадры освобождаются + `qao::restore_after_capture`.
   Устаревший `shot_stage` / `shot_cancel` молча игнорируются; `shot_commit` устаревшей сессии —
   `not_found: session`.
 - **`liqlip --capture [region|screen|window|repeat|text]`** (и `--capture=<mode>`): разбор
-  `session::capture_arg` (тест), запуск `session::handle_args` — подключает координатор в колбэке
-  single-instance (сниппет в отчёте W6-A).
+  `session::capture_arg` (тест), запуск `screenshot::handle_args` → `session::handle_args` в колбэке
+  single-instance (`lib.rs`, INT-5): `--capture` есть — захват, иначе — шелф (`picker::summon`).
 - **Шелф и оверлей**: триггер прячет шелф до показа оверлея, так что одновременно они не открыты;
   если шелф вызвать поверх открытого оверлея, `picker::Hwnds` знает окно `capture` (W6-A): клик по
   оверлею — «клик снаружи», а не «свой диалог», и оверлей не становится окном возврата фокуса шелфа.
-- **Хуки W6-B** (`session::qao_bridge`, временные заглушки до интеграции): `hide_for_capture`,
-  `restore_after_capture`, `show_added(payload)` → `qao::*` B; пока `show_added` только шлёт
-  `shot:added`.
+- **QAO** (INT-5): сессия и коммит зовут `qao::hide_for_capture` / `qao::restore_after_capture` /
+  `qao::show_added(payload)` (§18.8) напрямую.
+- **«Текст с экрана» без языков OCR** (INT-5): триггер `text` сначала спрашивает `ocr::has_languages()`
+  (свежий список языков WinRT); нет ни одного — HUD `text_unavailable`, оверлей не открывается.
 
 ### 18.4. Коммит (W6-A)
 
@@ -2814,7 +2865,7 @@ synchronous command or event handlers»; у `build` своего раздела 
 - `commit::commit` (команда `shot_commit`, `async` → воркер рантайма): `session::take` → **сразу**
   `session::close` (окно не остаётся на экране и при ошибке запроса) → `rect_to_crop` (вне кадра —
   `invalid`) → `finish`. Режим сессии `text` всегда даёт действие `text`. Кадры освобождаются после
-  коммита, затем `qao_bridge::restore_after_capture`.
+  коммита, затем `qao::restore_after_capture`.
 - Картинка (`picture`): без тела — кроп кадра (документ, если прислан объектом, хранится как есть);
   тело размера кропа — сведённый RGBA, кроп кадра → `base_png`, документ хранится; тело другого
   размера — берётся как картинка (это видел пользователь), но без исходника и документа (лог).
@@ -2829,18 +2880,24 @@ synchronous command or event handlers»; у `build` своего раздела 
   `set_saved_path` → QAO / редактор (`editor::open`) / закрепление (`pin::open`) / ничего. Ошибка
   сохранения → `error: 'save_failed'`, и QAO показывается даже при `afterCapture: none`. Нет записи
   (тип выключен / > 64 Мп) → QAO получает `tempPath` (`%TEMP%\Liqlip\shots\shot-<ms>-<n>.png`; папка
-  чистится на старте `session::init`, карточки — W6-B); `editor` без записи → QAO.
+  чистится на старте `qao::init`, файлы закрытых карточек — `qao.rs`); `editor` без записи → QAO.
+  Карточка такого снимка (INT-5): превью `liq://temp/<имя>` (§9.8), кнопки Копировать
+  (`shot_temp_copy(name)` → `paste::copy_png`) · Сохранить как… (`shot_temp_save_as(name)`: тот же
+  диалог, формат по расширению, имя по шаблону от времени файла; записи нет) · ×. Команды принимают
+  только голое имя (`files::temp_file`: ASCII-буквы, цифры, `.`, `-`, `_`, без ведущей точки; обычный
+  файл прямо в папке после `canonicalize`), иначе `invalid` / `not_found`.
 - `action: 'text'` → `ocr::recognize_png(app, png)` (новый `pub(crate)`: свой поток в MTA WinRT,
   обычный приоритет, язык `ocr.language`, без проверки `ocr.enabled` — явное действие над картинкой,
   которую никто не хранит; ждёт ≤ 10 с) → `paste::copy_text` + HUD `text_copied`; пусто → HUD
-  `text_empty`; ошибка распознавания (нет языков) → ошибка команды (HUD-вида для неё в контракте нет).
+  `text_empty`; нет языков (`ocr::NO_LANGUAGE`) → HUD `text_unavailable` (INT-5) + ошибка команды;
+  прочая ошибка распознавания → ошибка команды.
 - «Сохранить как…» коммита — `blocking_save_file` диалог-плагина (документирован для `async`-команд,
   никогда не главный поток), **без родителя** (оверлей уже скрыт, шелф скрыт).
-- **Коммит редактора** (`shot_editor_commit`) оркестрирует W6-B (`editor::commit`, решение координатора);
-  `commit::editor_commit` остаётся делегатом-заглушкой до интеграции. Шаги W6-A для B:
+- **Коммит редактора** (`shot_editor_commit`) — `editor::commit` (W6-B, §18.9; INT-5 подключил его в
+  `screenshot/mod.rs`, заглушка `commit::editor_commit` и `commit::base_rgba` удалены). Шаги W6-A:
   `commit::apply_edit(app, id, rgba, w, h, doc) -> (Clip, png)` (PNG, хэш, миниатюра,
-  `Store::apply_edit`, `clips:changed {origin:'user', change:'updated'}`), `commit::base_rgba(app, id)`,
-  `paste::copy_png`, `files::overwrite_saved(app, id, png)`, `files::save_png_as(app, id, png).await`.
+  `Store::apply_edit`, `clips:changed {origin:'user', change:'updated'}`), `paste::copy_png`,
+  `files::overwrite_saved(app, id, png)`, `files::save_png_as(app, id, png).await`.
 
 ### 18.5. Хранение (W6-A)
 
@@ -3015,8 +3072,9 @@ export interface AnnotDoc {
 `state.svelte.ts` (`createEditorState()` — общий `$state`-стор) · `ui.ts` (таблица инструментов/клавиш для панели,
 подсказок и шпаргалки) · `index.ts` (вход для хостов + README-комментарий «как встроить») · UI: `Editor.svelte`,
 `Toolbar.svelte`, `PropsBar.svelte`, `ColorPopover.svelte`, `TextInput.svelte`, `Cheatsheet.svelte`, `Tip.svelte`
-(подсказка «имя + клавиша»), `glyphs/glyphs.ts` + `glyphs/Glyph.svelte` (32 своих глифа в формате Heroicons: 24×24,
-контур 1.5, `currentColor`; у каждого инструмента свой; `help` — Heroicons `question-mark-circle`).
+(подсказка «имя + клавиша»), `glyphs/glyphs.ts` + `glyphs/Glyph.svelte` (31 свой глиф в формате Heroicons: 24×24,
+контур 1.5, `currentColor`; у каждого инструмента свой; `help` — Heroicons `question-mark-circle`; булавка «Закрепить»
+окна — общая `<Ico name="pin">`, INT-5).
 
 *API для хостов* (то, против чего W6-D собирал оверлей; совпадает с §18.6, отличия — только аддитивные):
 ```ts
@@ -3053,7 +3111,7 @@ type ToolId = "select" | "arrow" | "line" | "rect" | "ellipse" | "pen" | "marker
 (перпендикуляр; `|bend|` — насколько дуга отходит от хорды; W6-D паддит рамку объекта на `|bend|`); стиль
 `curved` при создании даёт `bend = 0.2 × длина`, `straight` обнуляет, средняя ручка задаёт любой. У `rect`/`ellipse`
 **аддитивное необязательное поле `round?: boolean`** (скруглённые углы прямоугольника; радиус
-`1.5·TABLE[size]·unit + 3·unit`) — сниппет для `types.ts` в отчёте W6-C. Текст: `at` — левый верхний угол коробки,
+`1.5·TABLE[size]·unit + 3·unit`) — внесено в `types.ts` на INT-5 (вместе с комментарием к `bend`). Текст: `at` — левый верхний угол коробки,
 кегль `fontSize × unit`, Inter 600, межстрочный 1.25, `width: null` — автоширина, иначе перенос по словам/графемам;
 `badge` — плашка цветом объекта, текст чёрный/белый по контрасту. Счётчик: `at` — центр, радиус `COUNTER_R[size]·unit`
 (10/12/15/19/24), номер = `n` или предыдущий + 1 (по порядку массива). Маркер: ширина `4·TABLE[size]·unit`,
@@ -3091,6 +3149,7 @@ PNG data URL, по центру видимого, ≤ 60 % видимого, н�
 пропускает.
 
 *Отличия от проекта W5*: проп `state` и метод `markSaved()` у экземпляра (аддитивно); `frameDoc()`, `resetDefaults()`
+(INT-5: возвращает `true`, если сохранённые умолчания были и удалены — для тоста настроек; аддитивно)
 и тип `EditorApi` в `index.ts` (для D и F); `round?` у прямоугольника (аддитивно); `bend` — px; «Скрыть» по умолчанию
 чёрная плашка, маркер — жёлтый, остальные — красный; модули `view.ts`, `ui.ts`, `Tip.svelte` сверх списка; глифы —
 один модуль данных + один компонент вместо файла на глиф.
@@ -3101,17 +3160,23 @@ PNG data URL, по центру видимого, ≤ 60 % видимого, н�
 > «быстрый» режимы проверены в браузере на моке (`pnpm dev --port 1452`, `/capture.html`, флаги
 > `?mock-scale=1.5|2`, `?mock-shot=text`, `?mock-shot-quick=1`, `?mock-ocr=nolang`; обе темы); редактор —
 > **временная заглушка** с API §18.6 (W6-C делает настоящий параллельно); нативно не запускалось (захват,
-> фокус, следование за курсором и DPI — INT-5 / Eddy).
+> фокус, следование за курсором и DPI — INT-5 / Eddy). INT-5 (2026-11-27): заглушка удалена, оверлей на
+> настоящем редакторе (`$lib/editor`); панель — две строки, как окно редактора; рамка `Alt+стрелки`;
+> двойной клик и документ коммита — редактора (`onintent('done')`, `frameDoc`). Проверено в своём
+> headless Chrome по CDP (`pnpm dev --port 1460`, обе темы, `?mock-scale=1` и `1.5`): тулбар у рамки,
+> стыковка снизу / сверху / внутри, рисование внутри рамки (снаружи — нет), `Alt+→` +1 px, `Alt+Shift+↓`
+> +10 px, `Ctrl+Alt+→` — ничего, `Enter` → запись в мок-ленте совпадает с экраном (размер рамки, два
+> прямоугольника и стрелка в координатах рамки), лестница `Esc` с плашкой.
 
 **Модули.** Чистые (node:test): `captureTargets.ts` (перенос LT как есть: `targetAt(windows, x, y,
 wholeWindow)`), `geometry.ts` (два пространства — px кадра и px окна; область, рамка, ручки, попадания),
 `dock.ts` (панель, чип размеров, лупа), `loupe.ts` (математика лупы), `machine.ts` (машина состояний,
-выбор сессии, заголовок коммита, лестница `Esc`), `frameDoc.ts` (документ → координаты рамки,
-консервативные границы объектов). UI: `Capture.svelte` (корень-хост: сессия, указатель, клавиши,
-коммит), `Shade.svelte` (затемнение с дырой + кольцо + зоны «снаружи»), `Loupe.svelte`,
-`FrameChrome.svelte` (ручки, чип), `Panel.svelte`, `HintBar.svelte`, `Notice.svelte`, `glyphs/Pin.svelte`
-(своя булавка в формате Heroicons — у Heroicons её нет). Заглушка редактора — `editorStub.ts` +
-`stub/*.svelte` (см. ниже «Опора на API редактора»).
+выбор сессии, заголовок коммита, лестница `Esc`). UI: `Capture.svelte` (корень-хост: сессия, указатель,
+клавиши, коммит), `Shade.svelte` (затемнение с дырой + кольцо + зоны «снаружи»), `Loupe.svelte`,
+`FrameChrome.svelte` (ручки, чип), `Panel.svelte`, `HintBar.svelte`, `Notice.svelte`. Булавка — общая
+`<Ico name="pin">` (`src/lib/heroicons/pin.svelte`, INT-5). Редактор — `$lib/editor` (INT-5; заглушка W6-D
+`editorStub.ts` + `stub/` и свой `frameDoc.ts` удалены: документ коммита — `frameDoc` редактора,
+пустой документ — `emptyDoc` редактора).
 
 **Сессия.** На монтировании — подписки `shot:session` и `shot:end`, затем `shot_session()`; оба пути
 идемпотентны (`sessionChange`): другой `id` — новая сессия (сброс всего, `createEditorState()`,
@@ -3155,14 +3220,20 @@ innerHeight`; в окне они равны), позиция курсора — 
 внутрь и по-прежнему главнее) → внутри → полоса 10 px снаружи (двигает) → снаружи (драг — новая область,
 **только при инструменте «Выделение»**; клик снаружи — ничего). Чип размеров над левым верхним углом
 (двигает рамку; нет места или над ним панель — внутри угла, в 20 px от угловой ручки; скрыт при
-`dimensions=false`). `Ctrl+стрелки` — двигать рамку на 1/10 px, `Ctrl+Alt+стрелки` — размер от
-правого/нижнего края. Жесты хоста захватывают указатель на корне (переживают смену зон под ним);
+`dimensions=false`). `Ctrl+стрелки` — двигать рамку на 1 px (`Shift` — 10), `Alt+стрелки` — размер от
+правого/нижнего края (`Shift` — 10; INT-5: `Ctrl+Alt+стрелки` на части ПК перехватывает драйвер Intel —
+поворот экрана; это сочетание теперь ничего не делает). Подсказка — `title` чипа размеров и шпаргалка
+в Настройках → Скриншоты. Жесты хоста захватывают указатель на корне (переживают смену зон под ним);
 отпускание за окном ловится по `buttons === 0`.
 
 **Панель** (`Panel.svelte`): поповер r24/pad 8; `Toolbar` · `PropsBar` редактора (хост передаёт их
 сниппетами — редактор импортируется в одном месте) · Текст · Закрепить · Сохранить как… · Копировать ·
 Отмена (иконки-кнопки 32 px, подсказки с клавишами `Ctrl P` / `Ctrl Shift S` / `Ctrl C` / `Esc`) ·
-**Готово** (основная, `Enter`). Кнопки не забирают фокус (mousedown гасится) — `Enter`/`Space` после клика
+**Готово** (основная, `Enter`). Раскладка (INT-5, сверено с настоящим тулбаром) — сетка в две строки, как
+окно редактора: инструменты · действия сверху, полоса свойств под ними (~808 × 104 px); полоса свойств
+растёт («Меняет последний объект») внутри своей строки, панель не меняет размер и не перескакивает к
+другой стыковке; уже 860 px — одна колонка. Подсказки тулбара открываются от рамки (`tips`: под панелью
+снизу, над панелью сверху/внутри; нет места у края монитора — наоборот). Кнопки не забирают фокус (mousedown гасится) — `Enter`/`Space` после клика
 идут в клавиши оверлея (П-25); фокус с клавиатуры работает (`Enter` на сфокусированной кнопке нажимает её).
 OCR недоступен (`ocr_status().available = false`) → «Текст» `aria-disabled` с подсказкой «нужен языковой
 пакет» (не `disabled` — иначе подсказка не видна). Стыковка `dockPanel`: снизу снаружи (зазор 24 px — за
@@ -3172,10 +3243,10 @@ OCR недоступен (`ocr_status().available = false`) → «Текст» `
 
 **Клавиши** (`KeyboardEvent.code`): этап 2 — сначала `editor.handleKey(e)` (вернул `true` → всё); затем
 `Esc` → лестница; в поле ввода редактора хост больше ничего не трогает; `Enter` → `done`, `Ctrl+C` →
-`copy`, `Ctrl+S` → `save`, `Ctrl+Shift+S` → `save_as`, `Ctrl+P` → `pin`, `Ctrl(+Alt)+стрелки` — рамка.
-Двойной клик в «Выделении» на пустом месте (`isEmptyAt` по консервативным границам объектов, допуск 6 px
-окна) → `done`; `onintent` редактора (`done/copy/save/save_as/pin/text`) → тот же коммит, `close` → последний
-шаг лестницы. Повторный запрос во время `committing` игнорируется. Браузерные клавиши WebView2 глушатся
+`copy`, `Ctrl+S` → `save`, `Ctrl+Shift+S` → `save_as`, `Ctrl+P` → `pin`, `Ctrl+стрелки` / `Alt+стрелки` —
+рамка. Двойной клик в «Выделении» на пустом месте — интент редактора `done` (редактор знает настоящие
+границы объектов; детектор хоста удалён, INT-5); `onintent` редактора (`done/copy/save/save_as/pin/text`)
+→ тот же коммит, `close` → последний шаг лестницы. Повторный запрос во время `committing` игнорируется. Браузерные клавиши WebView2 глушатся
 (`isBrowserShortcut`), контекстное меню — тоже (правый клик во время жеста отменяет жест хоста/объект
 редактора, иначе ничего).
 
@@ -3188,7 +3259,8 @@ OCR недоступен (`ocr_status().available = false`) → «Текст» `
 
 **Коммит** (`commit`): `startCommit` → `committing` (кнопки неактивны, «Готово» с индикатором, курсор
 ожидания, клавиши глушатся) → рамка округляется и зажимается (`snapRect`) → если есть объекты и после
-`docForFrame` (сдвиг на `−рамка.x/y`, `w/h` = рамка, `crop: null`, объекты целиком вне рамки отброшены)
+`frameDoc` редактора (сдвиг на `−рамка.x/y`, `w/h` = рамка, `crop: null`, объекты целиком вне рамки по
+настоящим границам — `hit.ts::bounds` — отброшены)
 хоть один остался — `editor.exportRGBA(рамка)` + документ в заголовке; иначе тело без пикселей и `doc:
 null` (Rust режет кадр сам) → `shotCommit(header, rgba)` → `idle`. `text` — всегда без пикселей (OCR читает
 экран, а не аннотации). Ошибка → `commitFailed` (назад на этап, рамка и рисунок целы) + тост «Не удалось
@@ -3203,32 +3275,35 @@ null` (Rust режет кадр сам) → `shotCommit(header, rgba)` → `idle
 - Новая область драгом снаружи — только при инструменте «Выделение» (SPEC: «без активного
   инструмента»); с инструментом рисования нажатие снаружи ничего не делает.
 - Затемнение этапа 2 — 30 % (этапа 1 — 20 %, как в SPEC): рамка заметнее на светлом содержимом.
-- Двойной клик → «Готово» хост определяет по консервативным границам объектов (стрелка — по концам
-  + 4 толщины + `|bend|` как смещение в px; текст — оценка ширины по символам). Точнее может редактор —
-  тогда он шлёт `onintent('done')` сам; второй запрос безвреден.
+- Двойной клик → «Готово» — только интент редактора (INT-5; детектор хоста по консервативным границам
+  удалён).
 - Кольца выбора и ручки — белое + тёмная кромка поверх снимка (единственная «обводка» оверлея: маркер
   на пользовательском содержимом, а не рамка интерфейса); цвет в лупе — только снимок.
 
-**Опора на API редактора (§18.6) — сверить с W6-C при интеграции.** Оверлей импортирует редактор в
-**одном месте** (`Capture.svelte`: `./editorStub` → `$lib/editor`). Что используется:
+**Опора на API редактора (§18.6) — сверено с W6-C на INT-5, расхождений нет.** Оверлей импортирует
+редактор в **одном месте** (`Capture.svelte`, `$lib/editor`). Что используется:
 1. `createEditorState()` — один на сессию; передаётся пропом **`state`** в `Editor`, `Toolbar`,
    `PropsBar` (в списке пропов `Editor` в §18.6 его нет — имя `state` выбрано оверлеем).
 2. `<Editor bind:this state base doc mode="overlay" clip onintent>`; `onchange` не используется.
    `clip` меняется извне при каждом движении/ресайзе рамки; события редактор получает только внутри
    рамки (снаружи их перехватывает хост), но его холст — на весь монитор.
 3. `EditorApi`: `handleKey(e)` (первым на каждое нажатие этапа 2), `escape()`, `hasObjects()`, `doc()`
-   (координаты — px всего кадра монитора), `exportRGBA(rect)` (rect — px кадра; `width/height` результата
-   = rect), `tool()` (сравнивается только с `'select'`). `dirty()` и `setTool()` не используются.
+   (координаты — px всего кадра монитора), `exportRGBA(rect)` (rect — px кадра, целый после `snapRect`;
+   `width/height` результата = rect — ровно `rect_to_crop` Rust, иначе исходник и документ не хранятся),
+   `tool()` (сравнивается только с `'select'`). `dirty()` и `setTool()` не используются. Вид оверлея у
+   редактора — `z = ширина окна / doc.w`, без сдвига: тот же перевод px окна → px кадра, что у хоста.
+   Ещё из `$lib/editor`: `frameDoc(doc, рамка)`, `emptyDoc(w, h, unit)`; `Toolbar`/`PropsBar` — проп `tips`.
 4. `ToolId` содержит `'select'`; `EditorIntent` = `done | copy | save | save_as | pin | text | close`.
 5. Правый клик во время своего жеста редактор обрабатывает сам; на шаге «Выделение» `escape()`
    возвращает `true`, пока переключает инструмент.
 
-**Тесты** (node:test, 34): `captureTargets` (5 тестов LT + `WinRect` мока), `captureGeometry` (перевод при
+**Тесты** (node:test, 32 после INT-5): `captureTargets` (5 тестов LT + `WinRect` мока), `captureGeometry` (перевод при
 `scale` 1/1.5/2, клик/драг, `Shift`/`Alt`/квадрат у края, `snapRect`, движение/ресайз/переворот рамки,
-`Ctrl(+Alt)+стрелки`, ручки снаружи и втягивание у края, `hitFrame`, скрытие боковых ручек, лупа),
+`Ctrl+стрелки` / `Alt+стрелки`, ручки снаружи и втягивание у края, `hitFrame`, скрытие боковых ручек, лупа),
 `captureDock` (снизу / сверху / внутри для полного экрана и высокой рамки / прижим слева и справа / панель
 шире монитора, чип, лупа у краёв), `captureMachine` (машина состояний, `text`/`quick`, ошибка коммита,
-чужой `shot:end`, `sessionChange`, заголовок §18.4, лестница `Esc`, `docForFrame`, границы, `isEmptyAt`).
+чужой `shot:end`, `sessionChange`, заголовок §18.4, лестница `Esc`, документ рамки — `cropDoc` + `bounds`
+редактора, как `frameDoc`; пустой документ кадра).
 
 ### 18.8. QAO и закрепление (`src/windows/shots/`, `src/windows/pin/`, W6-E; нативное — W6-B)
 
@@ -3239,56 +3314,66 @@ null` (Rust режет кадр сам) → `shotCommit(header, rgba)` → `idle
   §18.10 и существующие `clip_copy`, `clips_delete`, `clip_ocr` + `text_copy`, `clip_drag_out`.
 - На время оверлея окно QAO прячет и возвращает Rust (W6-B `hide_for_capture` / `restore_after_capture`,
   стопка сохраняется); сам QAO на `shot:session` ничего не показывает и не прячет, только ставит таймеры
-  на паузу до `shot:end` (W6-E). `events::shot_session` пока шлёт только в `capture` — чтобы пауза
-  работала, событие нужно и окну `shots` (сниппет в отчёте W6-E).
+  на паузу до `shot:end` (W6-E). `events::shot_session` и `shot_end` шлют в `capture` и `shots` (INT-5).
 - Окно не активируется: никаких клавиш, фокус-кольцо не нужно; доступность — `aria-label` у кнопок.
 - **Закреплённые окна**: каждое окно `pin-<n>` на старте зовёт `shot_pin_get()` (Rust знает метку окна
   → запись) и показывает `imageUrl` (`liq://media`). Драг — `startDragging()`; колесо — масштаб окна
   (`shot_pin_resize({ scale })` — Rust меняет размер вокруг курсора); `Ctrl+колесо` — прозрачность
-  (CSS); двойной клик — 100 % ↔ исходный; `Esc`/× → `shot_pin_close()`; ПКМ — меню.
+  (CSS); двойной клик — 100 % ↔ исходный; `Esc`/× → `shot_pin_close()`; ПКМ — меню. `clips:changed` с
+  id своей записи (Rust шлёт его всем `pin-*`, INT-5) → `shot_pin_get()` снова: правка в редакторе —
+  новая картинка (`?v=` = версия записи), новый размер — тот же масштаб (`shot_pin_resize`), удалённая
+  запись — плашка «Картинка недоступна».
 
 **Нативное (W6-B, `screenshot/qao.rs`, `pin.rs`).**
 - **`shots`**: строится на своём потоке при первом захвате (`qao::hide_for_capture` — к коммиту области
   страница успевает загрузиться) или при первом `qao::show_added`; затем живёт скрытым. Свойства — §18.2
   (`focusable(false)` = `WS_EX_NOACTIVATE`, `focused(false)`, `disable_drag_drop_handler`,
-  `WDA_EXCLUDEFROMCAPTURE`, `WS_EX_TOOLWINDOW`). Ширина — константа `QAO_WIDTH` = **296** логических px
-  (карточка 248 + поле под тень; итог — по отчёту W6-E, меняется одна константа), высота — из
-  `shots_hud_layout({height})`, не больше рабочей области минус отступы; угол — `settings.screenshot.corner`
-  у **рабочей области** (`rcWork`, над панелью задач) монитора снимка (`ShotAdded.monitor` — имя устройства
-  GDI; монитор отключён — монитор курсора), отступ `MARGIN` = 16 логических px. Окно показывается только
-  после `shots_hud_layout` с высотой > 0 (размер известен) и без активации; `0` / `shots_hud_hide` — скрыть.
+  `WDA_EXCLUDEFROMCAPTURE`, `WS_EX_TOOLWINDOW`). Геометрия — по фронту W6-E (INT-5, `qao_rect`, тест):
+  ширина `QAO_WIDTH` = **304** логических px (карточка 256 + поле 24 × 2, `stack.ts::WINDOW_W`), высота —
+  из `shots_hud_layout({height})`, не больше рабочей области; **низ окна = низ рабочей области** (`rcWork`,
+  над панелью задач) монитора снимка (`ShotAdded.monitor` — имя устройства GDI; монитор отключён — монитор
+  курсора), сторона — `settings.screenshot.corner`, **без отступа** (зазор — поле 24 страницы). Окно
+  показывается только после `shots_hud_layout` с высотой > 0 (размер известен) и без активации; `0` /
+  `shots_hud_hide` — скрыть.
 - **API для W6-A**: `qao::show_added(app, ShotAdded)` (вместо прямого `events::shot_added`: окно может ещё не
   существовать), `qao::hide_for_capture(app)` (начало любой сессии, в т. ч. без оверлея),
   `qao::restore_after_capture(app)` (конец сессии — коммит или отмена). Все — с любого потока, не блокируют.
-- **Первое событие.** `shot:added` доходит только до подписавшейся страницы. Пока страница не загружена,
-  payload ждёт в `QaoState.pending`; по `PageLoadEvent::Finished` (колбэк `on_page_load` строителя окна)
-  через 400 мс (`FLUSH_DELAY`; страница подписывается при выполнении модуля, раньше `Finished`) очередь
-  уходит событиями. Перезагрузка страницы (`Started`) снова копит события. Надёжнее — команда-«рукопожатие»
-  `shots_hud_ready() -> ShotAdded[]` (предложение координатору, отчёт W6-B).
+- **Первое событие — `shots_pending` (INT-5, вместо задержки 400 мс).** `shot:added` доходит только до
+  подписавшейся страницы. Пока страница не позвала `shots_pending()`, payload ждёт в `QaoState.pending`
+  (`offer`); страница подписывается на `shot:added` и **после** этого зовёт `shots_pending()` → получает всё
+  накопленное (`claim`), а дальнейшие снимки Rust шлёт событием. Под одним замком — ни потерь, ни дублей
+  (тест `payloads_wait_until_the_page_claims_them`). Перезагрузка страницы (`PageLoadEvent::Started`) или
+  пересборка окна снова копят до следующего `shots_pending`.
 - **Временные файлы** (§18.4, снимок не в истории — `ShotAdded.tempPath` в `%TEMP%\Liqlip\shots\`): удаляются
   при пустой стопке (кроме выданных < 1,5 с назад), при выдаче пятого и далее (стопка держит 4), на старте —
-  весь каталог (`windows::init` → поток). Удаляются только обычные файлы прямо в этом каталоге после
-  `canonicalize` (тест), путь из payload сам по себе ничего не решает. Схемы для показа `tempPath` в карточке
-  нет (маршрут `liq` — узел/W6-A; предложение — в отчёте W6-B).
+  весь каталог (`windows::init` → `qao::init`, одна уборка на старте). Удаляются только обычные файлы прямо
+  в этом каталоге после `canonicalize` (`files::is_temp_file`, тест), путь из payload сам по себе ничего не
+  решает. Карточка показывает такой файл через `liq://temp/<имя>` и копирует / сохраняет его командами
+  `shot_temp_copy` / `shot_temp_save_as` (INT-5, §18.4).
 - **`pin-<n>`**: `shot_pin(id)` / `pin::open` (редактор, коммит W6-A) — запись `image`/`screenshot` с размером,
   иначе `invalid`. Метки — растущий счётчик процесса (`pin-1`, `pin-2`, …, не повторяются); до `MAX_PINS` = 6,
   седьмое уничтожает самое старое. Окно: прозрачное, без рамки, always-on-top, skip-taskbar, focusable,
   `focused(false)`, `shadow(false)`, вне Alt+Tab, **не** исключено из захвата; показ без активации (клик
   активирует — тогда работают `Esc` и меню). Размер: картинка 1:1 (1 px картинки = 1 физ. px монитора — снимок
-  выглядит как на экране), ужатая до 80 % монитора, плюс поле `BLEED` = **12 логических px** с каждой стороны
-  под тень страницы (W6-E рисует внутри; начальный масштаб страница считает по размеру окна минус поле);
+  выглядит как на экране), ужатая до 80 % монитора, плюс поле `BLEED` = **24 логических px** с каждой стороны
+  (INT-5, = `pinMath.ts::PIN_BLEED`) под тень страницы (W6-E рисует внутри; начальный масштаб страница
+  считает по размеру окна минус поле);
   по центру у курсора, внутри рабочей области. Запись заносится в `PinState` **до** построения — страница
-  спрашивает `shot_pin_get` сразу при загрузке. `shot_pin_get` — по метке вызывающего окна (`imageUrl` —
-  `liq://media/<id>?v=<n>`); `shot_pin_resize({scale})` — `scale` × 100 %, зажим 10–400 %, сторона ≤ 32 767 px,
-  точка картинки под курсором остаётся на месте (тест); `shot_pin_close` — `destroy()` (только для `pin-*`).
+  спрашивает `shot_pin_get` сразу при загрузке. `shot_pin_get` — по метке вызывающего окна, запись читается
+  заново (INT-5): размер — текущий (правка могла обрезать, он же для ресайза), `imageUrl` —
+  `liq://media/<id>?v=<версия записи>`, удалённая запись — `null`; `shot_pin_resize({scale})` — абсолютный
+  масштаб (физ. px экрана на px картинки, 1 = 100 %; окно = `round(картинка × scale)` физ. px + поле), зажим
+  10–400 %, сторона ≤ 32 767 px, точка картинки под курсором остаётся на месте (тест); `shot_pin_close` —
+  `destroy()` (только для `pin-*`).
 
 #### 18.8.1. Фронт QAO — как сделано (W6-E)
 
 Файлы: `src/windows/shots/` — `Shots.svelte` (корень: подписки, тик, мок-кнопки), `ShotCard.svelte`
 (карточка), `qao.ts` (контроллер без рун: стопка, таймеры, кнопки, жизненный цикл drag-out; корень
 передаёт `$state`-объект и настоящие команды, тест — обычный объект и подделки), `stack.ts` (чистая
-модель + геометрия), `shutter.ts` (звук), `glyphs/pin.svelte` (свой глиф «кнопка-булавка» в формате
-Heroicons — у Heroicons его нет). Тесты: `tests/shotsStack.test.mjs`, `tests/shotsQao.test.mjs`.
+модель + геометрия), `shutter.ts` (звук). Булавка — общая `<Ico name="pin">` (`src/lib/heroicons/pin.svelte`,
+INT-5: одна на оверлей, QAO, окно редактора и меню шелфа). Тесты: `tests/shotsStack.test.mjs`,
+`tests/shotsQao.test.mjs`.
 
 - **Геометрия окна (для W6-B).** Карточка 256 × 168 логических px: `raised`-сквиркл r16 с рамкой 4,
   внутри колодец картинки r12 (концентрично). Зазор 12. Вокруг стопки прозрачное поле `BLEED = 24`
@@ -3336,21 +3421,26 @@ Heroicons — у Heroicons его нет). Тесты: `tests/shotsStack.test.mj
 - **`clips:changed`**: `deleted` с `ids` — карточки этих записей уходят; `updated` — карточка берёт
   `clip_detail` (новая миниатюра после правки, `meta.shot.savedPath`); `reset` и `deleted` без `ids` —
   перепроверка всех (`not_found` → карточка уходит).
-- **`clip: null`** (тип «Скриншоты» выключен в хранении): превью нет (схема `liq` не отдаёт
-  `tempPath`), карточка показывает «Не в истории» с подсказкой и умеет только закрываться — все
-  команды контракта берут id записи. Нужен маршрут для временного файла и действия над ним — открытый
-  вопрос (отчёт W6-E).
+- **`clip: null`** (тип «Скриншоты» выключен в хранении или снимок > 64 Мп; INT-5): превью — временный
+  файл `liq://temp/<имя>` (`stack.ts::tempUrl`, имя — `tempName(tempPath)`), подсказка «Не в истории…»;
+  на ховере только Копировать (`shot_temp_copy`) · Сохранить как… (`shot_temp_save_as`; `null` — отмена,
+  молча) · ×. Не редактируется, не закрепляется, не перетаскивается (нужна запись). Файла уже нет →
+  тост «Этого снимка больше нет».
 - **Превью**: `clip.thumbUrl`, без него — `clip_detail(id).imageUrl`; пока грузится — скелетон колодца,
   битая — глиф. Загрузка ключуется по URL (сброс эффектом мог прийти после `load` закэшированной
   картинки и оставить скелетон).
 - **Звук** (`shutter.ts`): Web Audio API — два коротких шумовых щелчка через полосовой фильтр, ~60 мс,
   без файла; на каждое `shot:added` при `settings.screenshot.sound`. `AudioContext` без жеста
   пользователя может стартовать `suspended` (политика автозапуска Chromium); `resume()` пробуется,
-  отказ тихий. Играет ли звук в WebView2 без жеста — проверка INT-5 (вариант: общий для всех окон
-  `additional_browser_args` с `--autoplay-policy=no-user-gesture-required`, решает координатор).
+  отказ тихий. INT-5: все окна процесса строятся с `--autoplay-policy=no-user-gesture-required` (§18.2,
+  «Аргументы WebView2») — окно QAO никогда не активируется и жеста не получает. Слышен ли щелчок —
+  живая проверка.
 - **Мок** (`/shots.html`, только вне Tauri): капсула «Мок» вверху слева — «Добавить снимок»
   (`shotCapture('screen')` → мок шлёт `shot:added`), «Снимок · ошибка сохранения», «Снимок · не в
-  истории» (подменяют полезную нагрузку следующего `shot:added` у себя, мок не трогают).
+  истории» (подменяют полезную нагрузку следующего `shot:added` у себя, мок не трогают). В браузере
+  `liq://temp` не открывается — карточка «не в истории» показывает глиф вместо превью.
+- **Первый снимок** (INT-5): корень подписывается на `shot:added`, затем зовёт `shots_pending()` и
+  добавляет всё, что пришло до подписки (§18.8, «Нативное»); мок отвечает `[]`.
 
 #### 18.8.2. Фронт закреплённого окна — как сделано (W6-E)
 
@@ -3387,7 +3477,9 @@ Heroicons — у Heroicons его нет). Тесты: `tests/shotsStack.test.mj
 ### 18.9. Окно редактора (`src/windows/editor/`, W6-C; нативное — W6-B)
 
 > Замер: 2026-11-27 (W6-C: `EditorWindow.svelte` + `UnsavedDialog.svelte`, браузер на моке `/editor.html`, обе
-> темы; нативно не запускалось — `onCloseRequested`/`destroy()` проверит INT-5).
+> темы; нативно не запускалось — `onCloseRequested`/`destroy()` проверит INT-5). INT-5: окно ↔ `editor.rs`
+> сведены — `dirtyGuard`, смена записи с «Сохранить», «Готово» без изменений, «Закрепить» с несохранённым
+> (ниже, «Сведение INT-5»); `cargo test` и браузер на моке.
 
 - На старте `shot_editor_get()` → `ShotEditorPayload`; базовая картинка — `baseUrl` (`liq://base/<id>`).
   `shot:editor` — смена записи в уже открытом окне (если нет несохранённых изменений; иначе окно само
@@ -3395,36 +3487,54 @@ Heroicons — у Heroicons его нет). Тесты: `tests/shotsStack.test.mj
 - Действия: Копировать (`shot_editor_commit` с `action:'copy'` — копирует сведённое, запись не
   меняет) · Закрепить · Сохранить как… · Готово (`action:'done'` → `store::shots::apply_edit` + буфер +
   перезапись `saved_path` → окно закрывается). Тело — то же кадрирование §18.4 (`ShotEditorCommit`).
+  `Ctrl+S` в окне = «Готово» (SPEC §9.5).
+
+**Сведение INT-5 (решения координатора; окно и `editor.rs` по ним).**
+- **`dirtyGuard`** — `true` только в событии `shot:editor` (Rust запомнил смену и ждёт, но не требует,
+  ответа `shot_editor_switch`); `shot_editor_get` всегда `false`. Окно с изменениями спрашивает и отвечает
+  всегда; без изменений отвечает `switch(true)` только при `dirtyGuard: true` и сразу грузит новую запись.
+- **Смена записи с «Сохранить»**: окно шлёт `done` **старой** записи (`clipId` старой), затем
+  `shot_editor_switch(true)`. Rust помнит ожидающую смену (`EditorState.previous`) и после такого `done`
+  окно **не закрывает** (`after_effect(Done, switch_pending) = Nothing`, тест) — новая запись грузится в него.
+- **Тело без пикселей** (`width = height = 0`) — «текущая картинка записи» (`media\<id>.png`), не исходник.
+  **«Готово» без изменений** шлёт `done` без пикселей: запись не переписывается (П-23 LT), картинка записи
+  копируется в буфер, если `settings.screenshot.copy`, окно закрывается (Rust). С изменениями — пиксели и
+  документ: `commit::apply_edit` + буфер + перезапись сохранённого файла + закрытие.
+- **«Закрепить» с несохранёнными изменениями**: окно шлёт `pin` с пикселями → Rust сначала делает то же,
+  что «Готово» (`apply_edit` + буфер + файл), но окно не закрывает, затем `pin::open` — пин показывает то,
+  что в редакторе; окно `markSaved()`. Без изменений — `pin` без пикселей: закрепляется запись как есть.
+- Копировать / Сохранить как… всегда шлют сведённое текущее (с несохранённым), запись не меняют
+  (`save_as` пишет выбранный путь в `saved_path` записи).
 - Закрытие с изменениями: окно перехватывает `onCloseRequested` → диалог (свой, внутри окна).
 
 **Нативное (W6-B, `screenshot/editor.rs`).**
 - **Окно**: одно, строится по требованию из `shot_edit` (async) — §18.2; обычное окно (системный заголовок,
   панель задач, Alt+Tab, тема из настроек), мин. 640×420; размер — картинка 1:1 + место под панели (`CHROME`
-  48×136 логических px — раскладка W6-C, меняются две константы), ужатая до 80 % рабочей области монитора
+  48×156 логических px — раскладка W6-C: поле вписывания 24 × 2 по ширине; 12 + 40 + 8 + 40 + 8 панелей + 48
+  поля по высоте, INT-5), ужатая до 80 % рабочей области монитора
   курсора, по центру (тест). Перед показом открытый шелф прячется (`picker::hide_now`: always-on-top закрыл бы
   редактор), затем `show` + `SetForegroundWindow` (право есть после клика в QAO/шелфе или хоткея; отказ —
   мигает кнопка на панели задач, ничего не форсируем). Заголовок «Имя — Liqlip», следует за языком
   (`settings::subscribe`). Имя записи: заголовок пользователя → имя сохранённого файла без расширения →
-  «Снимок экрана 1920×1080» / «Картинка 800×600» (строки временно в `editor.rs`, ключи `i18n_native` — сниппет).
+  «Снимок экрана 1920×1080» / «Картинка 800×600» (`i18n_native`: `EditorUntitledShot`, `EditorUntitledImage`).
 - **Состояние** (`EditorState`): `current` (запись окна), `previous` (до неотвеченной смены), `building`.
   `shot_editor_get` → `current` (`null` — окна нет); `baseUrl` — `liq://base/<id>?v=<растущий n>`; `width/height`
-  — размер исходника (`doc.w/h`, без документа — записи); `doc` — `store::shots::doc` (шов, до INT-5 `null`);
-  `dirtyGuard` — `false`.
+  — размер исходника (`doc.w/h`, без документа — записи); `doc` — `Store::shot_doc(id).doc` (строка с
+  нечитаемым JSON — `null`); `dirtyGuard` — `false`.
 - **Смена записи**: повторный `shot_edit(id)` при открытом окне — та же запись → окно вперёд; другая →
   `previous = current`, `current = id`, `shot:editor` с `dirtyGuard: true`, окно вперёд. Страница без изменений
   просто грузит запись (ответ не обязателен); с изменениями спрашивает и отвечает `shot_editor_switch(accept)`:
   `true` — смена подтверждена, `false` — `current` снова прежняя. `shot_edit` во время построения окна только
   меняет `current` (страница спросит `shot_editor_get` после загрузки).
-- **Коммит** — `editor::commit(app, req, rgba)` (async; подключение вместо `commit::editor_commit` — сниппет
-  `screenshot/mod.rs` в отчёте W6-B): картинка — сведённый RGBA тела (PNG), без пикселей — исходник
-  `frame::serve("/base/<id>")`. `done` → `store::shots::apply_edit` → буфер, если `settings.screenshot.copy` →
-  перезапись `saved_path` → окно уничтожается (если смена записи не ждёт ответа — тогда окно остаётся: страница
-  сохраняла перед сменой). `copy` → только буфер. `save_as` → диалог для этих PNG-байт. `pin` →
-  `pin::open(id)` — закрепляется **запись как есть** (несохранённые аннотации не видны — открытый вопрос в
-  отчёте W6-B). Примитивы W6-A — швы `editor::seam` (`doc`, `apply_edit`, `copy_png`, `rewrite_saved`,
-  `save_png_as`) с точными сигнатурами; до INT-5 они отвечают `unimplemented: … (W6-A)`.
-- **`editor::after_commit(app, action)`** (хук узла W5-A после `commit::editor_commit`) — та же оконная часть
-  для показываемой записи: `done` закрывает, `pin` закрепляет.
+- **Коммит** — `editor::commit(app, req, rgba)` (async, команда `shot_editor_commit` зовёт его напрямую с
+  INT-5; швы `editor::seam`, `after_commit` и заглушка `commit::editor_commit` удалены). Шаги W6-A напрямую:
+  `done`/`pin` с пикселями → `apply` = `commit::apply_edit(app, id, rgba, w, h, doc)` (PNG, хэш, миниатюра,
+  стор, `clips:changed`) + `paste::copy_png(png, Some((w, h, rgba)))` при `settings.screenshot.copy` +
+  `files::overwrite_saved(app, id, png)` (ошибки после правки — лог); `done` → окно уничтожается (кроме
+  ожидающей смены), `pin` → `pin::open`. `done` без пикселей → картинка записи в буфер (при `copy`) +
+  закрытие. `copy` → `paste::copy_png` (пиксели тела или картинка записи). `save_as` →
+  `files::save_png_as(app, id, png).await` (диалог без родителя, формат по расширению, `saved_path`), ответ —
+  свежая запись.
 
 **Как сделано (W6-C).** `editor.ts` монтирует `EditorWindow.svelte` (заглушка `Editor.svelte` W5-A удалена).
 - **Загрузка**: `shot_editor_get()`; `null` → пустое состояние (учит: «выберите в шелфе и нажмите E»); иначе
@@ -3437,11 +3547,13 @@ Heroicons — у Heroicons его нет). Тесты: `tests/shotsStack.test.mj
 - **Раскладка**: ряд 1 — `Toolbar` (инструменты + отмена/возврат) слева, справа Копировать · Закрепить ·
   Сохранить как… (круглые, с подсказкой и клавишей) · **Готово** (основная капсула); ряд 2 — `PropsBar` слева, справа
   масштаб (− · % · + · `?`); ряды переносятся на узком окне (мин. 640×420). Ниже — холст `Editor mode="window"`.
-- **Готово** (`Enter` в покое, кнопка, `Ctrl+S`): нет изменений (`dirty() == false`) → окно просто закрывается
-  (`destroy()`; запись не переписывается — П-23 LT); иначе `exportRGBA(doc.crop ?? вся картинка)` → тело §18.4
-  (`frameBody`) → `shotEditorCommit({clipId, action:'done', doc, width, height}, rgba)` → `markSaved()`; окно закрывает
-  Rust (`editor::after_commit`, W6-B). В браузере — тост «Сохранено». Копировать (`Ctrl+C`), Закрепить (`Ctrl+P`),
-  Сохранить как… (`Ctrl+Shift+S`) — тот же коммит с `copy`/`pin`/`save_as`, окно остаётся, тост; ошибка — тост с
+- **Готово** (`Enter` в покое, кнопка, `Ctrl+S`): нет изменений (`dirty() == false`) → `done` без пикселей
+  (INT-5: запись не переписывается — П-23 LT, но картинка уходит в буфер, если «Копировать» включено; окно закрывает
+  Rust); иначе `exportRGBA(doc.crop ?? вся картинка)` → тело §18.4 (`frameBody`) →
+  `shotEditorCommit({clipId, action:'done', doc, width, height}, rgba)` → `markSaved()`; окно закрывает Rust
+  (`editor::commit`). В браузере — тост «Сохранено» / «Изменений нет». Копировать (`Ctrl+C`), Сохранить как…
+  (`Ctrl+Shift+S`) — тот же коммит с `copy`/`save_as`, окно остаётся, тост; Закрепить (`Ctrl+P`) — `pin`, с
+  несохранённым — с пикселями (Rust применяет правку, затем пин; окно `markSaved()`); ошибка — тост с
   текстом `errorMessage` (диалог и окно не закрываются, работа не теряется). Во время коммита кнопки неактивны,
   у нажатой — вращающаяся иконка.
 - **Несохранённое**: `onCloseRequested` (только в Tauri) — при `dirty()` `preventDefault` и диалог «Сохранить /
@@ -3455,9 +3567,8 @@ Heroicons — у Heroicons его нет). Тесты: `tests/shotsStack.test.mj
   остальное — `isBrowserShortcut` гасит клавиши WebView2.
 - **Мок** не менялся: браузерная проверка открывает свежий снимок через `shotCapture("screen")` + `shotEdit(id)` +
   `mockEmit("shot:editor", await shotEditorGet())` (заодно проверяет переключение записи).
-- **Для W6-B**: после `done` окно закрывает `after_commit`; при переключении записи с сохранением окно шлёт
-  `done` **старой** записи и затем `shot_editor_switch(true)` — `after_commit` не должен закрывать окно, пока ждёт
-  ответ на переключение (решение — за координатором, см. отчёт W6-C).
+- **Сведено на INT-5** (см. «Сведение INT-5» выше): после `done` окно закрывает `editor::commit`; при
+  переключении записи с сохранением окно не закрывается, пока смена ждёт ответа.
 
 ### 18.10. Контракт (W5-A вносит в §9 и код; агенты W6 только реализуют)
 
@@ -3529,18 +3640,31 @@ screenshot: {
 | `shots_hud_hide` | → `()` |
 | `shot_status` | → `ShotStatus` |
 | `open_windows_settings` | `page: 'keyboard'` → `()` (`ms-settings:easeofaccess-keyboard`) |
+| `shots_pending` | → `ShotAdded[]` — INT-5: страница QAO подписалась; пришедшие раньше `shot:added` |
+| `shot_temp_copy` | `name` → `()` — INT-5: временный файл карточки «не в истории» в буфер |
+| `shot_temp_save_as` | `name` → `string \| null` — INT-5: «Сохранить как…» для него |
+| `pick_folder` (settings) | → `string \| null` — INT-5: выбор папки снимков; `open_path` += `'shots'` |
 
 **События**:
 
 | Событие | Payload | Кто → кому |
 |---|---|---|
-| `shot:session` | `ShotSession` | screenshot → capture (начало сессии, смена монитора) |
+| `shot:session` | `ShotSession` | screenshot → capture (начало сессии, смена монитора), shots (пауза таймеров; INT-5) |
 | `shot:end` | `{ sessionId: number }` | screenshot → capture, shots |
-| `shot:added` | `{ clip: Clip \| null; savedPath: string \| null; tempPath: string \| null; monitor: string; error: 'save_failed' \| null }` | screenshot → shots |
-| `shot:editor` | `ShotEditorPayload` | screenshot → editor |
-| `hud:show` | `kind` += `'countdown' \| 'shot_failed' \| 'text_copied' \| 'text_empty'` | screenshot → hud |
+| `shot:added` | `{ clip: Clip \| null; savedPath: string \| null; tempPath: string \| null; monitor: string; error: 'save_failed' \| null }` | screenshot → shots (до `shots_pending` — копится в Rust; INT-5) |
+| `shot:editor` | `ShotEditorPayload` (`dirtyGuard: true` — только здесь) | screenshot → editor |
+| `hud:show` | `kind` += `'countdown' \| 'shot_failed' \| 'text_copied' \| 'text_empty' \| 'text_unavailable'` (INT-5) | screenshot → hud |
+| `clips:changed` | (§9.7) | … → ещё и все `pin-*` (фильтр по префиксу метки; INT-5) |
 
-**URI**: `/shot/<sessionId>/<monitorIndex>.bmp` · `/base/<clipId>?v=<n>` (§18.3).
+**URI**: `/shot/<sessionId>/<monitorIndex>.bmp` · `/base/<clipId>?v=<n>` (§18.3) · `/temp/<имя>` (INT-5, §9.8).
+
+**Смысл полей (INT-5).** `ShotEditorPayload.dirtyGuard` — `true` только в событии `shot:editor`: Rust
+запомнил смену записи и ждёт (не требует) `shot_editor_switch`; окно с несохранённым спрашивает;
+`shot_editor_get` — всегда `false`. `ShotEditorCommit` без пикселей (`width = height = 0`) — текущая
+картинка записи; `done` без пикселей — «ничего не менялось» (запись не переписывается, буфер по
+настройке, окно закрывается); `pin` с пикселями — правка применяется, затем пин (§18.9). Документ
+(§18.6): `rect`/`ellipse` += `round?: boolean` (аддитивно, у эллипса не действует); `arrow.bend` —
+смещение середины дуги от середины хорды, px исходника, перпендикулярно хорде.
 
 **Мок** (`src/lib/ipc/mock/shots.ts`, W5-A): сессия с кадром — сгенерированная в браузере «фальшивая
 рабочая поверхность» (canvas → blob URL: окна-прямоугольники с заголовками и текстом, 1920×1080, `scale`
@@ -3574,14 +3698,14 @@ RGBA или кроп кадра; запись `screenshot` в мок-ленту 
 | Подмодуль | Функции (W5-заглушки) | Агент |
 |---|---|---|
 | `session.rs` | `struct SessionState` (Default; поля — W6-A) · `init(app)` (пусто) · `capture(app, mode: ShotMode, delay: Option<u32>) -> Result<(), String>` · `current(app) -> Result<Option<ShotSession>, String>` · `stage(app, session_id: i64, stage: ShotStage) -> Result<(), String>` · `cancel(app, session_id: i64) -> Result<(), String>` · `on_capture_close(app)` (пусто) | W6-A |
-| `commit.rs` | `commit(app, req: ShotCommit, rgba: Option<&[u8]>) -> Result<ShotCommitResult, String>` · `editor_commit(app, req: ShotEditorCommit, rgba: Option<&[u8]>) -> Result<Clip, String>` (пиксели — срез тела IPC, живёт до конца вызова; на другой поток — `to_vec()`) | W6-A |
+| `commit.rs` | `commit(app, req: ShotCommit, rgba: Option<&[u8]>) -> Result<ShotCommitResult, String>` · `editor_commit(app, req: ShotEditorCommit, rgba: Option<&[u8]>) -> Result<Clip, String>` (пиксели — срез тела IPC, живёт до конца вызова; на другой поток — `to_vec()`; **INT-5: удалена** — команда зовёт `editor::commit`) | W6-A |
 | `files.rs` | `save(app, id: i64) -> Result<String, String>` · `async save_as(app: AppHandle, id: i64) -> Result<Option<String>, String>` · `reveal(app, id: i64) -> Result<(), String>` | W6-A (по §18.1; в диспетчере W6 «сохранение» записано за B — решает координатор) |
 | | **W6-A, как сделано:** папка `screenshot.folder` или `<Pictures>\Liqlip` (`SHGetKnownFolderPath(FOLDERID_Pictures)`); имя — шаблон: `{date}` = `yyyy-MM-dd`, `{time}` = `HHmmss` (как имена «Ножниц», без `:`), `{app}`, `{n}` — наименьшее свободное ≥ 1; без `{n}` занятое имя получает ` (2)`, ` (3)`…; запрещённые символы Windows выбрасываются, пробелы схлопываются, хвостовые точки/пробелы срезаются, зарезервированные имена (`CON`, `COM1`…) получают `_`; ≤ 150 символов; имя занимается атомарно (`create_new`). `save` — `{date}`/`{time}` момента создания записи; `save_as` / `save_png_as` — диалог без родителя, формат по расширению; `reveal` — `reveal_item_in_dir` плагина `opener` (`SHOpenFolderAndSelectItems`, как `clip_reveal`), нет файла → `not_found` | |
 | `frame.rs` | `serve(app, path: &str) -> Option<(String, Vec<u8>)>` (`None` → 404) | W6-A |
 | `grab.rs` · `targets.rs` | пустые (только описание): делегатов команд нет | W6-A |
 | `windows.rs` | `init(app)` (пусто) · `exclude_from_capture(win: &WebviewWindow) -> Result<(), String>` (**реализовано** W5) | W6-B |
 | `qao.rs` | `struct QaoState` · `layout(app, height: f64) -> Result<(), String>` · `hide(app) -> Result<(), String>` | W6-B |
-| `editor.rs` | `struct EditorState` · `open(app, id: i64) -> Result<(), String>` · `payload(app) -> Result<Option<ShotEditorPayload>, String>` · `switch(app, accept: bool) -> Result<(), String>` · `after_commit(app, action: ShotEditorAction)` (пусто; `done` → закрыть окно) | W6-B |
+| `editor.rs` | `struct EditorState` · `open(app, id: i64) -> Result<(), String>` · `payload(app) -> Result<Option<ShotEditorPayload>, String>` · `switch(app, accept: bool) -> Result<(), String>` · `after_commit(app, action: ShotEditorAction)` (пусто; `done` → закрыть окно; **INT-5: удалена** — оконная часть внутри `editor::commit`) | W6-B |
 | `pin.rs` | `struct PinState` · `open(app, id: i64) -> Result<(), String>` · `payload(app, win: &WebviewWindow) -> Result<Option<PinPayload>, String>` · `resize(app, win, scale: f64) -> Result<(), String>` · `close(app, win) -> Result<(), String>` | W6-B |
 | `status.rs` | `status(app) -> Result<ShotStatus, String>` · `open_windows_settings(app, page: WindowsSettingsPage) -> Result<(), String>` | W6-B |
 
@@ -3597,7 +3721,7 @@ RGBA или кроп кадра; запись `screenshot` в мок-ленту 
 **Где код уточняет §18.10** (подробно — §9.10): `Counts += screenshot` = `Counts.kinds.screenshot`;
 `ShotStatus.hotkeyErrors` — `SettingsError[]`; `shot_capture` и `shots_hud_layout` — именованные
 аргументы (`{mode, delay}`, `{height}`), а не объект-запрос; `serve_uri` отдаёт `(mime, bytes)`, ответ
-строит `lib.rs`; после `shot_editor_commit` вызывается `editor::after_commit` (W6-B); права — отдельный
+строит `lib.rs`; `shot_editor_commit` → `editor::commit` (INT-5; `after_commit` удалён); права — отдельный
 `capabilities/screenshot.json` (`pin-*`: `core:window:allow-start-dragging`; `editor`:
 `core:window:allow-destroy` — `onCloseRequested` в `@tauri-apps/api` 2.11 сам зовёт `destroy()`, если
 обработчик не отменил закрытие); таймер QAO — поле `timeout` (в §18.8 было `overlayTimeout`).

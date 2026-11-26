@@ -9,7 +9,13 @@
 //! - **Size**: the picture at 100 % = 1 picture px per physical px of the monitor (a screenshot
 //!   pinned on the monitor it came from looks exactly as it did), shrunk to fit 80 % of that
 //!   monitor, plus [`BLEED`] logical px of transparent margin on each side. Centred on the
-//!   cursor, kept inside the work area.
+//!   cursor, kept inside the work area. `shot_pin_resize { scale }` is ABSOLUTE (W6-E's page,
+//!   `pinMath.ts`): physical screen px per picture px, 1 = 100 %, 0.1–4 — the window becomes
+//!   `round(picture × scale)` physical px + the bleed, around the cursor.
+//! - **Live record**: `clips:changed` reaches every `pin-*` window (`events.rs`); the page asks
+//!   [`payload`] again, which reads the record's current size and version (`?v=`) — an edit
+//!   in the editor shows up in the pin; a deleted record answers `null` (the page's
+//!   "unavailable" notice).
 //! - **Labels** `pin-<n>` with a counter that never repeats in a process (a window still being
 //!   destroyed never clashes with a new one). Up to [`MAX_PINS`]; the next one closes the oldest.
 //!   Closing = destroying; `WindowEvent::Destroyed` drops the entry.
@@ -22,8 +28,9 @@ use tauri::{AppHandle, Manager, PhysicalPosition, PhysicalSize, WebviewUrl, Webv
 
 /// At most this many pins at once (SPEC §9.5).
 pub(crate) const MAX_PINS: usize = 6;
-/// Transparent margin around the picture for the page's shadow, logical px (W6-E draws in it).
-pub(crate) const BLEED: f64 = 12.0;
+/// Transparent margin around the picture for the page's shadow, logical px (W6-E draws in it:
+/// `src/windows/pin/pinMath.ts::PIN_BLEED`).
+pub(crate) const BLEED: f64 = 24.0;
 /// `shot_pin_resize` limits (10 %–400 %).
 pub(crate) const SCALE_MIN: f64 = 0.1;
 pub(crate) const SCALE_MAX: f64 = 4.0;
@@ -108,6 +115,7 @@ fn open_now(app: &AppHandle, id: i64) -> Result<(), String> {
         .visible(false)
         .inner_size(lw, lh)
         .theme(w::native_theme(app))
+        .additional_browser_args(w::BROWSER_ARGS)
         .build();
     let win = match built {
         Ok(win) => win,
@@ -139,19 +147,26 @@ fn open_now(app: &AppHandle, id: i64) -> Result<(), String> {
     posted.map_err(|e| format!("failed: {e}"))
 }
 
-/// `shot_pin_get` — the record of the calling `pin-<n>` window (`None`: unknown window).
+/// `shot_pin_get` — the record of the calling `pin-<n>` window as it is NOW (`None`: unknown
+/// window, or its record was deleted). The size is re-read (an edit may have cropped it) and
+/// kept for [`resize`]; `?v=` is the record's version, so an edited picture is fetched anew.
 pub(crate) fn payload(app: &AppHandle, win: &WebviewWindow) -> Result<Option<PinPayload>, String> {
     let label = win.label();
-    let found = with(app, |st| st.pins.iter().find(|p| p.label == label).map(|p| (p.clip_id, p.w, p.h))).flatten();
-    let Some((clip_id, width, height)) = found else { return Ok(None) };
-    let n = label.strip_prefix(events::PIN_PREFIX).unwrap_or("0");
-    Ok(Some(PinPayload {
-        clip_id,
-        // `?v=` per window: the record's picture may have been edited since another pin loaded it.
-        image_url: format!("http://liq.localhost/media/{clip_id}?v={n}"),
-        width,
-        height,
-    }))
+    let found = with(app, |st| st.pins.iter().find(|p| p.label == label).map(|p| p.clip_id)).flatten();
+    let Some(clip_id) = found else { return Ok(None) };
+    let store = app.try_state::<Store>().ok_or("failed: store")?;
+    let src = match store.shot_source(clip_id) {
+        Ok(src) => src,
+        Err(e) if e.starts_with("not_found") => return Ok(None),
+        Err(e) => return Err(e),
+    };
+    let (width, height) = (src.width.max(1), src.height.max(1));
+    with(app, |st| {
+        if let Some(p) = st.pins.iter_mut().find(|p| p.label == label) {
+            (p.w, p.h) = (width, height);
+        }
+    });
+    Ok(Some(PinPayload { clip_id, image_url: format!("http://liq.localhost/media/{clip_id}?v={}", src.version), width, height }))
 }
 
 /// `shot_pin_resize { scale }` — the picture at `scale` × 100 % (clamped to 10 %–400 %),
@@ -243,24 +258,24 @@ mod tests {
     fn a_pin_is_the_picture_at_100_percent_centred_on_the_cursor() {
         let m = mon(0, 1920, 1080, 1.0);
         let r = pin_rect(&m, Some((960, 500)), 400, 300);
-        assert_eq!(r, PxRect { x: 960 - 212, y: 500 - 162, w: 424, h: 324 });
+        assert_eq!(r, PxRect { x: 960 - 224, y: 500 - 174, w: 448, h: 348 });
         // Near the corner it is pushed back inside the work area (above the taskbar).
         let r = pin_rect(&m, Some((1915, 1075)), 400, 300);
         assert_eq!((r.x + r.w, r.y + r.h), (1920, 1040));
         // At 150 % the bleed is in logical px, the picture stays 1:1.
         let r = pin_rect(&mon(1920, 2880, 1620, 1.5), Some((3000, 800)), 400, 300);
-        assert_eq!((r.w, r.h), (436, 336));
+        assert_eq!((r.w, r.h), (472, 372));
     }
 
     #[test]
     fn a_big_picture_takes_at_most_80_percent_of_the_monitor() {
         let m = mon(0, 1920, 1080, 1.0);
         let r = pin_rect(&m, None, 3840, 2160);
-        assert_eq!((r.w - 24, r.h - 24), (1536, 864));
+        assert_eq!((r.w - 48, r.h - 48), (1536, 864));
         // Taller than the work area (a huge taskbar): aligned to its top edge.
         let short = Mon { work: PxRect { x: 0, y: 0, w: 800, h: 400 }, ..mon(0, 800, 600, 1.0) };
         let r = pin_rect(&short, Some((10, 10)), 100, 4000);
-        assert_eq!((r.x, r.y, r.h), (0, 0, 480 + 24));
+        assert_eq!((r.x, r.y, r.h), (0, 0, 480 + 48));
     }
 
     #[test]

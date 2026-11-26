@@ -29,14 +29,15 @@ export interface ShotToast {
   until: number;
 }
 
-/** What a card is waiting for (its button shows as busy, a second press is ignored). */
-export type ShotBusy = "copy" | "edit" | "pin" | "save" | "reveal" | "text" | "delete";
+/** What a card is waiting for (its button shows as busy, a second press is ignored).
+ *  `saveAs` — only a card without a record (its temp file, `shot_temp_save_as`). */
+export type ShotBusy = "copy" | "edit" | "pin" | "save" | "reveal" | "text" | "delete" | "saveAs";
 
 export interface Shot {
   /** `clip:<id>` or `tmp:<tempPath>` — one card per record */
   key: string;
   clip: Clip | null;
-  /** thumbnail or full picture URL; `null` — nothing to show (a shot kept out of history) */
+  /** thumbnail or full picture URL (a shot kept out of history: its temp file, `tempUrl`) */
   preview: string | null;
   savedPath: string | null;
   tempPath: string | null;
@@ -49,6 +50,16 @@ export interface Shot {
   busy: ShotBusy | null;
   toast: ShotToast | null;
 }
+
+/** The bare file name of a temp shot (`C:\…\Liqlip\shots\shot-1-0.png` → `shot-1-0.png`) —
+ *  what `liq://temp/<name>`, `shot_temp_copy` and `shot_temp_save_as` take (Rust serves and
+ *  touches only plain files directly inside `%TEMP%\Liqlip\shots\`, INT-5). */
+export function tempName(tempPath: string): string {
+  return tempPath.split(/[\\/]/).pop() ?? "";
+}
+
+/** The preview of a card without a record. */
+export const tempUrl = (tempPath: string): string => `http://liq.localhost/temp/${encodeURIComponent(tempName(tempPath))}`;
 
 /** One card per record: the clip id, else the temporary file (`clip: null`). */
 export function shotKey(p: Pick<ShotAdded, "clip" | "tempPath">): string | null {
@@ -65,7 +76,7 @@ export function makeShot(p: ShotAdded, timeout: number): Shot | null {
   return {
     key,
     clip: p.clip,
-    preview: p.clip?.thumbUrl ?? null,
+    preview: p.clip ? (p.clip.thumbUrl ?? null) : p.tempPath ? tempUrl(p.tempPath) : null,
     savedPath: p.savedPath ?? p.clip?.meta.shot?.savedPath ?? null,
     tempPath: p.tempPath,
     error: p.error,

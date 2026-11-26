@@ -3,13 +3,14 @@
   // (r12 — concentric). The picture is the click target (→ editor) and the drag source (> 6 px →
   // PNG file into any app). On hover: the tools capsule in the middle (ink, 40 px, 32 px circles
   // inset 4 — the toast geometry) — Copy · Edit · Pin · Save | Show in folder · Text · Delete —
-  // and × in the top-left corner (24 px, inset 4: 12 + 4 = 16). The timer strip, the toasts and
+  // and × in the top-left corner (24 px, inset 4: 12 + 4 = 16). A shot kept out of history
+  // (`clip: null`) shows its temp file (`liq://temp/<name>`) and only Copy · Save as… · ×
+  // (INT-5); it can't be edited, pinned or dragged. The timer strip, the toasts and
   // the save notice live INSIDE the card, never over a neighbour (LT defect П-16). The window is
   // never activated, so there are no keys; every button has an `aria-label`.
   import Ico from "$lib/components/Ico.svelte";
   import type { IconName } from "$lib/icons";
   import { t, type TranslationKey } from "$lib/i18n/index.svelte";
-  import PinGlyph from "./glyphs/pin.svelte";
   import type { OcrGate, Qao, ShotCmd } from "./qao";
   import { progress, type Shot } from "./stack";
 
@@ -49,23 +50,32 @@
   interface Tool {
     cmd: ShotCmd;
     label: TranslationKey;
-    icon: IconName | "pin";
+    icon: IconName;
     disabled?: boolean;
     hint?: TranslationKey;
   }
-  const tools = $derived.by((): Tool[] => [
-    { cmd: "copy", label: "shots.copy", icon: "copy" },
-    { cmd: "edit", label: "shots.edit", icon: "edit" },
-    { cmd: "pin", label: "shots.pin", icon: "pin" },
-    shot.savedPath ? { cmd: "reveal", label: "shots.reveal", icon: "folderOpen" } : { cmd: "save", label: "shots.save", icon: "download" },
-    {
-      cmd: "text",
-      label: "shots.text",
-      icon: "ocr",
-      disabled: ocr !== "ready",
-      hint: ocr === "off" ? "shots.textOff" : ocr === "nolang" ? "shots.textNoLang" : undefined,
-    },
-  ]);
+  const tools = $derived.by((): Tool[] =>
+    hasRecord
+      ? [
+          { cmd: "copy", label: "shots.copy", icon: "copy" },
+          { cmd: "edit", label: "shots.edit", icon: "edit" },
+          { cmd: "pin", label: "shots.pin", icon: "pin" },
+          shot.savedPath ? { cmd: "reveal", label: "shots.reveal", icon: "folderOpen" } : { cmd: "save", label: "shots.save", icon: "download" },
+          {
+            cmd: "text",
+            label: "shots.text",
+            icon: "ocr",
+            disabled: ocr !== "ready",
+            hint: ocr === "off" ? "shots.textOff" : ocr === "nolang" ? "shots.textNoLang" : undefined,
+          },
+        ]
+      : shot.tempPath
+        ? [
+            { cmd: "copy", label: "shots.copy", icon: "copy" },
+            { cmd: "saveAs", label: "shots.saveAs", icon: "download" },
+          ]
+        : [],
+  );
 
   function run(cmd: ShotCmd): void {
     void qao.act(shot.key, cmd);
@@ -135,7 +145,7 @@
 
   <span class="veil" aria-hidden="true"></span>
 
-  {#if hasRecord}
+  {#if tools.length}
     <div class="tools">
       {#each tools as tool (tool.cmd)}
         <button
@@ -149,14 +159,12 @@
         >
           {#if shot.busy === tool.cmd}
             <span class="spin"><Ico name="loaderCircle" size={16} /></span>
-          {:else if tool.icon === "pin"}
-            <span class="ico ico--static" style="font-size:16px" aria-hidden="true"><PinGlyph /></span>
           {:else}
             <Ico name={tool.icon} size={16} />
           {/if}
         </button>
       {/each}
-      <button
+      {#if hasRecord}<button
         type="button"
         class="tool tool--delete"
         disabled={shot.busy !== null && shot.busy !== "delete"}
@@ -166,7 +174,7 @@
         onclick={() => run("delete")}
       >
         {#if shot.busy === "delete"}<span class="spin"><Ico name="loaderCircle" size={16} /></span>{:else}<Ico name="trash" size={16} />{/if}
-      </button>
+      </button>{/if}
     </div>
   {/if}
 
@@ -267,6 +275,11 @@
   .empty__text {
     font-size: var(--text-secondary);
     font-weight: 500;
+  }
+  /* the tools capsule takes the middle on hover (a temp card whose picture is gone) */
+  .card:hover .empty__text,
+  .card:focus-within .empty__text {
+    visibility: hidden;
   }
 
   /* Hover: a light veil over the picture (half the scrim) so the tools read on any shot. */

@@ -242,7 +242,7 @@ export function savedPathOf(c: Pick<MenuClip, "kind" | "meta">): string | null {
 function pictureItems(): MenuNode[] {
   return [
     { id: "shotEdit", cmd: "shotEdit", label: "picker.shot.menu.edit", icon: "edit", keys: "Ctrl E", chord: C.edit },
-    { id: "shotPin", cmd: "shotPin", label: "picker.shot.menu.pin", icon: "layers", keys: "Ctrl P", chord: C.pin },
+    { id: "shotPin", cmd: "shotPin", label: "picker.shot.menu.pin", icon: "pin", keys: "Ctrl P", chord: C.pin },
     { id: "shotSaveAs", cmd: "shotSaveAs", label: "picker.shot.menu.saveAs", icon: "download" },
   ];
 }

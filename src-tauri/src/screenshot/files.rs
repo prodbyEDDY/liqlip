@@ -12,7 +12,9 @@
 //!   second never overwrite each other.
 //! - **Format**: PNG (the record's bytes as they are) or JPG (`image`'s encoder, quality
 //!   60–100; JPEG has no alpha, so translucent pixels are composited over white).
-//! - Commands take a record id, never a path from the webview (research §6.2.9).
+//! - Commands take a record id, never a path from the webview (research §6.2.9). A shot kept
+//!   out of history (§18.4) is a temp PNG named by its file name only ([`temp_file`]: a plain
+//!   file directly inside [`temp_dir`], checked after `canonicalize`).
 //!
 //! https://learn.microsoft.com/windows/win32/api/shlobj_core/nf-shlobj_core-shgetknownfolderpath
 //! ("…the calling process is responsible for freeing this resource … by calling CoTaskMemFree")
@@ -22,7 +24,7 @@
 use crate::i18n_native::{self, Key};
 use crate::model::{ChangeOrigin, ClipsChange, ClipsChanged, ScreenshotSettings, ShotFormat};
 use crate::store::Store;
-use crate::{events, fsx, logx, settings};
+use crate::{events, fsx, settings};
 use image::codecs::jpeg::JpegEncoder;
 use image::ExtendedColorType;
 use std::fs::OpenOptions;
@@ -326,8 +328,7 @@ fn pixels_for(format: ShotFormat, png: &[u8]) -> Result<(Vec<u8>, u32, u32), Str
     }
 }
 
-/// "Save as…" of a picture of record `id` (`shot_save_as`; seam for the editor's "Save as…",
-/// W6-B): the dialog (no parent window; it answers through a callback, as
+/// "Save as…" of a picture of record `id` (`shot_save_as`; the editor's "Save as…"): the dialog (no parent window; it answers through a callback, as
 /// `settings::pick_exe`), then the PNG written in the format of the chosen extension, recorded
 /// as the record's saved file (`clips:changed`). `None` = cancelled.
 pub(crate) async fn save_png_as(app: AppHandle, id: i64, png: Vec<u8>) -> Result<Option<String>, String> {
@@ -350,10 +351,9 @@ pub(crate) async fn save_png_as(app: AppHandle, id: i64, png: Vec<u8>) -> Result
     .map_err(|e| format!("failed: {e}"))?
 }
 
-/// Seam for the editor's "Done" (W6-B): rewrite the record's saved file with a new picture,
+/// The editor's "Done" (`editor::commit`): rewrite the record's saved file with a new picture,
 /// in the file's own format (by extension). `Ok(None)` when the record was never saved or the
 /// file is gone (nothing is created). Blocking — call from a worker.
-#[allow(dead_code)] // W6-B: screenshot/editor.rs
 pub(crate) fn overwrite_saved(app: &AppHandle, id: i64, png: &[u8]) -> Result<Option<String>, String> {
     let src = app.state::<Store>().shot_source(id)?;
     let Some(path) = src.saved_path.filter(|p| Path::new(p).is_file()) else { return Ok(None) };
@@ -387,7 +387,8 @@ pub(crate) fn temp_dir() -> PathBuf {
 
 static TEMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
-/// A temporary PNG for the QAO (deleted when its card closes — W6-B — and at the next start).
+/// A temporary PNG for the QAO (deleted by `qao.rs` when the stack no longer needs it, and at
+/// the next start).
 pub(crate) fn write_temp(png: &[u8]) -> Result<String, String> {
     let dir = temp_dir();
     std::fs::create_dir_all(&dir).map_err(|e| format!("failed: {e}"))?;
@@ -397,16 +398,64 @@ pub(crate) fn write_temp(png: &[u8]) -> Result<String, String> {
     Ok(path.to_string_lossy().into_owned())
 }
 
-/// Start-up: temporary shots of the last run go.
-pub(crate) fn clear_temp() {
-    let Ok(rd) = std::fs::read_dir(temp_dir()) else { return };
-    for e in rd.flatten() {
-        if e.file_type().map(|t| t.is_file()).unwrap_or(false) {
-            if let Err(err) = std::fs::remove_file(e.path()) {
-                logx::warn("screenshot", &format!("temp file not removed: {err}"));
-            }
-        }
+/// A plain file directly inside `root` (after resolving `..` and links) — nothing else is ever
+/// served or removed as a temp shot, whatever a payload or a page says.
+pub(crate) fn is_temp_file(root: &Path, p: &Path) -> bool {
+    let (Ok(root), Ok(file)) = (root.canonicalize(), p.canonicalize()) else { return false };
+    file.parent() == Some(root.as_path()) && file.is_file()
+}
+
+/// A temp shot by its bare file name (`liq://temp/<name>`, `shot_temp_copy`,
+/// `shot_temp_save_as`): ASCII letters, digits, `.`, `-`, `_` (what [`write_temp`] makes), no
+/// leading dot, then [`is_temp_file`].
+pub(crate) fn temp_file(name: &str) -> Result<PathBuf, String> {
+    let plain = !name.is_empty() && name.len() <= 128 && !name.starts_with('.') && name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'));
+    if !plain {
+        return Err("invalid: temp file name".into());
     }
+    let root = temp_dir();
+    let path = root.join(name);
+    if is_temp_file(&root, &path) {
+        Ok(path)
+    } else {
+        Err("not_found: the temporary picture is gone".into())
+    }
+}
+
+/// `liq://temp/<name>` — the PNG of a QAO card without a record.
+pub(crate) fn serve_temp(name: &str) -> Option<Vec<u8>> {
+    std::fs::read(temp_file(name).ok()?).ok()
+}
+
+/// `shot_temp_copy { name }` — the temp picture onto the clipboard (PNG + DIB).
+pub(crate) fn temp_copy(name: &str) -> Result<(), String> {
+    let png = std::fs::read(temp_file(name)?).map_err(|_| "not_found: the temporary picture is gone".to_string())?;
+    crate::paste::copy_png(png, None)
+}
+
+/// `shot_temp_save_as { name }` — "Save as…" for a temp picture (no record: nothing else
+/// changes) → the written path, `None` = cancelled. The name template uses the file's time.
+pub(crate) async fn save_temp_as(app: AppHandle, name: String) -> Result<Option<String>, String> {
+    let path = temp_file(&name)?;
+    let png = std::fs::read(&path).map_err(|_| "not_found: the temporary picture is gone".to_string())?;
+    let at = std::fs::metadata(&path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or_else(crate::store::system_now, |d| d.as_millis() as i64);
+    let s = settings::get(&app).screenshot;
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    save_dialog(&app, &s, dialog_name(&s, None, at)).save_file(move |p| {
+        let _ = tx.send(p);
+    });
+    let Some(file) = rx.await.map_err(|_| "failed: dialog closed".to_string())? else { return Ok(None) };
+    let target = chosen(file, &s)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let (rgba, w, h) = pixels_for(format_of(&target), &png)?;
+        write_chosen(&target, &s, &rgba, w, h, &png).map(Some)
+    })
+    .await
+    .map_err(|e| format!("failed: {e}"))?
 }
 
 #[cfg(test)]

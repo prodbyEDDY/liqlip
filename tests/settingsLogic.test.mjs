@@ -299,15 +299,3 @@ test("Snipping Tool warning only while a screenshot slot is bare PrtSc", () => {
   assert.equal(L.snippingConflict(true, { ...HK9, shotRegion: "", shotText: "PrtSc" }), true);
   assert.equal(L.snippingConflict(true, null), false);
 });
-
-test("resetting the editor's tool defaults forgets only their key", () => {
-  const store = new Map([[L.EDITOR_TOOLS_KEY, "{}"], ["liqlip.other", "1"]]);
-  const storage = { getItem: (k) => store.get(k) ?? null, removeItem: (k) => store.delete(k) };
-  assert.equal(L.EDITOR_TOOLS_KEY, "liqlip.editor.tools", "ARCHITECTURE §18.6");
-  assert.equal(L.resetEditorTools(storage), true);
-  assert.equal(store.has(L.EDITOR_TOOLS_KEY), false);
-  assert.equal(store.get("liqlip.other"), "1");
-  assert.equal(L.resetEditorTools(storage), false, "nothing stored → nothing to reset");
-  assert.equal(L.resetEditorTools(null), false);
-  assert.equal(L.resetEditorTools({ getItem: () => { throw new Error("blocked"); }, removeItem: () => {} }), false);
-});

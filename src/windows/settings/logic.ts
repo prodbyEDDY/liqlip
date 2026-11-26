@@ -321,21 +321,6 @@ export function snippingConflict(snippingKey: boolean, hotkeys: HotkeySettings |
   return snippingKey && !!hotkeys && SHOT_HOTKEY_ACTIONS.some((a) => (hotkeys[a] ?? "").trim() === "PrtSc");
 }
 
-/** `localStorage` key of the editor's per-tool defaults (ARCHITECTURE §18.6, W6-C). */
-export const EDITOR_TOOLS_KEY = "liqlip.editor.tools";
-
-/** "Reset the editor's tool defaults": forget them (the editor falls back to its built-ins).
- *  `false` — nothing was stored (or storage is unavailable). */
-export function resetEditorTools(storage: Pick<Storage, "getItem" | "removeItem"> | null): boolean {
-  try {
-    if (!storage || storage.getItem(EDITOR_TOOLS_KEY) === null) return false;
-    storage.removeItem(EDITOR_TOOLS_KEY);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 // ── capture pause ────────────────────────────────────────────────────────────
 
 export type PauseState =

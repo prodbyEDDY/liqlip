@@ -304,15 +304,40 @@ test("copy outcomes: a deleted record, a busy clipboard", async () => {
   assert.equal(busy.state.items[0].toast.key, "shots.toast.busy");
 });
 
-test("a shot kept out of history (clip: null) can only be closed", async () => {
-  const h = harness();
-  h.qao.add(added(0, { clip: null, tempPath: "C:\\Temp\\Liqlip\\shots\\1.png" }));
-  assert.deepEqual(h.keys(), ["tmp:C:\\Temp\\Liqlip\\shots\\1.png"]);
-  for (const cmd of ["copy", "edit", "pin", "save", "text", "delete"]) await h.qao.act(h.keys()[0], cmd);
-  assert.equal(h.qao.press(h.keys()[0], P()), false, "no drag-out");
-  assert.deepEqual(h.names().filter((n) => !["layout", "shutter"].includes(n)), []);
-  await h.qao.act(h.keys()[0], "close");
+test("a shot kept out of history (clip: null): Copy and Save as… by its temp file name, nothing else", async () => {
+  const h = harness({
+    shotTempCopy: async (name) => h.calls.push(["tempCopy", name]),
+    shotTempSaveAs: async (name) => (h.calls.push(["tempSaveAs", name]), `C:\\Pictures\\${name}`),
+  });
+  h.qao.add(added(0, { clip: null, tempPath: "C:\\Temp\\Liqlip\\shots\\shot-1-0.png" }));
+  const key = h.keys()[0];
+  assert.equal(key, "tmp:C:\\Temp\\Liqlip\\shots\\shot-1-0.png");
+  assert.equal(h.state.items[0].preview, "http://liq.localhost/temp/shot-1-0.png", "the preview is the temp route");
+  for (const cmd of ["edit", "pin", "save", "text", "delete", "reveal"]) await h.qao.act(key, cmd);
+  assert.equal(h.qao.press(key, P()), false, "no drag-out");
+  assert.deepEqual(h.names().filter((n) => !["layout", "shutter"].includes(n)), [], "record commands never run");
+  await h.qao.act(key, "copy");
+  assert.deepEqual(h.last("tempCopy"), ["tempCopy", "shot-1-0.png"]);
+  assert.equal(h.state.items[0].toast.key, "shots.toast.copied");
+  await h.qao.act(key, "saveAs");
+  assert.deepEqual(h.last("tempSaveAs"), ["tempSaveAs", "shot-1-0.png"]);
+  assert.equal(h.state.items[0].toast.key, "shots.toast.saved");
+  await h.qao.act(key, "close");
   assert.equal(h.state.items.length, 0);
+});
+
+test("a temp card whose file is gone says so; a cancelled Save as… stays quiet", async () => {
+  const h = harness({ shotTempCopy: async () => Promise.reject("not_found: the temporary picture is gone"), shotTempSaveAs: async () => null });
+  h.qao.add(added(0, { clip: null, tempPath: "C:\\Temp\\Liqlip\\shots\\shot-2-0.png" }));
+  const key = h.keys()[0];
+  await h.qao.act(key, "saveAs");
+  assert.equal(h.state.items[0].toast, null, "null = the dialog was cancelled");
+  await h.qao.act(key, "copy");
+  assert.equal(h.state.items[0].toast.key, "shots.toast.tempGone");
+  // a card with a record has no Save as… of its own
+  h.qao.add(added(5));
+  await h.qao.act("clip:5", "saveAs");
+  assert.equal(h.state.items.find((i) => i.key === "clip:5").busy, null);
 });
 
 test("no thumbnail in the payload: the full picture from clip_detail", async () => {

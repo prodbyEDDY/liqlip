@@ -81,6 +81,7 @@ import _power from "./heroicons/power.svelte";
 import _sliders from "./heroicons/adjustments-horizontal.svelte";
 import _ocr from "./heroicons/document-magnifying-glass.svelte";
 import _camera from "./heroicons/camera.svelte";
+import _pin from "./heroicons/pin.svelte"; // Liqlip glyph in the same format (Heroicons has no pin)
 
 export const ICONS = {
   search: _search,
@@ -160,5 +161,6 @@ export const ICONS = {
   sliders: _sliders,
   ocr: _ocr,
   camera: _camera,
+  pin: _pin,
 } satisfies Record<string, Component>;
 export type IconName = keyof typeof ICONS;

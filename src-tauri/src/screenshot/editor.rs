@@ -6,29 +6,35 @@
 //!   language). Closing destroys it (the page's `onCloseRequested` asks about unsaved changes
 //!   first and then calls `destroy()`; `WindowEvent::Destroyed` clears [`EditorState`]).
 //! - **A second `shot_edit`** while it is open keeps the window and switches the record: the
-//!   new record becomes current at once and `shot:editor` carries it with `dirtyGuard: true`;
-//!   the page loads it, or — with unsaved changes — asks and answers `shot_editor_switch`
-//!   (`false` = stay: the previous record becomes current again). A page that switches
-//!   without asking needs no answer.
-//! - **The commit** (`shot_editor_commit`, body already split by `body.rs`) is [`commit`]:
-//!   `done` → `store::shots::apply_edit` + clipboard (if `settings.screenshot.copy`) + rewrite of
-//!   the saved file, then the window closes; `copy` → clipboard only; `save_as` → dialog;
-//!   `pin` → [`super::pin::open`]. The store / clipboard / file primitives are W6-A's — reached
-//!   through the [`seam`] functions below until INT-5 wires them (ARCHITECTURE §18.9).
+//!   new record becomes current at once and `shot:editor` carries it with `dirtyGuard: true`
+//!   (only the event sets it; `shot_editor_get` always says `false`); the page loads it, or —
+//!   with unsaved changes — asks and answers `shot_editor_switch` (`false` = stay: the previous
+//!   record becomes current again). "Save" in that dialog sends `done` for the PREVIOUS record
+//!   first and then `shot_editor_switch(true)`: while a switch is pending, `done` keeps the
+//!   window open (the next record loads into it).
+//! - **The commit** (`shot_editor_commit`, body already split by `body.rs`) is [`commit`] (INT-5:
+//!   W6-A's steps called directly): `done` with pixels → `commit::apply_edit` (store, thumbnail,
+//!   `clips:changed`) + clipboard (if `settings.screenshot.copy`) + rewrite of the saved file,
+//!   then the window closes; `done` WITHOUT pixels = nothing changed: the record is not
+//!   rewritten, its picture goes to the clipboard (if `copy`) and the window closes; `copy` →
+//!   clipboard only; `save_as` → dialog; `pin` with pixels (unsaved changes) → the same as
+//!   `done` but the window stays, then the pin; `pin` without pixels → the pin of the record as
+//!   it is. A body without pixels always means "the record's current picture".
 
 use super::windows::{self as w, Mon, PxRect};
-use crate::i18n_native::{self, Lang};
+use crate::i18n_native::{self, Key, Lang};
 use crate::model::{Clip, ClipDetail, Kind, ShotEditorAction, ShotEditorCommit, ShotEditorPayload};
 use crate::store::Store;
-use crate::{events, logx, picker, settings};
+use crate::{events, logx, paste, picker, settings};
 use std::sync::atomic::{AtomicU64, Ordering};
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 
 /// Minimum inner size, logical px (SPEC §9.5).
 pub(crate) const MIN_SIZE: (f64, f64) = (640.0, 420.0);
-/// Room around the picture inside the window, logical px: toolbar + properties bar on top,
-/// canvas padding (W6-C's layout; only these numbers change if it differs).
-const CHROME: (f64, f64) = (48.0, 136.0);
+/// Room around the picture inside the window, logical px (W6-C's layout, `EditorWindow.svelte`):
+/// the fit margin of the canvas (24 on each side, `view.ts::FIT_MARGIN`) across; the two bars on
+/// top (12 + 40 + 8 + 40 + 8) plus that margin down.
+const CHROME: (f64, f64) = (48.0, 156.0);
 /// Share of the work area the window may take by default.
 const FIT: f64 = 0.8;
 
@@ -173,60 +179,81 @@ pub(crate) fn switch(app: &AppHandle, accept: bool) -> Result<(), String> {
     Ok(())
 }
 
-/// The hub's hook after `commit::editor_commit` (W5-A wiring): the window side of [`commit`]
-/// for the record the window shows. With [`commit`] wired instead, it is not needed.
-pub(crate) fn after_commit(app: &AppHandle, action: ShotEditorAction) {
-    let shown = with(app, |st| st.previous.or(st.current)).flatten();
-    if let Some(id) = shown {
-        after(app, action, id);
-    }
-}
-
 /// `shot_editor_commit` — see the module docs. `rgba` = the flattened picture (the page's
-/// export of the current document); `None` = the page sent no pixels: the base picture is used.
-#[allow(dead_code)] // wired by the coordinator in `screenshot/mod.rs` (report W6-B, snippet 1)
+/// export of the current document, `req.width × req.height`); `None` = the record's current
+/// picture (for `done`: nothing changed).
 pub(crate) async fn commit(app: &AppHandle, req: ShotEditorCommit, rgba: Option<&[u8]>) -> Result<Clip, String> {
     let id = req.clip_id;
     let detail = picture(app, id)?;
-    let (png, w, h) = match rgba {
-        Some(px) => (encode_png(req.width, req.height, px)?, req.width, req.height),
-        None => {
-            let png = super::frame::serve(app, &format!("/base/{id}"))
-                .filter(|(mime, _)| mime == "image/png")
-                .map(|(_, bytes)| bytes)
-                .ok_or_else(|| format!("not_found: base picture of clip {id}"))?;
-            let (w, h) = png_size(&png)?;
-            (png, w, h)
-        }
-    };
-    match req.action {
-        ShotEditorAction::Done => {
-            let clip = seam::apply_edit(app, id, &png, &req.doc, w, h)?;
-            if settings::get(app).screenshot.copy {
-                if let Err(e) = seam::copy_png(app, &png) {
-                    logx::warn("screenshot", &format!("editor done: clipboard: {e}"));
-                }
-            }
-            if let Err(e) = seam::rewrite_saved(app, id) {
-                logx::warn("screenshot", &format!("editor done: saved file: {e}"));
-            }
+    match (req.action, rgba) {
+        (ShotEditorAction::Done, Some(px)) => {
+            let clip = apply(app, id, px, req.width, req.height, req.doc)?;
             after(app, ShotEditorAction::Done, id);
             Ok(clip)
         }
-        ShotEditorAction::Copy => {
-            seam::copy_png(app, &png)?;
+        (ShotEditorAction::Done, None) => {
+            if settings::get(app).screenshot.copy {
+                if let Err(e) = record_png(app, id).and_then(|png| paste::copy_png(png, None)) {
+                    logx::warn("screenshot", &format!("editor done: clipboard: {e}"));
+                }
+            }
+            after(app, ShotEditorAction::Done, id);
             Ok(detail.clip)
         }
-        ShotEditorAction::SaveAs => {
-            let name = name_of(&detail, lang(app));
-            seam::save_png_as(app, png, &name).await?;
+        (ShotEditorAction::Copy, px) => {
+            match px {
+                Some(px) => paste::copy_png(super::commit::encode_png(req.width, req.height, px)?, Some((req.width, req.height, px)))?,
+                None => paste::copy_png(record_png(app, id)?, None)?,
+            }
             Ok(detail.clip)
         }
-        ShotEditorAction::Pin => {
+        (ShotEditorAction::SaveAs, px) => {
+            let png = match px {
+                Some(px) => super::commit::encode_png(req.width, req.height, px)?,
+                None => record_png(app, id)?,
+            };
+            super::files::save_png_as(app.clone(), id, png).await?;
+            // The record now carries the chosen file as its saved path (`meta.shot.savedPath`).
+            Ok(fresh(app, id).unwrap_or(detail.clip))
+        }
+        (ShotEditorAction::Pin, Some(px)) => {
+            // Unsaved changes: applied to the record first (as Done, the window stays), so the
+            // pin shows what the editor shows.
+            let clip = apply(app, id, px, req.width, req.height, req.doc)?;
+            after(app, ShotEditorAction::Pin, id);
+            Ok(clip)
+        }
+        (ShotEditorAction::Pin, None) => {
             after(app, ShotEditorAction::Pin, id);
             Ok(detail.clip)
         }
     }
+}
+
+/// Done's steps on the record (W6-A, §18.5): the edit (PNG, hash, thumbnail, document, base kept,
+/// `clips:changed`), then the clipboard (if `settings.screenshot.copy`) and the saved file
+/// rewritten in its own format. A failure after the edit never undoes it (logged).
+fn apply(app: &AppHandle, id: i64, rgba: &[u8], width: u32, height: u32, doc: serde_json::Value) -> Result<Clip, String> {
+    let (clip, png) = super::commit::apply_edit(app, id, rgba, width, height, doc)?;
+    if settings::get(app).screenshot.copy {
+        if let Err(e) = paste::copy_png(png.clone(), Some((width, height, rgba))) {
+            logx::warn("screenshot", &format!("editor done: clipboard: {e}"));
+        }
+    }
+    if let Err(e) = super::files::overwrite_saved(app, id, &png) {
+        logx::warn("screenshot", &format!("editor done: saved file: {e}"));
+    }
+    Ok(clip)
+}
+
+/// The record's current picture (`media\<id>.png`).
+fn record_png(app: &AppHandle, id: i64) -> Result<Vec<u8>, String> {
+    let src = app.try_state::<Store>().ok_or("failed: store")?.shot_source(id)?;
+    std::fs::read(&src.png).map_err(|_| format!("not_found: picture of clip {id}"))
+}
+
+fn fresh(app: &AppHandle, id: i64) -> Option<Clip> {
+    app.try_state::<Store>()?.shot_clip(id).ok()
 }
 
 // ── Window ──────────────────────────────────────────────────────────────────
@@ -287,6 +314,7 @@ fn build(app: &AppHandle, detail: &ClipDetail) -> Result<(), String> {
         .inner_size(lw, lh)
         .visible(false)
         .theme(w::native_theme(app))
+        .additional_browser_args(w::BROWSER_ARGS)
         .build()
         .map_err(|e| format!("failed: {e}"))?;
     let app2 = app.clone();
@@ -365,7 +393,12 @@ fn picture(app: &AppHandle, id: i64) -> Result<ClipDetail, String> {
 
 fn payload_of(app: &AppHandle, d: &ClipDetail, dirty_guard: bool) -> ShotEditorPayload {
     let id = d.clip.id;
-    let doc = seam::doc(app, id);
+    // The stored document (`shot_docs`); a row whose JSON no longer parses counts as none.
+    let doc = app
+        .try_state::<Store>()
+        .and_then(|st| st.shot_doc(id).ok().flatten())
+        .map(|d| d.doc)
+        .filter(serde_json::Value::is_object);
     // The base picture's size: the document's (a crop makes the record smaller), else the record's.
     let dim = |key: &str, fallback: Option<i64>| {
         doc.as_ref().and_then(|v| v.get(key)).and_then(serde_json::Value::as_i64).or(fallback).unwrap_or(0)
@@ -408,71 +441,9 @@ fn title(name: &str) -> String {
     format!("{name} — Liqlip")
 }
 
-/// Native strings of the editor window, kept here until `i18n_native.rs` (W6-A) has the keys
-/// (report W6-B, snippet 3): `EditorUntitledShot`, `EditorUntitledImage`.
+/// "Screenshot" / "Image" (`i18n_native`, INT-5).
 fn untitled(lang: Lang, kind: Kind) -> &'static str {
-    match (lang, kind) {
-        (Lang::En, Kind::Screenshot) => "Screenshot",
-        (Lang::Ru, Kind::Screenshot) => "Снимок экрана",
-        (Lang::En, _) => "Image",
-        (Lang::Ru, _) => "Картинка",
-    }
-}
-
-fn encode_png(w: u32, h: u32, rgba: &[u8]) -> Result<Vec<u8>, String> {
-    use image::ImageEncoder as _;
-    // `write_image` panics on a wrong length (image 0.25 docs); `body.rs` checks it too.
-    if w == 0 || h == 0 || rgba.len() as u64 != u64::from(w) * u64::from(h) * 4 {
-        return Err(format!("invalid: {} bytes for {w}×{h} RGBA", rgba.len()));
-    }
-    let mut out = Vec::new();
-    image::codecs::png::PngEncoder::new(&mut out)
-        .write_image(rgba, w, h, image::ExtendedColorType::Rgba8)
-        .map_err(|e| format!("invalid: png: {e}"))?;
-    Ok(out)
-}
-
-fn png_size(png: &[u8]) -> Result<(u32, u32), String> {
-    image::ImageReader::with_format(std::io::Cursor::new(png), image::ImageFormat::Png)
-        .into_dimensions()
-        .map_err(|e| format!("invalid: png: {e}"))
-}
-
-/// W6-A's primitives (ARCHITECTURE §18.4–18.5) the editor commit calls. Each body is a stand-in
-/// until INT-5 replaces it with the real call named in its doc (report W6-B, snippet 2).
-#[allow(dead_code)] // reached through `commit`, wired at INT-5
-mod seam {
-    use crate::model::Clip;
-    use serde_json::Value;
-    use tauri::AppHandle;
-
-    /// `store::shots::doc(id)` → the stored `AnnotDoc` (`None`: never annotated).
-    pub(super) fn doc(_app: &AppHandle, _id: i64) -> Option<Value> {
-        None
-    }
-
-    /// `store::shots::apply_edit(id, flattened_png, base_png: None, doc, w, h)` + `clips:changed
-    /// {origin:'user', change:'updated'}`.
-    pub(super) fn apply_edit(_app: &AppHandle, _id: i64, _png: &[u8], _doc: &Value, _w: u32, _h: u32) -> Result<Clip, String> {
-        Err("unimplemented: store::shots::apply_edit (W6-A)".into())
-    }
-
-    /// `paste::copy_png(png)` — PNG + DIB in one clipboard transaction, own write suppressed.
-    pub(super) fn copy_png(_app: &AppHandle, _png: &[u8]) -> Result<(), String> {
-        Err("unimplemented: paste::copy_png (W6-A)".into())
-    }
-
-    /// `files` (W6-A): write the record's picture over its `saved_path` (format by extension);
-    /// `Ok(None)` when it was never saved.
-    pub(super) fn rewrite_saved(_app: &AppHandle, _id: i64) -> Result<Option<String>, String> {
-        Ok(None)
-    }
-
-    /// `files` (W6-A): the "Save as…" dialog for these PNG bytes (start in the screenshot
-    /// folder, suggested name) → the written path, `None` = cancelled.
-    pub(super) async fn save_png_as(_app: &AppHandle, _png: Vec<u8>, _name: &str) -> Result<Option<String>, String> {
-        Err("unimplemented: files::save_png_as (W6-A)".into())
-    }
+    i18n_native::tr(lang, if kind == Kind::Screenshot { Key::EditorUntitledShot } else { Key::EditorUntitledImage })
 }
 
 #[cfg(test)]
@@ -550,23 +521,14 @@ mod tests {
         assert_eq!((r.x, r.y), ((1920 - 640) / 2, (1032 - 420) / 2));
         // A medium picture: 1:1 plus the chrome.
         let r = editor_rect(&mon(1920, 1032, 1.0), 1000, 600);
-        assert_eq!((r.w, r.h), (1048, 736));
+        assert_eq!((r.w, r.h), (1048, 756));
         // A full-screen shot is shrunk to 80 % of the work area, aspect kept inside the chrome.
         let r = editor_rect(&mon(1920, 1032, 1.0), 1920, 1080);
         assert!(r.w <= 1536 && r.h <= 825, "{r:?}");
-        let (pw, ph) = (f64::from(r.w - 48), f64::from(r.h - 136));
+        let (pw, ph) = (f64::from(r.w - 48), f64::from(r.h - 156));
         assert!((pw / ph - 1920.0 / 1080.0).abs() < 0.01, "{r:?}");
         // At 150 % the minimum and the chrome scale with the monitor.
         let r = editor_rect(&mon(2880, 1560, 1.5), 10, 10);
         assert_eq!((r.w, r.h), (960, 630));
-    }
-
-    #[test]
-    fn png_round_trip() {
-        let px = vec![255u8; 3 * 2 * 4];
-        let png = encode_png(3, 2, &px).unwrap();
-        assert_eq!(png_size(&png).unwrap(), (3, 2));
-        assert!(encode_png(3, 3, &px).is_err(), "pixel count must match");
-        assert!(png_size(b"not a png").is_err());
     }
 }

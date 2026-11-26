@@ -73,7 +73,7 @@ test("shot_commit: a framed body becomes a screenshot record + clips:changed, sh
   offs.forEach((f) => f());
   assert.equal(typeof res.clipId, "number");
   assert.equal(res.text, null);
-  assert.match(res.savedPath, /\\Pictures\\Liqlip\\Liqlip \d{4}-\d{2}-\d{2} \d{2}\.\d{2}\.\d{2}\.png$/, "saved by default");
+  assert.match(res.savedPath, /\\Pictures\\Liqlip\\Liqlip \d{4}-\d{2}-\d{2} \d{6}\.png$/, "saved by default ({time} = HHmmss, as files.rs)");
   const after = await mockInvoke("clips_counts", {});
   assert.equal(after.kinds.screenshot, before.kinds.screenshot + 1);
   const top = (await mockInvoke("clips_list", { q: q({ limit: 1 }) })).items[0];

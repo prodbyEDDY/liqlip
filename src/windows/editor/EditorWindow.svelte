@@ -3,10 +3,14 @@
   // by Rust: "Name — Liqlip"): tools and properties on top, the canvas with zoom and pan (fit by
   // default), Copy · Pin · Save as… · Done top right. On load `shot_editor_get()`; the source is
   // `baseUrl` (`<img crossorigin="anonymous">` → `createImageBitmap`, the canvas stays readable).
-  // Done (`Enter` at rest) saves into the same record through `shot_editor_commit` (raw body
-  // §18.4: the document + the flattened RGBA) and Rust closes the window (W6-B `after_commit`).
-  // Closing with unsaved changes (`onCloseRequested`) and `shot:editor` (another picture) ask
-  // "Save / Don't save / Cancel". Browser preview on the mock: /editor.html?clip=<id>.
+  // Done (`Enter` at rest, `Ctrl+S`) saves into the same record through `shot_editor_commit` (raw
+  // body §18.4: the document + the flattened RGBA) and Rust closes the window (`editor::commit`;
+  // not while a switch to another record waits — then the next record loads here). Done without
+  // changes sends no pixels: the record is not rewritten, Rust copies it (if "Copy" is on in
+  // Settings) and closes. Pin with unsaved changes sends the pixels: Rust applies the edit first
+  // (as Done, the window stays), then pins. Closing with unsaved changes (`onCloseRequested`)
+  // and `shot:editor` (another picture, `dirtyGuard: true`) ask "Save / Don't save / Cancel".
+  // Browser preview on the mock: /editor.html?clip=<id>.
   import { onMount } from "svelte";
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import type { UnlistenFn } from "@tauri-apps/api/event";
@@ -96,23 +100,28 @@
 
   async function commit(action: ShotEditorAction): Promise<boolean> {
     if (!api || !payload || busy) return false;
-    if (action === "done" && !api.dirty()) {
-      // nothing changed: Done just closes (no rewrite, no duplicate — LT П-23)
-      if (isTauri()) await destroyWindow();
-      else say(t("editor.toast.nothing"), "check");
-      return true;
-    }
+    const dirty = api.dirty();
     busy = action;
     try {
-      const d = api.doc();
-      const rect = d.crop ?? { x: 0, y: 0, w: d.w, h: d.h };
-      const px = await api.exportRGBA(rect);
-      const clip = await shotEditorCommit({ clipId: payload.clipId, action, doc: api.doc(), width: px.width, height: px.height }, px.data);
+      // Done / Pin without changes send no pixels: the record stays as it is (no rewrite, no
+      // duplicate — LT П-23); Copy / Save as always send what the editor shows.
+      const unchanged = !dirty && (action === "done" || action === "pin");
+      let px: { width: number; height: number; data: Uint8Array } | null = null;
+      if (!unchanged) {
+        const d = api.doc();
+        px = await api.exportRGBA(d.crop ?? { x: 0, y: 0, w: d.w, h: d.h });
+      }
+      const head = { clipId: payload.clipId, action, doc: api.doc(), width: px?.width ?? 0, height: px?.height ?? 0 };
+      const clip = await shotEditorCommit(head, px?.data ?? null);
       if (action === "done") {
         api.markSaved();
-        say(t("editor.toast.saved"), "check");
+        // Rust closes the window; the browser preview stays and says what happened.
+        say(t(unchanged ? "editor.toast.nothing" : "editor.toast.saved"), "check");
       } else if (action === "copy") say(t("editor.toast.copied"), "copy");
-      else if (action === "pin") say(t("editor.toast.pinned"), "check");
+      else if (action === "pin") {
+        if (!unchanged) api.markSaved(); // the edit went into the record before the pin
+        say(t("editor.toast.pinned"), "check");
+      }
       else if (action === "save_as" && clip.meta.shot?.savedPath) say(t("editor.toast.savedAs"), "download");
       return true;
     } catch (e) {
@@ -221,7 +230,7 @@
           <Tip label={t("editor.action.copy")} keys={["Ctrl", "C"]} />
         </button>
         <button type="button" class="act" disabled={!ready || !!busy} aria-label={`${t("editor.action.pin")} (Ctrl+P)`} onmousedown={keep} onclick={() => void commit("pin")}>
-          <Glyph name="pin" />
+          <Ico name="pin" size={18} />
           <Tip label={t("editor.action.pin")} keys={["Ctrl", "P"]} />
         </button>
         <button type="button" class="act" disabled={!ready || !!busy} aria-label={`${t("editor.action.saveAs")} (Ctrl+Shift+S)`} onmousedown={keep} onclick={() => void commit("save_as")}>

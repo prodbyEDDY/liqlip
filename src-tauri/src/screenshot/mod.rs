@@ -27,7 +27,7 @@ mod targets;
 pub(crate) mod windows;
 
 use crate::model::{
-    Clip, PinPayload, ShotCommit, ShotCommitResult, ShotEditorCommit, ShotEditorPayload, ShotMode,
+    Clip, PinPayload, ShotAdded, ShotCommit, ShotCommitResult, ShotEditorCommit, ShotEditorPayload, ShotMode,
     ShotSession, ShotStage, ShotStatus, WindowsSettingsPage,
 };
 use parking_lot::Mutex;
@@ -36,7 +36,6 @@ use tauri::{AppHandle, WebviewWindow};
 /// Managed state (`app.manage` in `setup()` step 5, BEFORE any window exists — a webview may
 /// invoke a command as soon as it loads). One lock per zone; each zone defines its own type.
 #[derive(Default)]
-#[allow(dead_code)] // the zones read their state from W6 on
 pub struct ScreenshotState {
     /// Session, per-monitor frames, last region (W6-A, `session.rs`).
     pub(crate) capture: Mutex<session::SessionState>,
@@ -48,11 +47,22 @@ pub struct ScreenshotState {
     pub(crate) pins: Mutex<pin::PinState>,
 }
 
-/// `setup()` step 5, after `app.manage(ScreenshotState::default())`: start-up work of both
-/// zones (no-ops until W6).
+/// `setup()` step 5, after `app.manage(ScreenshotState::default())`: remember the main thread,
+/// sweep the temp shots of the last run, follow the language in the editor title.
 pub fn init(app: &AppHandle) {
-    session::init(app);
     windows::init(app);
+}
+
+/// The screenshot folder: `settings.screenshot.folder`, else `<Pictures>\Liqlip`
+/// (`open_path('shots')`, `pick_folder`'s start — the folder the commit writes into).
+pub fn shot_folder(s: &crate::model::ScreenshotSettings) -> Result<std::path::PathBuf, String> {
+    files::folder(s)
+}
+
+/// A second launch's arguments (single-instance callback in `lib.rs`): `liqlip --capture [mode]`
+/// starts a capture and returns `true`; anything else is the caller's (it summons the shelf).
+pub fn handle_args(app: &AppHandle, args: &[String]) -> bool {
+    session::handle_args(app, args)
 }
 
 /// The pre-created `capture` window got `CloseRequested` (Alt+F4): cancel the open session.
@@ -61,16 +71,19 @@ pub fn on_capture_close(app: &AppHandle) {
     session::on_capture_close(app);
 }
 
-/// `liq` paths served by this module (§18.3): `/shot/<sessionId>/<monitorIndex>.bmp` (frames)
-/// and `/base/<clipId>` (the editor's picture without annotations). Everything else is the
-/// store's (§9.8).
+/// `liq` paths served by this module (§18.3): `/shot/<sessionId>/<monitorIndex>.bmp` (frames),
+/// `/base/<clipId>` (the editor's picture without annotations) and `/temp/<name>` (a QAO card
+/// of a shot kept out of history, INT-5). Everything else is the store's (§9.8).
 pub fn owns_uri(path: &str) -> bool {
-    path.starts_with("/shot/") || path.starts_with("/base/")
+    path.starts_with("/shot/") || path.starts_with("/base/") || path.starts_with("/temp/")
 }
 
 /// `(mime, bytes)` of an [`owns_uri`] path; `None` → 404. `lib.rs` builds the response with
 /// `store::cache_control` (`no-store` for these paths) and ACAO `*`.
 pub fn serve_uri(app: &AppHandle, path: &str) -> Option<(String, Vec<u8>)> {
+    if let Some(name) = path.strip_prefix("/temp/") {
+        return files::serve_temp(name).map(|png| ("image/png".to_string(), png));
+    }
     frame::serve(app, path)
 }
 
@@ -129,10 +142,7 @@ pub async fn shot_editor_switch(app: AppHandle, accept: bool) -> Result<(), Stri
 pub async fn shot_editor_commit(app: AppHandle, request: tauri::ipc::Request<'_>) -> Result<Clip, String> {
     let bytes = body::bytes(request.body())?;
     let (req, rgba) = body::parse::<ShotEditorCommit>(&bytes)?;
-    let action = req.action;
-    let clip = commit::editor_commit(&app, req, rgba)?;
-    editor::after_commit(&app, action);
-    Ok(clip)
+    editor::commit(&app, req, rgba).await
 }
 
 /// Pin a record on the screen.
@@ -175,6 +185,24 @@ pub async fn shot_reveal(app: AppHandle, id: i64) -> Result<(), String> {
     files::reveal(&app, id)
 }
 
+/// A shot kept out of history (QAO card, `liq://temp/<name>`) onto the clipboard.
+#[tauri::command]
+pub async fn shot_temp_copy(name: String) -> Result<(), String> {
+    files::temp_copy(&name)
+}
+
+/// "Save as…" for a shot kept out of history → the path, `null` = cancelled.
+#[tauri::command]
+pub async fn shot_temp_save_as(app: AppHandle, name: String) -> Result<Option<String>, String> {
+    files::save_temp_as(app, name).await
+}
+
+/// The QAO page subscribed: the `shot:added` payloads that arrived before it did.
+#[tauri::command]
+pub async fn shots_pending(app: AppHandle) -> Result<Vec<ShotAdded>, String> {
+    qao::pending(&app)
+}
+
 /// The QAO stack's height in logical px.
 #[tauri::command]
 pub async fn shots_hud_layout(app: AppHandle, height: f64) -> Result<(), String> {
@@ -205,11 +233,13 @@ mod tests {
     fn liq_routes_and_their_cache_policy() {
         assert!(owns_uri("/shot/12/0.bmp"));
         assert!(owns_uri("/base/42"));
-        for store_path in ["/thumb/1", "/media/1", "/icon/3", "/shots/1", "/basement", "/"] {
+        assert!(owns_uri("/temp/shot-1-0.png"));
+        for store_path in ["/thumb/1", "/media/1", "/icon/3", "/shots/1", "/basement", "/temporary", "/"] {
             assert!(!owns_uri(store_path), "{store_path} stays the store's");
         }
         // Frames and base pictures are screen / clipboard content: never in the WebView2 disk cache.
         assert_eq!(crate::store::cache_control("/shot/12/0.bmp"), "no-store");
         assert_eq!(crate::store::cache_control("/base/42"), "no-store");
+        assert_eq!(crate::store::cache_control("/temp/shot-1-0.png"), "no-store");
     }
 }

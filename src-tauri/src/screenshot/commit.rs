@@ -1,5 +1,5 @@
-//! Commit of a shot (owner: W6-A; ARCHITECTURE §18.4) and the steps of an editor commit that
-//! W6-B's `editor::commit` orchestrates (§18.9: [`apply_edit`], [`base_rgba`]).
+//! Commit of a shot (owner: W6-A; ARCHITECTURE §18.4) and the store step of an editor commit
+//! that `editor::commit` orchestrates (§18.9: [`apply_edit`]).
 //!
 //! `screenshot/mod.rs` has already split the raw body (`body.rs`): the JSON header arrives
 //! parsed, the pixels as a slice borrowed from the IPC body — `None` when the webview sent
@@ -19,12 +19,13 @@
 
 use super::frame::{rect_to_crop, Frame};
 use super::grab::Monitor;
-use super::session::{self, qao_bridge, Context};
+use super::qao;
+use super::session::{self, Context};
 use super::files;
 use crate::content::{self, IMAGE_MAX_PIXELS};
 use crate::model::{
     ChangeOrigin, Clip, ClipsChange, ClipsChanged, HudKind, ScreenshotSettings, ShotAction, ShotAddedError, ShotAdded,
-    ShotAfterCapture, ShotCommit, ShotCommitResult, ShotEditorCommit, ShotSessionMode,
+    ShotAfterCapture, ShotCommit, ShotCommitResult, ShotSessionMode,
 };
 use crate::store::shots::{NewShot, ShotEdit};
 use crate::store::Store;
@@ -162,7 +163,7 @@ pub(crate) fn commit(app: &AppHandle, req: ShotCommit, rgba: Option<&[u8]>) -> R
         finish(app, &active.ctx, monitor, frame, crop, action, sent, req.doc.clone())
     })();
     drop(active); // the frozen frames go now
-    qao_bridge::restore_after_capture(app);
+    qao::restore_after_capture(app);
     result
 }
 
@@ -170,7 +171,7 @@ pub(crate) fn commit(app: &AppHandle, req: ShotCommit, rgba: Option<&[u8]>) -> R
 /// is not touched.
 pub(crate) fn direct(app: &AppHandle, ctx: &Context, monitor: &Monitor, frame: &Frame, crop: (u32, u32, u32, u32)) -> Result<ShotCommitResult, String> {
     let result = finish(app, ctx, monitor, frame, crop, ShotAction::Done, None, None);
-    qao_bridge::restore_after_capture(app);
+    qao::restore_after_capture(app);
     result
 }
 
@@ -250,7 +251,7 @@ fn finish(
                 None => files::write_temp(&png).map_err(|e| logx::warn("screenshot", &format!("temp file: {e}"))).ok(),
             };
             let payload = ShotAdded { clip: clip.clone(), saved_path: saved_path.clone(), temp_path, monitor: monitor.id.clone(), error };
-            qao_bridge::show_added(app, &payload);
+            qao::show_added(app, payload);
         }
     }
     Ok(ShotCommitResult { clip_id: clip.map(|c| c.id), saved_path, text: None })
@@ -301,10 +302,15 @@ fn store_app_icon(store: &Store, app_id: i64, exe: &str) {
 }
 
 /// `action: 'text'`: OCR of the region → the clipboard, HUD `text_copied` / `text_empty`; no
-/// record, no file. A recognition failure (no OCR language) is the command's error.
+/// record, no file. No OCR language → HUD `text_unavailable` (the overlay is already gone, so
+/// the HUD is where it can be seen) and the command's error; other failures are the error.
 fn recognize(app: &AppHandle, pic: &Picture<'_>) -> Result<ShotCommitResult, String> {
     let png = encode_png(pic.width, pic.height, &pic.rgba)?;
-    let text = crate::ocr::recognize_png(app, png)?;
+    let text = crate::ocr::recognize_png(app, png).inspect_err(|e| {
+        if e == crate::ocr::NO_LANGUAGE {
+            picker::hud::show(app, HudKind::TextUnavailable, None);
+        }
+    })?;
     let text = text.trim().to_string();
     if text.is_empty() {
         picker::hud::show(app, HudKind::TextEmpty, None);
@@ -315,20 +321,11 @@ fn recognize(app: &AppHandle, pic: &Picture<'_>) -> Result<ShotCommitResult, Str
     Ok(ShotCommitResult { clip_id: None, saved_path: None, text: Some(text) })
 }
 
-/// `shot_editor_commit` (raw body, same framing). The orchestration (`done` / `copy` /
-/// `save_as` / `pin`) is W6-B's `editor::commit` (coordinator's decision, W6); integration
-/// points this delegate at it. W6-A provides its steps: [`apply_edit`], [`base_rgba`],
-/// `paste::copy_png`, `files::overwrite_saved`, `files::save_png_as`.
-pub(crate) fn editor_commit(_app: &AppHandle, _req: ShotEditorCommit, _rgba: Option<&[u8]>) -> Result<Clip, String> {
-    Err("unimplemented: shot_editor_commit (W6-B editor::commit)".into())
-}
-
-/// Seam for the editor's "Done" (W6-B `editor::commit`): apply an edit to a live picture record
+/// The editor's "Done" (`editor::commit`): apply an edit to a live picture record
 /// — PNG of `rgba`, pixel hash, thumbnail → `store::shots::apply_edit` (the first edit of an
 /// image keeps its picture as the base) → `clips:changed { origin: 'user', change: 'updated' }`.
 /// Returns the updated record and the PNG (for `paste::copy_png` / `files::overwrite_saved`).
 /// Blocking — call from a worker.
-#[allow(dead_code)] // W6-B: screenshot/editor.rs
 pub(crate) fn apply_edit(app: &AppHandle, id: i64, rgba: &[u8], width: u32, height: u32, doc: serde_json::Value) -> Result<(Clip, Vec<u8>), String> {
     if width == 0 || height == 0 || rgba.len() as u64 != u64::from(width) * u64::from(height) * 4 {
         return Err("invalid: picture size".into());
@@ -346,18 +343,6 @@ pub(crate) fn apply_edit(app: &AppHandle, id: i64, rgba: &[u8], width: u32, heig
     let clip = app.state::<Store>().apply_edit(id, edit)?;
     events::clips_changed(app, &ClipsChanged { origin: ChangeOrigin::User, change: ClipsChange::Updated, ids: Some(vec![id]) });
     Ok((clip, png))
-}
-
-/// Seam for an editor commit without pixels (no objects, no crop — the picture is the base):
-/// the base picture of a live picture record as RGBA8 `(pixels, width, height)`.
-#[allow(dead_code)] // W6-B: screenshot/editor.rs
-pub(crate) fn base_rgba(app: &AppHandle, id: i64) -> Result<(Vec<u8>, u32, u32), String> {
-    let base = app.state::<Store>().serve_base(id).ok_or_else(|| format!("not_found: picture of clip {id}"))?;
-    let img = image::load_from_memory_with_format(&base, image::ImageFormat::Png)
-        .map_err(|e| format!("failed: base picture: {e}"))?
-        .to_rgba8();
-    let (w, h) = (img.width(), img.height());
-    Ok((img.into_raw(), w, h))
 }
 
 #[cfg(test)]

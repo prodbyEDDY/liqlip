@@ -1,12 +1,17 @@
 // The capture overlay host (W6-D, ARCHITECTURE §18.7): its state machine (select → frame →
 // committing, text and quick sessions, a failed commit keeps the work), which session payload
 // restarts it, the commit header (§18.4), the Esc ladder (SPEC §9.2) and the frame-relative
-// annotation document.
+// annotation document (INT-5: the editor's `frameDoc` = `cropDoc` + the editor's own object
+// bounds, `src/lib/editor/index.ts`; checked here through those two with a stand-in text measure,
+// since the real one needs a canvas).
 import assert from "node:assert/strict";
 import test from "node:test";
 import { importTs } from "./helpers/bundle.mjs";
 
-const m = await importTs("src/windows/capture/machine.ts", "src/windows/capture/frameDoc.ts");
+const m = await importTs("src/windows/capture/machine.ts", "src/lib/editor/doc.ts", "src/lib/editor/hit.ts");
+/** `frameDoc` of the editor with a stand-in text measure (0.6 em per character). */
+const measure = (text, size) => text.length * size * 0.6;
+const frameDoc = (doc, frame) => m.cropDoc(doc, frame, (o) => m.bounds(o, { unit: doc.unit, measure }));
 
 const session = (over = {}) => ({ id: 7, mode: "region", quick: false, ...over });
 const R = { x: 100, y: 50, w: 300, h: 200 };
@@ -88,9 +93,9 @@ const counter = { id: "c", color: "#e5484d", kind: "counter", at: [380, 230], n:
 const spot = { id: "s", kind: "spotlight", r: { x: 90, y: 40, w: 30, h: 30 }, shape: "rect" };
 const outside = { id: "o", color: "#e5484d", kind: "rect", r: { x: 900, y: 900, w: 20, h: 20 }, fill: true, size: 1 };
 
-test("docForFrame: objects move by −frame.x/y, the size is the frame's, objects wholly outside are dropped", () => {
+test("frameDoc: objects move by −frame.x/y, the size is the frame's, objects wholly outside are dropped", () => {
   const doc = { v: 1, w: 1920, h: 1080, unit: 1, crop: null, objects: [arrow, rect, pen, text, counter, spot, outside] };
-  const out = m.docForFrame(doc, R);
+  const out = frameDoc(doc, R);
   assert.deepEqual([out.v, out.w, out.h, out.unit, out.crop], [1, 300, 200, 1, null]);
   assert.deepEqual(out.objects.map((o) => o.id), ["a", "r", "p", "t", "c", "s"], "the far rectangle is gone, order kept");
   const byId = Object.fromEntries(out.objects.map((o) => [o.id, o]));
@@ -103,19 +108,7 @@ test("docForFrame: objects move by −frame.x/y, the size is the frame's, object
   assert.equal(doc.objects[0].a[0], 150, "the editor's document is not mutated");
 });
 
-test("objectBounds grow with the stroke and the monitor scale (unit)", () => {
-  const b1 = m.objectBounds(rect, 1);
-  const b2 = m.objectBounds(rect, 2);
-  assert.ok(b2.x < b1.x && b2.w > b1.w);
-  assert.deepEqual(m.objectBounds(spot, 1), spot.r);
-  const negative = m.objectBounds({ ...rect, r: { x: 170, y: 100, w: -50, h: -40 }, size: 1 }, 1);
-  assert.deepEqual(negative, { x: 118, y: 58, w: 54, h: 44 }, "a rectangle drawn up-left is normalised");
-});
-
-test("isEmptyAt: double-click → Done only away from every object", () => {
-  const doc = { v: 1, w: 1920, h: 1080, unit: 1, crop: null, objects: [rect] };
-  assert.equal(m.isEmptyAt(doc, 140, 80), false, "inside the rectangle's box");
-  assert.equal(m.isEmptyAt(doc, 300, 300), true);
-  assert.equal(m.isEmptyAt(doc, 178, 80, 6), false, "within the tolerance");
-  assert.equal(m.isEmptyAt(m.emptyDoc(10, 10, 1), 5, 5), true);
+test("an empty document of a frozen frame: unit = the monitor scale", () => {
+  assert.deepEqual(m.emptyDoc(2880, 1620, 1.5), { v: 1, w: 2880, h: 1620, unit: 1.5, crop: null, objects: [] });
+  assert.equal(m.emptyDoc(10, 10, 0).unit, 1, "a broken scale falls back to 1");
 });

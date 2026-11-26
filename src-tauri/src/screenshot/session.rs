@@ -20,7 +20,7 @@
 
 use super::frame::Frame;
 use super::grab::{self, Monitor};
-use super::{commit, targets, ScreenshotState};
+use super::{commit, qao, targets, ScreenshotState};
 use crate::model::{HudKind, MonitorFrame, Rect, ScreenshotSettings, ShotMode, ShotSession, ShotSessionMode, ShotStage, WinRect};
 use crate::store::SourceApp;
 use crate::{events, logx, picker, settings};
@@ -191,12 +191,6 @@ fn on_main<T: Send + 'static>(app: &AppHandle, f: impl FnOnce(&AppHandle) -> T +
 
 // ── Commands' logic ─────────────────────────────────────────────────────────
 
-/// `setup()` step 5 (via `screenshot::init`): temporary shot files of the last run go
-/// (`%TEMP%\Liqlip\shots\`, §18.4) — on a short thread, never blocking the start.
-pub(crate) fn init(_app: &AppHandle) {
-    let _ = std::thread::Builder::new().name("liqlip-shot-temp".into()).spawn(super::files::clear_temp);
-}
-
 /// `shot_capture { mode, delay? }` (also the hotkeys, the tray, `liqlip --capture`): returns at
 /// once; the capture runs on its own thread. Ignored while a capture is prepared or open.
 pub(crate) fn capture(app: &AppHandle, mode: ShotMode, delay: Option<u32>) -> Result<(), String> {
@@ -275,7 +269,7 @@ fn end(app: &AppHandle, id: i64) -> bool {
     let Some(a) = with_state(app, |s| s.take(id)).flatten() else { return false };
     close(app, &a);
     drop(a);
-    qao_bridge::restore_after_capture(app);
+    qao::restore_after_capture(app);
     true
 }
 
@@ -289,19 +283,25 @@ fn run(app: &AppHandle, mode: ShotMode, delay: u32, token: u64) {
     if let Err(e) = trigger(app, mode, token) {
         logx::warn("screenshot", &format!("capture failed: {e}"));
         picker::hud::show(app, HudKind::ShotFailed, None);
-        qao_bridge::restore_after_capture(app);
+        qao::restore_after_capture(app);
     }
     with_state(app, |s| s.release(token));
 }
 
 fn trigger(app: &AppHandle, mode: ShotMode, token: u64) -> Result<(), String> {
+    // "Copy text from screen" without any OCR language pack: say so instead of an overlay
+    // whose result could only fail (INT-5, HUD `text_unavailable`).
+    if mode == ShotMode::Text && !crate::ocr::has_languages() {
+        picker::hud::show(app, HudKind::TextUnavailable, None);
+        return Ok(());
+    }
     let settings = settings::get(app);
     // Who has the focus — before any window of ours moves.
     let (restore, source) = focus_context(app);
     // Our windows out of the picture (capture and QAO also carry WDA_EXCLUDEFROMCAPTURE).
     let hid_shelf = hide_shelf(app);
     let hid_hud = hide_hud(app);
-    qao_bridge::hide_for_capture(app);
+    qao::hide_for_capture(app);
     if hid_shelf || hid_hud {
         grab::dwm_flush();
     }
@@ -543,28 +543,6 @@ fn hide_overlay(app: &AppHandle) {
     });
 }
 
-/// W6-B's QAO hooks (ARCHITECTURE §18.8) are not among the W5 stubs. These stand-ins keep the
-/// capture side working until integration replaces each body with the call in its doc line
-/// (signatures in the W6-A report).
-pub(crate) mod qao_bridge {
-    use crate::model::ShotAdded;
-    use tauri::AppHandle;
-
-    /// → `super::super::qao::hide_for_capture(app)`: hide the stack while a session selects.
-    pub(crate) fn hide_for_capture(app: &AppHandle) {
-        let _ = super::super::qao::hide(app);
-    }
-
-    /// → `super::super::qao::restore_after_capture(app)`: show the stack again if it is not empty.
-    pub(crate) fn restore_after_capture(_app: &AppHandle) {}
-
-    /// → `super::super::qao::show_added(app, payload)`: build / show the QAO on the shot's
-    /// monitor without activation and add the card.
-    pub(crate) fn show_added(app: &AppHandle, payload: &ShotAdded) {
-        crate::events::shot_added(app, payload);
-    }
-}
-
 // ── `liqlip --capture [mode]` ───────────────────────────────────────────────
 
 /// The capture mode a command line asks for: `--capture` (region), `--capture <mode>` or
@@ -588,9 +566,8 @@ pub(crate) fn capture_arg(args: &[String]) -> Option<ShotMode> {
     }
 }
 
-/// A second launch's arguments (single-instance): `true` when they asked for a capture (and it
-/// was started); the caller summons the shelf otherwise. Wired by the coordinator in `lib.rs`.
-#[allow(dead_code)] // lib.rs single-instance callback — snippet in the W6-A report
+/// A second launch's arguments (single-instance, `lib.rs`): `true` when they asked for a capture
+/// (and it was started); the caller summons the shelf otherwise.
 pub(crate) fn handle_args(app: &AppHandle, args: &[String]) -> bool {
     let Some(mode) = capture_arg(args) else { return false };
     if let Err(e) = capture(app, mode, None) {

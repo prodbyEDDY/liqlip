@@ -71,13 +71,29 @@ fn to_many(app: &AppHandle, labels: &'static [&'static str], event: &str, payloa
     );
 }
 
+/// `labels` plus every window whose label starts with `prefix` (the pins `pin-<n>` have
+/// labels made at run time).
+fn to_many_and_prefix(app: &AppHandle, labels: &'static [&'static str], prefix: &'static str, event: &str, payload: impl Serialize + Clone) {
+    log_err(
+        event,
+        app.emit_filter(event, payload, |t| match t {
+            EventTarget::AnyLabel { label }
+            | EventTarget::Window { label }
+            | EventTarget::Webview { label }
+            | EventTarget::WebviewWindow { label } => labels.contains(&label.as_str()) || label.starts_with(prefix),
+            _ => false,
+        }),
+    );
+}
+
 fn all(app: &AppHandle, event: &str, payload: impl Serialize + Clone) {
     log_err(event, app.emit(event, payload));
 }
 
-/// store/capture → picker, settings, shots (QAO drops a deleted shot), editor (W5, §18)
+/// store/capture → picker, settings, shots (QAO drops a deleted shot), editor (W5, §18), and
+/// every `pin-*` (INT-5: a pin reloads its edited picture, a deleted one shows "unavailable")
 pub fn clips_changed(app: &AppHandle, payload: &ClipsChanged) {
-    to_many(app, &[PICKER, SETTINGS, SHOTS, EDITOR], CLIPS_CHANGED, payload);
+    to_many_and_prefix(app, &[PICKER, SETTINGS, SHOTS, EDITOR], PIN_PREFIX, CLIPS_CHANGED, payload);
 }
 
 /// picker → picker
@@ -142,9 +158,10 @@ pub fn theme_changed(app: &AppHandle, theme: ResolvedTheme) {
 
 // ── Screenshots (W5, ARCHITECTURE §18.10) ───────────────────────────────────
 
-/// screenshot → capture: a session started, or moved to another monitor.
+/// screenshot → capture (a session started, or moved to another monitor), shots (the QAO's
+/// timers wait until `shot:end`).
 pub fn shot_session(app: &AppHandle, payload: &ShotSession) {
-    to(app, CAPTURE, SHOT_SESSION, payload);
+    to_many(app, &[CAPTURE, SHOTS], SHOT_SESSION, payload);
 }
 
 /// screenshot → capture, shots: the session ended (committed or cancelled).

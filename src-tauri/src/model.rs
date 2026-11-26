@@ -504,9 +504,9 @@ pub struct PickerSettings {
 
 /// `""` = not set. Notation as in Liquid Tools: `"Alt + V"`.
 ///
-/// The five `shot_*` slots are W5 (additive, §18.10/§18.11): stored and validated, but NOT
-/// registered until W6-A extends the hotkey engine (`hotkeys::combo::FIELDS`). A file without
-/// them gets their defaults (`serde(default)` here; the lenient loader does the same).
+/// The five `shot_*` slots are W5 (additive, §18.10/§18.11), registered like the others
+/// (W6-A: `hotkeys::combo::SLOTS = 9`). A file without them gets their defaults
+/// (`serde(default)` here; the lenient loader does the same).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HotkeySettings {
@@ -825,6 +825,8 @@ pub enum DragOutcome {
 pub enum PathKind {
     Data,
     Logs,
+    /// INT-5 (additive): the screenshot folder (setting, else `<Pictures>\Liqlip`)
+    Shots,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -961,6 +963,8 @@ pub enum HudKind {
     TextCopied,
     /// W5 (additive): no text found in the region.
     TextEmpty,
+    /// INT-5 (additive): "Copy text from screen" without any OCR language pack.
+    TextUnavailable,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1324,6 +1328,8 @@ mod tests {
         round_trip(&ShotAddedError::SaveFailed, json!("save_failed"));
         round_trip(&HudKind::ShotFailed, json!("shot_failed"));
         round_trip(&HudKind::Countdown, json!("countdown"));
+        round_trip(&HudKind::TextUnavailable, json!("text_unavailable"));
+        round_trip(&PathKind::Shots, json!("shots"));
         round_trip(&WindowsSettingsPage::Keyboard, json!("keyboard"));
         round_trip(&ShotAfterCapture::None, json!("none"));
         round_trip(

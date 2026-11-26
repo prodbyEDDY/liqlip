@@ -10,12 +10,15 @@
   // (`dockPanel`); while a gesture runs under it, it turns see-through and lets the pointer pass.
   // Buttons never keep the focus after a click (mousedown is prevented), so Enter/Space go to the
   // overlay's keys, not back to the last button (LT defect П-25); keyboard focus still works.
+  // Layout (INT-5, with the real editor bars): two rows like the editor window — tools · actions
+  // on top, the properties bar under them — so the panel keeps its size while the properties bar
+  // grows ("changes the last object") and never jumps to another dock; one column on a narrow
+  // monitor.
   import type { Snippet } from "svelte";
   import Button from "$lib/components/Button.svelte";
   import Ico from "$lib/components/Ico.svelte";
   import { t } from "$lib/i18n/index.svelte";
   import type { IconName } from "$lib/icons";
-  import Pin from "./glyphs/Pin.svelte";
 
   interface Props {
     tools: Snippet | null;
@@ -41,7 +44,7 @@
 
   interface IconAction {
     id: Exclude<PanelAction, "done">;
-    icon: IconName | "pin";
+    icon: IconName;
     label: string;
     keys?: string;
     disabled?: boolean;
@@ -67,8 +70,8 @@
   bind:clientWidth={width}
   bind:clientHeight={height}
 >
-  {#if tools}<div class="panel__group">{@render tools()}</div>{/if}
-  {#if props}<div class="panel__group">{@render props()}</div>{/if}
+  {#if tools}<div class="panel__group panel__tools">{@render tools()}</div>{/if}
+  {#if props}<div class="panel__group panel__props">{@render props()}</div>{/if}
   <div class="panel__group panel__actions">
     {#each actions as a (a.id)}
       <button
@@ -81,7 +84,7 @@
         onmousedown={(e) => e.preventDefault()}
         onclick={() => !a.disabled && onaction(a.id)}
       >
-        {#if a.icon === "pin"}<span class="act__glyph"><Pin /></span>{:else}<Ico name={a.icon} size={16} />{/if}
+        <Ico name={a.icon} size={16} />
       </button>
     {/each}
     <Button variant="primary" size="sm" icon="check" loading={busy} title={tip(t("common.done"), "Enter")} onmousedown={(e: MouseEvent) => e.preventDefault()} onclick={() => onaction("done")}>
@@ -95,10 +98,14 @@
   .panel {
     position: fixed;
     z-index: 5;
-    display: flex;
-    flex-wrap: wrap;
+    display: grid;
+    grid-template-columns: auto auto;
+    grid-template-areas:
+      "tools actions"
+      "props props";
     align-items: center;
-    gap: 4px 12px;
+    justify-items: start;
+    gap: 8px 12px;
     max-width: calc(100vw - 16px);
     padding: var(--pad-popover);
     border-radius: var(--r-popover);
@@ -127,8 +134,25 @@
     align-items: center;
     gap: 2px;
   }
+  .panel__tools {
+    grid-area: tools;
+  }
+  .panel__props {
+    grid-area: props;
+  }
   .panel__actions {
-    margin-left: auto;
+    grid-area: actions;
+    justify-self: end;
+  }
+  /* a monitor narrower than tools + actions: one column */
+  @media (max-width: 860px) {
+    .panel {
+      grid-template-columns: auto;
+      grid-template-areas:
+        "tools"
+        "props"
+        "actions";
+    }
   }
   .act {
     display: inline-flex;
@@ -158,10 +182,6 @@
   .act:disabled,
   .act[aria-disabled="true"] {
     opacity: 0.45;
-  }
-  .act__glyph {
-    display: inline-flex;
-    font-size: 16px;
   }
   .panel__actions :global(.btn) {
     margin-left: 4px;

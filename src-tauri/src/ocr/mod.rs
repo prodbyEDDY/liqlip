@@ -149,6 +149,16 @@ fn ocr_of(app: &AppHandle) -> Result<tauri::State<'_, Ocr>, String> {
     app.try_state::<Ocr>().ok_or_else(|| "failed: ocr is not started".to_string())
 }
 
+/// The error of a recognition without any OCR language pack (`recognize_png`, `clip_ocr`) —
+/// the screenshot commit turns it into the HUD `text_unavailable`.
+pub(crate) const NO_LANGUAGE: &str = "failed: no OCR language is installed";
+
+/// Is any OCR language installed? (blocking; the "Copy text from screen" trigger asks before
+/// it opens the overlay). A WinRT failure answers `true`: the recognition reports it then.
+pub(crate) fn has_languages() -> bool {
+    installed_languages().map_or(true, |l| !l.is_empty())
+}
+
 /// Installed OCR languages, on this (blocking) thread inside the WinRT apartment.
 fn installed_languages() -> Result<Vec<String>, String> {
     let _apartment = engine::Apartment::enter();
@@ -228,7 +238,7 @@ pub(crate) fn recognize_png(app: &AppHandle, png: Vec<u8>) -> Result<String, Str
             let _apartment = engine::Apartment::enter();
             let result = match make_engine(&language) {
                 Ok(engine) => engine.recognize(&png),
-                Err(engine::Unavailable::NoLanguages) => Err("failed: no OCR language is installed".to_string()),
+                Err(engine::Unavailable::NoLanguages) => Err(NO_LANGUAGE.to_string()),
                 Err(engine::Unavailable::Failed(e)) => Err(e),
             };
             let _ = tx.send(result);
@@ -245,7 +255,7 @@ where
 {
     let job = store.ocr_job(id)?;
     let recognizer = make().map_err(|u| match u {
-        engine::Unavailable::NoLanguages => "failed: no OCR language is installed".to_string(),
+        engine::Unavailable::NoLanguages => NO_LANGUAGE.to_string(),
         engine::Unavailable::Failed(e) => e,
     })?;
     let started = Instant::now();

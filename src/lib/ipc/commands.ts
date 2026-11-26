@@ -35,6 +35,7 @@ import type {
   RunningApp,
   Settings,
   SettingsResult,
+  ShotAdded,
   ShotCommit,
   ShotCommitResult,
   ShotEditorCommit,
@@ -79,11 +80,14 @@ export const settingsSet = (settings: Settings): Promise<SettingsResult> =>
 /** `app_info` — Version and data/log folders. */
 export const appInfo = (): Promise<AppMeta> => call<AppMeta>("app_info");
 
-/** `open_path` — Open the data or log folder in Explorer. */
+/** `open_path` — Open the data, log or screenshot folder in Explorer. */
 export const openPath = (which: PathKind): Promise<void> => call<void>("open_path", { which });
 
 /** `pick_exe` — Native "choose an .exe" dialog; `null` = cancelled. */
 export const pickExe = (): Promise<string | null> => call<string | null>("pick_exe");
+
+/** `pick_folder` — Native "choose a folder" dialog (the screenshot folder); `null` = cancelled. */
+export const pickFolder = (): Promise<string | null> => call<string | null>("pick_folder");
 
 // ── store (W1-A) ───────────────────────────────────────────────────
 
@@ -415,6 +419,18 @@ export const shotSaveAs = (id: number): Promise<string | null> =>
 /** `shot_reveal` — Explorer with the saved file selected. */
 export const shotReveal = (id: number): Promise<void> =>
   call<void>("shot_reveal", { id });
+
+/** `shot_temp_copy` — Copy a shot kept out of history (QAO card; `name` = its temp file name). */
+export const shotTempCopy = (name: string): Promise<void> =>
+  call<void>("shot_temp_copy", { name });
+
+/** `shot_temp_save_as` — "Save as…" for a shot kept out of history; the path, `null` = cancelled. */
+export const shotTempSaveAs = (name: string): Promise<string | null> =>
+  call<string | null>("shot_temp_save_as", { name });
+
+/** `shots_pending` — The QAO page subscribed: the `shot:added` payloads that came before. */
+export const shotsPending = (): Promise<ShotAdded[]> =>
+  call<ShotAdded[]>("shots_pending");
 
 /** `shots_hud_layout` — The QAO stack's height in logical px (the window follows). */
 export const shotsHudLayout = (height: number): Promise<void> =>

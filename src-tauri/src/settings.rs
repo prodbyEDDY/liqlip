@@ -629,10 +629,12 @@ pub fn app_info(app: AppHandle) -> Result<AppMeta, String> {
 #[tauri::command]
 pub async fn open_path(app: AppHandle, which: PathKind) -> Result<(), String> {
     use tauri_plugin_opener::OpenerExt;
-    let data = data_dir(&app)?;
     let dir = match which {
-        PathKind::Data => data,
-        PathKind::Logs => data.join("logs"),
+        PathKind::Data => data_dir(&app)?,
+        PathKind::Logs => data_dir(&app)?.join("logs"),
+        // The screenshot folder (INT-5): the setting, else `<Pictures>\Liqlip` — the same
+        // resolver the commit writes into.
+        PathKind::Shots => crate::screenshot::shot_folder(&get(&app).screenshot)?,
     };
     std::fs::create_dir_all(&dir).map_err(|e| format!("failed: {e}"))?;
     app.opener()
@@ -660,6 +662,37 @@ pub async fn pick_exe(app: AppHandle) -> Result<Option<String>, String> {
     match rx.await.map_err(|_| "failed: dialog closed".to_string())? {
         None => Ok(None),
         Some(file) => file
+            .into_path()
+            .map(|p| Some(p.to_string_lossy().into_owned()))
+            .map_err(|e| format!("invalid: {e}")),
+    }
+}
+
+/// Native "choose a folder" dialog — the screenshot folder (INT-5, W6-F's snippet). Starts in
+/// the current folder when it exists; parented to the settings window. `null` = cancelled.
+/// tauri-plugin-dialog 2.7.1: `FileDialogBuilder::{set_title, set_directory, set_parent,
+/// pick_folder}` (callback form, as `pick_exe`).
+#[tauri::command]
+pub async fn pick_folder(app: AppHandle) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let s = get(&app);
+    let lang = i18n_native::resolve(s.general.language);
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let mut dialog = app.dialog().file().set_title(i18n_native::tr(lang, i18n_native::Key::PickFolderTitle));
+    if let Ok(dir) = crate::screenshot::shot_folder(&s.screenshot) {
+        if dir.is_dir() {
+            dialog = dialog.set_directory(dir);
+        }
+    }
+    if let Some(win) = app.get_webview_window(events::SETTINGS) {
+        dialog = dialog.set_parent(&win);
+    }
+    dialog.pick_folder(move |picked| {
+        let _ = tx.send(picked);
+    });
+    match rx.await.map_err(|_| "failed: dialog closed".to_string())? {
+        None => Ok(None),
+        Some(dir) => dir
             .into_path()
             .map(|p| Some(p.to_string_lossy().into_owned()))
             .map_err(|e| format!("invalid: {e}")),
