@@ -155,9 +155,10 @@ export function hasProp(o: EdObject, p: StyleProp): boolean {
   }
 }
 
-/** Apply one property (returns the same object when the property doesn't apply). */
+/** Apply one property (returns the same object when the property doesn't apply or already has
+ *  this value — so re-picking the current colour/size leaves no empty undo step and no "dirty"). */
 export function applyProp<P extends StyleProp>(o: EdObject, p: P, v: ToolStyle[P]): EdObject {
-  if (!hasProp(o, p)) return o;
+  if (!hasProp(o, p) || propValue(o, p) === v) return o;
   switch (p) {
     case "color":
       return { ...o, color: v as string } as EdObject;
@@ -182,6 +183,33 @@ export function applyProp<P extends StyleProp>(o: EdObject, p: P, v: ToolStyle[P
       return { ...o, shape: v as ToolStyle["spotShape"] } as EdObject;
   }
   return o;
+}
+
+/** The object's own value of `p` (`undefined` when it has none; a text's size is its slot only
+ *  when its font size sits exactly on one). */
+function propValue(o: EdObject, p: StyleProp): unknown {
+  switch (p) {
+    case "color":
+      return "color" in o ? o.color : undefined;
+    case "size":
+      if (o.kind === "text") {
+        const i = (FONT_SIZES as readonly number[]).indexOf(o.fontSize);
+        return i >= 0 ? i + 1 : undefined;
+      }
+      return "size" in o ? o.size : undefined;
+    case "fill":
+      return o.kind === "rect" || o.kind === "ellipse" ? o.fill : undefined;
+    case "round":
+      return o.kind === "rect" ? o.round === true : undefined;
+    case "arrowStyle":
+      return o.kind === "arrow" ? o.style : undefined;
+    case "textStyle":
+      return o.kind === "text" ? o.style : undefined;
+    case "redactMode":
+      return o.kind === "redact" ? o.mode : undefined;
+    case "spotShape":
+      return o.kind === "spotlight" ? o.shape : undefined;
+  }
 }
 
 /** The size slot (1…5) a text object's font size is closest to. */

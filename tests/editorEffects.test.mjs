@@ -145,3 +145,36 @@ test("the export draws the document with the SAME drawDoc as the screen (WYSIWYG
   delete globalThis.OffscreenCanvas;
   delete globalThis.ImageData;
 });
+
+test("a blur being reshaped previews with the canvas filter; at rest (and in the export) it is the exact effect", async () => {
+  const logs = [];
+  globalThis.OffscreenCanvas = class {
+    constructor(w, h) {
+      this.width = w;
+      this.height = h;
+      this.log = [];
+      logs.push(this.log);
+    }
+    getContext() {
+      return recorder(this.log);
+    }
+  };
+  globalThis.ImageData = class {
+    constructor(data, w, h) {
+      Object.assign(this, { data, width: w, height: h });
+    }
+  };
+  const R = await importTs("src/lib/editor/render.ts");
+  const doc = { v: 1, w: 200, h: 100, unit: 1, crop: null, objects: [{ id: "b", kind: "redact", color: "#000000", r: { x: 20, y: 20, w: 60, h: 30 }, mode: "blur", size: 3 }] };
+  const env = { measure: (t, s) => t.length * s, base: { width: 200, height: 100 }, effects: new R.EffectCache(), images: new R.ImageCache(), skip: null, area: { x: 0, y: 0, w: 200, h: 100 } };
+  const filterOf = () => logs.flat().find((c) => c[0] === "=filter");
+  R.drawDoc(recorder([]), doc, { ...env, live: new Set(["b"]) });
+  assert.equal(filterOf()?.[1], `blur(${R.blurSigma(3, 1)}px)`, "live: the GPU filter, σ of the three box passes");
+  assert.ok(Math.abs(R.blurSigma(3, 1) - Math.sqrt(72)) < 1e-9, "radius 15 → box radius 8 → σ² = 3·(17²−1)/12");
+  logs.length = 0;
+  R.drawDoc(recorder([]), doc, env);
+  assert.equal(filterOf(), undefined, "at rest: no filter — the exact pixels (tile computed from the source)");
+  assert.ok(logs.some((l) => l.some((c) => c[0] === "putImageData")), "the exact effect: a tile computed from the source pixels");
+  delete globalThis.OffscreenCanvas;
+  delete globalThis.ImageData;
+});

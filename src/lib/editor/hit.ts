@@ -4,7 +4,7 @@
 // stroke) — a small rectangle inside a big outlined one is clickable (LT defect П-11: filled
 // bbox ±4 px). Filled shapes, text, counters, "hide" plates, images and spotlights are hit by
 // area. Handles of small objects sit OUTSIDE the object so they never cover it; pen and marker
-// strokes have no handles at all (move only). Pure, node-tested (tests/editorHit.test.mjs).
+// strokes have no handles at all (move only). Pure, node-tested (tests/editorRules.test.mjs, rules 6–7).
 import { COUNTER_R, MARKER_SCALE, strokePx, type EdObject, type Pt, type Rect } from "./doc";
 import {
   arrowControl,
@@ -36,8 +36,11 @@ export const HIT_TOL = 6;
 /** Drawn handle radius and its hit radius, screen px. */
 export const HANDLE_R = 5;
 export const HANDLE_HIT = 9;
-/** Below this many screen px an object's handles move outside it. */
-export const SMALL = 36;
+/** Below this many screen px an object's handles move outside it (W7: 36 → 64 — on a 50 × 40
+ *  rectangle eight 10 px handles hid most of its outline). */
+export const SMALL = 64;
+/** How far a handle steps out of a small object / a text box, screen px (its disc stays clear). */
+const STEP = HANDLE_R * 2 + 2;
 
 export type HandleId = "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w" | "a" | "b" | "mid";
 export interface Handle {
@@ -163,19 +166,25 @@ const BOX_HANDLES: readonly [HandleId, number, number][] = [
   ["w", 0, 0.5],
 ];
 
-/** 8 handles around `r`; when `r` is small on screen they step outside by a handle. */
-function boxHandles(r: Rect, scale: number, only?: ReadonlySet<HandleId>): Handle[] {
-  const out = (HANDLE_R * 2 + 2) / scale;
-  const smallX = r.w * scale < SMALL,
-    smallY = r.h * scale < SMALL;
+/**
+ * 8 handles around `r`; when `r` is small on screen they step outside by a handle. A thin box
+ * also moves its mid-side handles out (a one-line strip's side handles would sit on it).
+ * `step: false` — `r` is already grown clear of the content (text): handles stay on it.
+ */
+function boxHandles(r: Rect, scale: number, only?: ReadonlySet<HandleId>, step = true): Handle[] {
+  const out = STEP / scale;
+  const smallX = step && r.w * scale < SMALL,
+    smallY = step && r.h * scale < SMALL;
   return BOX_HANDLES.filter(([id]) => !only || only.has(id)).map(([id, fx, fy]) => {
-    const ox = smallX && fx !== 0.5 ? (fx === 0 ? -out : out) : 0;
-    const oy = smallY && fy !== 0.5 ? (fy === 0 ? -out : out) : 0;
+    const ox = fx !== 0.5 && (smallX || (fy === 0.5 && smallY)) ? (fx === 0 ? -out : out) : 0;
+    const oy = fy !== 0.5 && (smallY || (fx === 0.5 && smallX)) ? (fy === 0 ? -out : out) : 0;
     return { id, pt: [r.x + r.w * fx + ox, r.y + r.h * fy + oy] as Pt };
   });
 }
 
 const TEXT_HANDLES: ReadonlySet<HandleId> = new Set(["nw", "ne", "se", "sw", "e", "w"]);
+/** Pictures scale with their proportions (SPEC §9.3): corners only. */
+const CORNER_HANDLES: ReadonlySet<HandleId> = new Set(["nw", "ne", "se", "sw"]);
 
 /** Handles of a single selected object (pen, marker, counter: none — move only). */
 export function handlesOf(o: EdObject, env: HitEnv): Handle[] {
@@ -205,7 +214,10 @@ export function handlesOf(o: EdObject, env: HitEnv): Handle[] {
       return hs;
     }
     case "text":
-      return boxHandles(shapeBox(o, env), env.scale, TEXT_HANDLES);
+      // always clear of the glyphs (the box has only a 0.1 em padding): a handle never covers a letter
+      return boxHandles(growRect(shapeBox(o, env), STEP / env.scale), env.scale, TEXT_HANDLES, false);
+    case "image":
+      return boxHandles(o.r, env.scale, CORNER_HANDLES);
     default:
       return boxHandles(o.r, env.scale);
   }

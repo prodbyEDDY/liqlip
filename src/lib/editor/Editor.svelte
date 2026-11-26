@@ -9,7 +9,8 @@
   import { onMount, untrack } from "svelte";
   import type { AnnotDoc, Rect } from "$lib/ipc/types";
   import { loadDoc, type EdDoc, type Pt, type ToolId } from "./doc";
-  import { cursorFor, find, type EditorIntent, type Mods } from "./interaction";
+  import { cursorFor, find, liveIds, secondaryPress, type EditorIntent, type Mods } from "./interaction";
+  import { resetLayout } from "./textLayout";
   import { createEditorState, type EditorState } from "./state.svelte";
   import { drawChrome, drawDoc, EffectCache, ImageCache, makeMeasure, setView } from "./render";
   import { flatten, type Flattened } from "./export";
@@ -93,7 +94,8 @@
 
   st.onResult = (r, prev) => {
     const s = r.state;
-    if (s.doc !== prev.doc || s.text?.id !== prev.text?.id) schedule(true);
+    // a gesture's end repaints the document too: live previews (blur) give way to the exact effect
+    if (s.doc !== prev.doc || s.text?.id !== prev.text?.id || !s.gesture !== !prev.gesture) schedule(true);
     else if (s.sel !== prev.sel || s.hover !== prev.hover || s.hoverHandle !== prev.hoverHandle || s.gesture !== prev.gesture || s.crop !== prev.crop || s.tool !== prev.tool) schedule(false);
     if (contentKey(s.doc.crop, s.tool) !== contentKey(prev.doc.crop, prev.tool) && mode === "window") {
       fitted = true;
@@ -160,9 +162,18 @@
     ro.observe(box);
     const wheel = (e: WheelEvent) => onWheel(e);
     box.addEventListener("wheel", wheel, { passive: false });
+    // a font face (e.g. Inter's Cyrillic subset, fetched on first use) arriving after a text was
+    // measured/drawn with the fallback: measure again and repaint
+    const fonts = typeof document !== "undefined" ? document.fonts : undefined;
+    const onFonts = () => {
+      resetLayout(measure);
+      schedule(true);
+    };
+    fonts?.addEventListener("loadingdone", onFonts);
     return () => {
       ro.disconnect();
       box.removeEventListener("wheel", wheel);
+      fonts?.removeEventListener("loadingdone", onFonts);
       if (raf) cancelAnimationFrame(raf);
     };
   });
@@ -195,7 +206,7 @@
       ctx.imageSmoothingQuality = "high";
       ctx.drawImage(base, 0, 0);
       ctx.imageSmoothingEnabled = true;
-      drawDoc(ctx, s.doc, { measure, base, effects, images, skip: s.text?.id ?? null, area });
+      drawDoc(ctx, s.doc, { measure, base, effects, images, skip: s.text?.id ?? null, area, live: liveIds(s) });
       ctx.restore();
     }
     const cx = chromeCanvas.getContext("2d")!;
@@ -253,6 +264,11 @@
     }
     const mods = modsOf(e);
     const g = st.ed.gesture;
+    if (g && secondaryPress(e)) {
+      // right button while drawing (a chorded press arrives as a move): cancel the object
+      st.dispatch({ type: "down", pt: toSrc(e), button: 2, mods, time: e.timeStamp });
+      return;
+    }
     // pen strokes take every coalesced sample (smoother curves); everything else the last one
     const samples = g?.kind === "create" && typeof e.getCoalescedEvents === "function" ? e.getCoalescedEvents() : [];
     if (samples.length > 1) for (const c of samples) st.dispatch({ type: "move", pt: toSrc(c), button: 0, mods, time: c.timeStamp });
@@ -381,7 +397,10 @@
    *  Escape is never eaten here: the host calls `escape()`. Ctrl+V is left to the `paste` event. */
   export function handleKey(e: KeyboardEvent): boolean {
     if (e.type !== "keydown") return false;
-    if (st.typing || e.isComposing) return e.code !== "Escape";
+    // an IME composing owns every key, Esc too (it cancels the composition — the host must not
+    // run its Esc ladder); otherwise while typing every key but Esc belongs to the text field
+    if (e.isComposing || e.keyCode === 229) return true;
+    if (st.typing) return e.code !== "Escape";
     if (isField(e.target)) return false;
     const r = st.dispatch({
       type: "key",

@@ -108,6 +108,10 @@ export function finish(draft: EdObject, travel: number, env: CreateEnv, cur?: Pt
       return draft.r.w * env.scale < 1 && draft.r.h * env.scale < 1 ? null : draft;
     case "pen":
     case "marker": {
+      // a marker click leaves nothing: its flat caps make a zero-length stroke invisible, and an
+      // invisible object would still count (dirty, "close without saving?", hit-testable). A pen
+      // click is a dot (round caps) — kept.
+      if (draft.kind === "marker" && travel < CLICK_PX) return null;
       let points = draft.points;
       // the streamlined tail lags behind the pointer: end where the pointer was released
       if (cur && points.length > 1 && travel >= CLICK_PX) points = [...points, cur];

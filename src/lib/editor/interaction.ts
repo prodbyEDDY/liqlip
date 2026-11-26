@@ -9,6 +9,7 @@
 // never selected (rule 3); instead the just-created object is remembered as `last` until the
 // next press, a tool change or Esc, and a property change goes to it and to the tool's default
 // (rule 4). Selecting is the Select tool's job, or Ctrl held with any tool (rule 5).
+import { isBrowserShortcut, type BrowserKeyInput } from "$lib/browserKeys";
 import {
   DRAW_TOOLS,
   FONT_SIZES,
@@ -78,7 +79,9 @@ export type EdEvent =
   | { type: "mods"; mods: Mods }
   | { type: "escape" }
   | { type: "tool"; tool: ToolId }
-  | { type: "prop"; prop: StyleProp; value: ToolStyle[StyleProp]; time: number }
+  /** `recent: false` — a live preview (the system colour picker while it is dragged): the colour
+   *  is applied but doesn't enter the "recent" list (its final `change` does). Default true. */
+  | { type: "prop"; prop: StyleProp; value: ToolStyle[StyleProp]; time: number; recent?: boolean }
   | { type: "undo" }
   | { type: "redo" }
   | { type: "text"; value: string }
@@ -217,6 +220,16 @@ export function propsFor(s: EdState): StyleProp[] {
   return all.filter((p) => hasProp(probe, p));
 }
 
+/** Objects whose geometry the live gesture is changing (the renderer may draw cheap previews of
+ *  them — a blur is recomputed exactly once the gesture ends). */
+export function liveIds(s: EdState): ReadonlySet<string> | null {
+  const g = s.gesture;
+  if (!g) return null;
+  if (g.kind === "create" || g.kind === "resize") return new Set([g.id]);
+  if (g.kind === "move") return new Set(g.ids);
+  return null;
+}
+
 export function canUndo(s: EdState): boolean {
   return s.hist.past.length > 0 || s.gesture !== null;
 }
@@ -335,7 +348,7 @@ function setTool(s: EdState, tool: ToolId, env: Env): EdState {
 
 /** Rule 4: a property change goes to the selection, else to the just-created object, and
  *  always becomes the default of the tool(s) involved. */
-function setProp<P extends StyleProp>(s: EdState, prop: P, value: ToolStyle[P], time: number): EdState {
+function setProp<P extends StyleProp>(s: EdState, prop: P, value: ToolStyle[P], time: number, recent = true): EdState {
   const tgt = targets(s);
   let next = s;
   if (tgt.length) {
@@ -363,21 +376,21 @@ function setProp<P extends StyleProp>(s: EdState, prop: P, value: ToolStyle[P], 
     const st = styleTool(s);
     if (st) tools.add(st);
   }
-  return setDefaults(next, tools, prop, value);
+  return setDefaults(next, tools, prop, value, recent);
 }
 
-function setDefaults<P extends StyleProp>(s: EdState, tools: Iterable<StyleTool>, prop: P, value: ToolStyle[P]): EdState {
+function setDefaults<P extends StyleProp>(s: EdState, tools: Iterable<StyleTool>, prop: P, value: ToolStyle[P], toRecent = true): EdState {
   const all = { ...s.defaults.tools };
   for (const t of tools) all[t] = { ...all[t], [prop]: value };
-  const recent = prop === "color" ? pushRecent(s.defaults.recent, value as string) : s.defaults.recent;
+  const recent = prop === "color" && toRecent ? pushRecent(s.defaults.recent, value as string) : s.defaults.recent;
   return { ...s, defaults: { tools: all, recent } };
 }
 
 /** A property change while typing goes to the text being typed (part of its one undo step). */
-function setTextProp<P extends StyleProp>(s: EdState, prop: P, value: ToolStyle[P]): EdState {
+function setTextProp<P extends StyleProp>(s: EdState, prop: P, value: ToolStyle[P], recent = true): EdState {
   const o = s.text ? find(s, s.text.id) : undefined;
   const next = o ? withObjects(s, replaceObj(s.doc.objects, applyProp(o, prop, value))) : s;
-  return setDefaults(next, ["text"], prop, value);
+  return setDefaults(next, ["text"], prop, value, recent);
 }
 
 function cycle<T>(list: readonly T[], cur: T): T {
@@ -519,6 +532,12 @@ function onMove(s0: EdState, e: PointerIn, env: Env): Result {
 }
 
 function onUp(s0: EdState, e: PointerIn, env: Env): Result {
+  const r = finishGesture(s0, e, env);
+  // what is under the pointer now (after a move / an Alt-copy the old hover outline was stale)
+  return r.handled ? { ...r, state: updateHover(r.state, e.pt, e.mods, env) } : r;
+}
+
+function finishGesture(s0: EdState, e: PointerIn, env: Env): Result {
   const s: EdState = { ...s0, pointer: e.pt, mods: e.mods };
   const g = s.gesture;
   if (!g) return done(s, false);
@@ -788,6 +807,38 @@ export function escapeStep(s: EdState): Result {
   return done(cleared, false);
 }
 
+// ── DOM helpers (pure; Editor.svelte and TextInput.svelte call them) ─────────
+
+/**
+ * A right button pressed WHILE another is held. Pointer Events fire no second `pointerdown` for
+ * a chorded press — only a `pointermove` with `button === 2` and bit 2 in `buttons` — so the
+ * "right click cancels the object being drawn" rule (SPEC §9.2) has to look at moves.
+ */
+export function secondaryPress(e: { button: number; buttons: number }): boolean {
+  return e.button === 2 && (e.buttons & 2) !== 0;
+}
+
+/** What a key pressed in the text field means (rule 8, rule 12). */
+export type TextKey = "ime" | "escape" | "commit" | "action" | "browser" | "type";
+
+/**
+ * Keys typed into a text object's field. `ime` — an IME is composing: the IME owns the key, Esc
+ * included (it cancels the composition, not the text). `escape` — travels on to the host
+ * (`escape()` finishes the text). `commit` — Ctrl+Enter. `action` — Ctrl+S / Ctrl+Shift+S /
+ * Ctrl+P / Ctrl+W: finish the text, then the editor runs the shortcut as usual. `browser` — a
+ * WebView2 accelerator (F5 / Ctrl+R reload the window and lose the drawing, Ctrl+P prints…):
+ * swallowed. `type` — an ordinary key, it stays in the field.
+ */
+export function textKey(e: BrowserKeyInput & { isComposing: boolean; keyCode: number }): TextKey {
+  if (e.isComposing || e.keyCode === 229) return "ime";
+  if (e.code === "Escape") return "escape";
+  const ctrl = (e.ctrlKey || e.metaKey) && !e.altKey;
+  if (ctrl && (e.code === "Enter" || e.code === "NumpadEnter")) return "commit";
+  if (ctrl && (e.code === "KeyS" || (!e.shiftKey && (e.code === "KeyP" || e.code === "KeyW")))) return "action";
+  if (isBrowserShortcut(e, { find: true })) return "browser";
+  return "type";
+}
+
 // ── the dispatcher ───────────────────────────────────────────────────────────
 
 export function dispatch(s: EdState, e: EdEvent, env: Env): Result {
@@ -815,7 +866,7 @@ export function dispatch(s: EdState, e: EdEvent, env: Env): Result {
     case "tool":
       return done(setTool(s, e.tool, env));
     case "prop":
-      return done(s.text ? setTextProp(s, e.prop, e.value) : setProp(s, e.prop, e.value, e.time));
+      return done(s.text ? setTextProp(s, e.prop, e.value, e.recent ?? true) : setProp(s, e.prop, e.value, e.time, e.recent ?? true));
     case "undo":
       return done(doUndo(commitText(s)));
     case "redo":

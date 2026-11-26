@@ -50,7 +50,7 @@
           <Tip label={t("editor.prop.color")} keys={["Shift", "1…8"]} side={tips} />
         </button>
         {#if st.colorOpen}
-          <ColorPopover value={style.color} recent={st.recent} onpick={(c) => set("color", c)} onclose={() => (st.colorOpen = false)} />
+          <ColorPopover value={style.color} recent={st.recent} onpick={(c, live) => st.setProp("color", c, { recent: !live })} onclose={() => (st.colorOpen = false)} />
         {/if}
       </span>
     {/if}
@@ -191,6 +191,9 @@
     height: 20px;
     border-radius: 999px;
     background: var(--sw);
+    /* user colour on the capsule: a faint inner tone keeps black (dark theme) / white (light)
+       from vanishing into the bar */
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-ink) 16%, transparent);
   }
   .pb__dot {
     width: var(--d);

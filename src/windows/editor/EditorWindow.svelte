@@ -26,15 +26,17 @@
   import { onShotEditor } from "$lib/ipc/events";
   import { errorMessage } from "$lib/ipc/errors";
   import { isTauri } from "$lib/ipc/runtime";
-  import type { AnnotDoc, ShotEditorAction, ShotEditorPayload } from "$lib/ipc/types";
+  import type { AnnotDoc, Clip, ShotEditorAction, ShotEditorPayload } from "$lib/ipc/types";
   import { Editor, PropsBar, Toolbar, createEditorState, loadDoc, type EditorIntent } from "$lib/editor";
   import Glyph from "$lib/editor/glyphs/Glyph.svelte";
   import Tip from "$lib/editor/Tip.svelte";
   import UnsavedDialog, { type Answer } from "./UnsavedDialog.svelte";
+  import { LoadOrder } from "./loadOrder";
 
   type Phase = "loading" | "ready" | "empty" | "error";
 
   const ed = createEditorState();
+  const order = new LoadOrder();
   let phase = $state<Phase>("loading");
   let payload = $state<ShotEditorPayload | null>(null);
   let base = $state.raw<ImageBitmap | null>(null);
@@ -55,11 +57,14 @@
     toastTimer = setTimeout(() => (toast = null), error ? 6000 : 2400);
   }
 
-  async function load(p: ShotEditorPayload | null): Promise<void> {
+  /** `ticket` — taken when the load was decided (a switch takes it before awaiting Rust). */
+  async function load(p: ShotEditorPayload | null, ticket = order.begin()): Promise<void> {
+    if (!order.current(ticket)) return;
     dialog = null;
     payload = p;
     if (!p) {
       phase = "empty";
+      base?.close();
       base = null;
       return;
     }
@@ -71,6 +76,10 @@
       img.src = p.baseUrl;
       await img.decode();
       const bmp = await createImageBitmap(img);
+      if (!order.current(ticket)) {
+        bmp.close(); // a newer record is loading: this picture must not land under its id
+        return;
+      }
       const res = loadDoc(p.doc, bmp.width, bmp.height, 1);
       if (res.unknownVersion) say(t("editor.toast.newerDoc"), "warning", true);
       base?.close();
@@ -78,6 +87,7 @@
       doc = res.doc;
       phase = "ready";
     } catch (e) {
+      if (!order.current(ticket)) return;
       console.error("[editor] cannot open the picture", e);
       phase = "error";
     }
@@ -85,9 +95,13 @@
 
   async function reload(): Promise<void> {
     phase = "loading";
+    const mark = order.mark();
     try {
-      await load(await shotEditorGet());
+      const p = await shotEditorGet();
+      if (order.superseded(mark)) return; // a `shot:editor` came meanwhile — it is newer
+      await load(p);
     } catch (e) {
+      if (order.superseded(mark)) return;
       console.error("[editor] shot_editor_get failed", e);
       phase = "error";
     }
@@ -112,7 +126,9 @@
         px = await api.exportRGBA(d.crop ?? { x: 0, y: 0, w: d.w, h: d.h });
       }
       const head = { clipId: payload.clipId, action, doc: api.doc(), width: px?.width ?? 0, height: px?.height ?? 0 };
-      const clip = await shotEditorCommit(head, px?.data ?? null);
+      // `null` — "Save as…" was cancelled (W7-R2): no toast (the record may have had a saved
+      // path before, so the path alone doesn't tell a cancel from a save)
+      const clip: Clip | null = await shotEditorCommit(head, px?.data ?? null);
       if (action === "done") {
         api.markSaved();
         // Rust closes the window; the browser preview stays and says what happened.
@@ -122,7 +138,7 @@
         if (!unchanged) api.markSaved(); // the edit went into the record before the pin
         say(t("editor.toast.pinned"), "check");
       }
-      else if (action === "save_as" && clip.meta.shot?.savedPath) say(t("editor.toast.savedAs"), "download");
+      else if (action === "save_as" && clip?.meta.shot?.savedPath) say(t("editor.toast.savedAs"), "download");
       return true;
     } catch (e) {
       console.error(`[editor] shot_editor_commit ${action} failed`, e);
@@ -171,12 +187,14 @@
 
   /** `shot:editor` — another record in this window (the window asks first if needed). */
   async function onSwitch(p: ShotEditorPayload): Promise<void> {
+    order.switched();
     if (api?.dirty()) {
       dialog = { switching: p };
       return;
     }
+    const ticket = order.begin(); // in event order — not in the order Rust acknowledges the switches
     if (p.dirtyGuard) await shotEditorSwitch(true).catch((e) => console.error("[editor] switch", e));
-    await load(p);
+    await load(p, ticket);
   }
 
   function onKeydown(e: KeyboardEvent): void {
@@ -194,10 +212,21 @@
     if (isBrowserShortcut(e, { find: true })) e.preventDefault();
   }
 
+  /** The page takes no drops (a dropped file would navigate the webview away from the work). */
+  function refuseDrop(e: DragEvent): void {
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = "none";
+  }
+
   onMount(() => {
     const offs: (UnlistenFn | Promise<UnlistenFn>)[] = [];
-    void reload();
-    offs.push(onShotEditor((p) => void onSwitch(p)));
+    // listen first, then ask (W7-R2): a switch emitted while `shot_editor_get` is in flight is
+    // not lost, and its payload wins over the (older) answer — `order`
+    const sub = onShotEditor((p) => void onSwitch(p));
+    offs.push(sub);
+    void Promise.resolve(sub)
+      .catch((e) => console.error("[editor] shot:editor subscription failed", e))
+      .finally(() => void reload());
     if (isTauri()) {
       offs.push(
         getCurrentWindow().onCloseRequested(async (ev) => {
@@ -217,51 +246,52 @@
   const keep = (e: MouseEvent) => e.preventDefault();
 </script>
 
-<svelte:window onkeydown={onKeydown} />
+<svelte:window onkeydown={onKeydown} ondragover={refuseDrop} ondrop={refuseDrop} />
 
 <div class="win">
+  <!-- two rows (tools · actions / properties · zoom); a narrow window (< 820 px, e.g. the 640 px
+       minimum for a small picture) gets three: tools / properties / zoom · actions -->
   <header class="bar">
-    <div class="bar__row">
-      <!-- tools and properties wait for a picture (inert + dimmed while loading / empty / error) -->
-      <div class="bar__tools" class:is-idle={!ready} inert={!ready}><Toolbar state={ed} /></div>
-      <div class="bar__end" role="group" aria-label={t("editor.actions")}>
-        <button type="button" class="act" disabled={!ready || !!busy} aria-label={`${t("editor.action.copy")} (Ctrl+C)`} onmousedown={keep} onclick={() => void commit("copy")}>
-          <Ico name={busy === "copy" ? "loaderCircle" : "copy"} size={18} />
-          <Tip label={t("editor.action.copy")} keys={["Ctrl", "C"]} />
-        </button>
-        <button type="button" class="act" disabled={!ready || !!busy} aria-label={`${t("editor.action.pin")} (Ctrl+P)`} onmousedown={keep} onclick={() => void commit("pin")}>
-          <Ico name="pin" size={18} />
-          <Tip label={t("editor.action.pin")} keys={["Ctrl", "P"]} />
-        </button>
-        <button type="button" class="act" disabled={!ready || !!busy} aria-label={`${t("editor.action.saveAs")} (Ctrl+Shift+S)`} onmousedown={keep} onclick={() => void commit("save_as")}>
-          <Ico name={busy === "save_as" ? "loaderCircle" : "download"} size={18} />
-          <Tip label={t("editor.action.saveAs")} keys={["Ctrl", "Shift", "S"]} />
-        </button>
+    <!-- tools and properties wait for a picture (inert + dimmed while loading / empty / error) -->
+    <div class="bar__tools bar__tools--tools" class:is-idle={!ready} inert={!ready}><Toolbar state={ed} /></div>
+    <div class="bar__end" role="group" aria-label={t("editor.actions")}>
+      <button type="button" class="act" disabled={!ready || !!busy} aria-label={`${t("editor.action.copy")} (Ctrl+C)`} onmousedown={keep} onclick={() => void commit("copy")}>
+        <Ico name={busy === "copy" ? "loaderCircle" : "copy"} size={18} />
+        <Tip label={t("editor.action.copy")} keys={["Ctrl", "C"]} />
+      </button>
+      <button type="button" class="act" disabled={!ready || !!busy} aria-label={`${t("editor.action.pin")} (Ctrl+P)`} onmousedown={keep} onclick={() => void commit("pin")}>
+        <Ico name="pin" size={18} />
+        <Tip label={t("editor.action.pin")} keys={["Ctrl", "P"]} />
+      </button>
+      <button type="button" class="act" disabled={!ready || !!busy} aria-label={`${t("editor.action.saveAs")} (Ctrl+Shift+S)`} onmousedown={keep} onclick={() => void commit("save_as")}>
+        <Ico name={busy === "save_as" ? "loaderCircle" : "download"} size={18} />
+        <Tip label={t("editor.action.saveAs")} keys={["Ctrl", "Shift", "S"]} />
+      </button>
+      <span class="done">
         <Button icon="check" disabled={!ready || (!!busy && busy !== "done")} loading={busy === "done"} onmousedown={keep} onclick={() => void commit("done")}>
           {t("editor.action.done")}
         </Button>
-      </div>
+        <Tip label={t("editor.action.done")} keys={["Enter"]} />
+      </span>
     </div>
-    <div class="bar__row">
-      <div class="bar__tools" class:is-idle={!ready} inert={!ready}><PropsBar state={ed} /></div>
-      <div class="zoom" role="group" aria-label={t("editor.zoom.label")}>
-        <button type="button" class="act act--sm" disabled={!ready} aria-label={t("editor.zoom.out")} onmousedown={keep} onclick={() => ed.viewAction("out")}>
-          <Glyph name="zoomOut" size={16} />
-          <Tip label={t("editor.zoom.out")} keys={["Ctrl", "−"]} />
-        </button>
-        <button type="button" class="zoom__pct" disabled={!ready} aria-label={t("editor.zoom.fit")} onmousedown={keep} onclick={() => ed.viewAction(ed.zoom === 1 ? "fit" : "actual")}>
-          {zoomPct}
-          <Tip label={ed.zoom === 1 ? t("editor.zoom.fit") : t("editor.zoom.actual")} keys={["Ctrl", ed.zoom === 1 ? "0" : "1"]} />
-        </button>
-        <button type="button" class="act act--sm" disabled={!ready} aria-label={t("editor.zoom.in")} onmousedown={keep} onclick={() => ed.viewAction("in")}>
-          <Glyph name="zoomIn" size={16} />
-          <Tip label={t("editor.zoom.in")} keys={["Ctrl", "+"]} />
-        </button>
-        <button type="button" class="act act--sm" aria-label={t("editor.keys.title")} onmousedown={keep} onclick={() => (ed.cheatsheet = !ed.cheatsheet)}>
-          <Glyph name="help" size={16} />
-          <Tip label={t("editor.keys.title")} keys={["?"]} />
-        </button>
-      </div>
+    <div class="bar__tools bar__tools--props" class:is-idle={!ready} inert={!ready}><PropsBar state={ed} /></div>
+    <div class="zoom" role="group" aria-label={t("editor.zoom.label")}>
+      <button type="button" class="act act--sm" disabled={!ready} aria-label={t("editor.zoom.out")} onmousedown={keep} onclick={() => ed.viewAction("out")}>
+        <Glyph name="zoomOut" size={16} />
+        <Tip label={t("editor.zoom.out")} keys={["Ctrl", "−"]} />
+      </button>
+      <button type="button" class="zoom__pct" disabled={!ready} aria-label={t("editor.zoom.fit")} onmousedown={keep} onclick={() => ed.viewAction(ed.zoom === 1 ? "fit" : "actual")}>
+        {zoomPct}
+        <Tip label={ed.zoom === 1 ? t("editor.zoom.fit") : t("editor.zoom.actual")} keys={["Ctrl", ed.zoom === 1 ? "0" : "1"]} />
+      </button>
+      <button type="button" class="act act--sm" disabled={!ready} aria-label={t("editor.zoom.in")} onmousedown={keep} onclick={() => ed.viewAction("in")}>
+        <Glyph name="zoomIn" size={16} />
+        <Tip label={t("editor.zoom.in")} keys={["Ctrl", "+"]} />
+      </button>
+      <button type="button" class="act act--sm" aria-label={t("editor.keys.title")} onmousedown={keep} onclick={() => (ed.cheatsheet = !ed.cheatsheet)}>
+        <Glyph name="help" size={16} />
+        <Tip label={t("editor.keys.title")} keys={["?"]} />
+      </button>
     </div>
   </header>
 
@@ -311,22 +341,35 @@
   .bar {
     position: relative;
     z-index: 10;
-    display: flex;
-    flex-direction: column;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "tools end"
+      "props zoom";
+    align-items: center;
     gap: 8px;
     padding: 12px 12px 8px;
   }
-  .bar__row {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
+  /* narrow (the window's 640 px minimum): the tools take a row of their own; actions go right */
+  @media (max-width: 819px) {
+    .bar {
+      grid-template-columns: auto minmax(0, 1fr);
+      grid-template-areas:
+        "tools tools"
+        "props props"
+        "zoom end";
+    }
   }
   .bar__tools {
     display: inline-flex;
     min-width: 0;
     transition: opacity var(--dur-base) var(--ease-out-soft);
+  }
+  .bar__tools--tools {
+    grid-area: tools;
+  }
+  .bar__tools--props {
+    grid-area: props;
   }
   .bar__tools.is-idle {
     opacity: 0.45;
@@ -336,6 +379,23 @@
     display: inline-flex;
     align-items: center;
     gap: 4px;
+  }
+  .bar__end {
+    grid-area: end;
+    justify-self: end;
+  }
+  .zoom {
+    grid-area: zoom;
+    justify-self: end;
+  }
+  @media (max-width: 819px) {
+    .zoom {
+      justify-self: start;
+    }
+  }
+  .done {
+    position: relative;
+    display: inline-flex;
   }
   .zoom {
     height: 40px;
