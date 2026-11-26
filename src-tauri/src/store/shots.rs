@@ -480,6 +480,39 @@ impl Store {
         tx.commit().map_err(db_err)
     }
 
+    /// The §18.5 invariant — every `screenshot` has a `shot_docs` row — for records that came in
+    /// without one: the Liquid Tools import (W8-A; its shots carry no annotation document, any
+    /// annotations are pixels already). Each gets an empty document of the picture's size, `unit`
+    /// 1 (Liquid Tools keeps no monitor scale; the editor's default too), no base picture
+    /// (`has_base = 0`), no saved file. Rows already there are never touched. Returns how many
+    /// were added.
+    pub(crate) fn attach_missing_shot_docs(&self) -> Result<i64, String> {
+        let now = self.now();
+        let mut conn = self.lock();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate).map_err(db_err)?;
+        let rows: Vec<(i64, Option<i64>, Option<i64>)> = {
+            let mut st = tx
+                .prepare(
+                    "SELECT c.id, c.width, c.height FROM clips c LEFT JOIN shot_docs s ON s.clip_id = c.id
+                     WHERE c.kind = ?1 AND s.clip_id IS NULL",
+                )
+                .map_err(db_err)?;
+            let found = st.query_map([Kind::Screenshot.as_str()], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).map_err(db_err)?;
+            found.collect::<Result<_, _>>().map_err(db_err)?
+        };
+        for &(id, w, h) in &rows {
+            let doc = doc_json(&empty_doc(w.unwrap_or(0), h.unwrap_or(0), 1.0))?;
+            tx.execute(
+                "INSERT INTO shot_docs (clip_id, doc, has_base, saved_path, updated_at) VALUES (?1, ?2, 0, NULL, ?3)",
+                params![id, doc, now],
+            )
+            .map_err(db_err)?;
+            sync_meta(&tx, id)?;
+        }
+        tx.commit().map_err(db_err)?;
+        Ok(rows.len() as i64)
+    }
+
     /// `.liqlip` merge (§17.5): attach a backup's documents to the records the import created
     /// or found (by hash). A record that already has a row keeps it; a malformed document is
     /// skipped; a row whose base picture is missing from the archive loses its live objects
@@ -787,6 +820,28 @@ mod tests {
         let d = t.shot_doc(id).unwrap().unwrap();
         assert_eq!((d.doc, d.has_base), (empty_doc(8, 6, 2.0), false));
         assert!(!clip_by_id(&t.lock(), id).unwrap().meta.shot.unwrap().edited);
+    }
+
+    /// W8-A: a screenshot that came in without a `shot_docs` row (the Liquid Tools import) gets the
+    /// empty one; rows already there — and other kinds — stay as they are.
+    #[test]
+    fn screenshots_without_a_document_get_the_empty_one() {
+        let t = TestStore::new();
+        let mut annotated = shot(8, 6, 31, 1_000);
+        annotated.base_png = Some(encode(8, 6, &rgba(8, 6, 32)));
+        annotated.doc = Some(json!({ "v": 1, "w": 8, "h": 6, "unit": 2, "crop": null, "objects": [{ "id": "a" }] }));
+        let kept = t.insert_screenshot(annotated).unwrap().id;
+        let bare = t.insert_screenshot(shot(5, 4, 33, 2_000)).unwrap().id;
+        t.lock().execute("DELETE FROM shot_docs WHERE clip_id = ?1", [bare]).unwrap();
+        let image = t.add_image(3, 3, 3_000, false);
+        let before = t.shot_doc(kept).unwrap();
+        assert_eq!(t.attach_missing_shot_docs().unwrap(), 1);
+        let d = t.shot_doc(bare).unwrap().expect("the row now exists");
+        assert_eq!((d.doc, d.has_base, d.saved_path), (empty_doc(5, 4, 1.0), false, None));
+        assert_eq!(clip_by_id(&t.lock(), bare).unwrap().meta.shot, Some(ShotMeta { saved_path: None, edited: false }));
+        assert_eq!(t.shot_doc(kept).unwrap(), before, "an existing row is never touched");
+        assert_eq!(t.shot_doc(image).unwrap(), None, "an image gets a row only when edited or saved");
+        assert_eq!(t.attach_missing_shot_docs().unwrap(), 0, "idempotent");
     }
 
     #[test]

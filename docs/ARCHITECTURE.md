@@ -84,7 +84,7 @@ liqlip/
       content.rs                общий хэш + правила содержимого (превью, усечение, метрики) — §15
       events.rs                 типизированные эмиттеры всех событий §9.7 (имена + адресация)
       tray.rs · theme.rs · logx.rs · fsx.rs · autostart.rs · i18n_native.rs
-    tauri.conf.json · capabilities/{default,screenshot}.json · icons/ (знак Liqlip, W2-D — §16)
+    tauri.conf.json · capabilities/{default,settings,screenshot}.json · icons/ (знак Liqlip, W2-D — §16)
   tests/                        *.test.mjs (node:test) · helpers/bundle.mjs (esbuild → ESM) ·
                                 fixtures/settings.default.json (дефолты: Rust ≡ мок)
   docs/                         эта библиотека
@@ -1494,13 +1494,13 @@ export interface ImportReport { imported: number; skipped: number; folders: numb
 | `shot_edit` | `id` → `()` (открыть окно редактора) | screenshot · editor (W6-B) |
 | `shot_editor_get` | → `ShotEditorPayload \| null` | screenshot · editor (W6-B) |
 | `shot_editor_switch` | `accept: boolean` → `()` | screenshot · editor (W6-B) |
-| `shot_editor_commit` | **сырое тело** (JSON `ShotEditorCommit`) → `Clip` (без пикселей — текущая картинка записи; `done` без пикселей = «ничего не менялось», §18.9) | screenshot · editor (W6-B) + шаги commit/files (W6-A) |
+| `shot_editor_commit` | **сырое тело** (JSON `ShotEditorCommit`) → `Clip \| null` (без пикселей — текущая картинка записи; `done` без пикселей = «ничего не менялось», §18.9; `null` — «Сохранить как…» отменён, W8-A, аддитивно) | screenshot · editor (W6-B) + шаги commit/files (W6-A) |
 | `shot_pin` | `id` → `()` | screenshot · pin (W6-B) |
 | `shot_pin_get` | → `PinPayload \| null` (по метке вызывающего окна) | screenshot · pin (W6-B) |
 | `shot_pin_resize` | `scale: number` → `()` | screenshot · pin (W6-B) |
 | `shot_pin_close` | → `()` | screenshot · pin (W6-B) |
 | `shot_save` | `id` → `string` (путь в папке снимков) | screenshot · files (W6-A) |
-| `shot_save_as` | `id` → `string \| null` (диалог) | screenshot · files (W6-A) |
+| `shot_save_as` | `id` → `string \| null` (диалог; ошибка записи при вызове из шелфа — ещё и HUD `save_failed`, W8-A) | screenshot · files (W6-A) |
 | `shot_reveal` | `id` → `()` (Проводник с выделением сохранённого файла) | screenshot · files (W6-A) |
 | `shot_temp_copy` | `name` → `()` (карточка QAO «не в истории»: временный файл по голому имени, §18.4) — INT-5 | screenshot · files |
 | `shot_temp_save_as` | `name` → `string \| null` («Сохранить как…» для временного файла; записи нет) — INT-5 | screenshot · files |
@@ -1528,7 +1528,7 @@ export interface ImportReport { imported: number; skipped: number; folders: numb
 | `settings:changed` ⚑ | `Settings` | settings → все |
 | `settings:navigate` | `{ section: string }` | picker (`settings_open`) → settings |
 | `hotkeys:captured` | `{ combo: string }` | hotkeys → settings |
-| `hud:show` | `{ kind: 'copied'\|'stack_empty'\|'paused'\|'elevated'\|'resumed'\|'skip_next'\|'countdown'\|'shot_failed'\|'text_copied'\|'text_empty'\|'text_unavailable'; text?: string }` (`resumed`/`skip_next` — W1-D, аддитивно; `text` — подпись чипа сочетания `{keys}`, напр. «Shift+Insert», W2-F; нет — «Ctrl+V»; W5: `countdown` — `text` = оставшиеся секунды в том же чипе, `shot_failed` / `text_copied` / `text_empty` — §18.3–18.4; INT-5: `text_unavailable` — «Текст с экрана» без языковых пакетов OCR) | picker/paste/hotkeys/screenshot → hud |
+| `hud:show` | `{ kind: 'copied'\|'stack_empty'\|'paused'\|'elevated'\|'resumed'\|'skip_next'\|'countdown'\|'shot_failed'\|'text_copied'\|'text_empty'\|'text_unavailable'\|'save_failed'; text?: string }` (`resumed`/`skip_next` — W1-D, аддитивно; `text` — подпись чипа сочетания `{keys}`, напр. «Shift+Insert», W2-F; нет — «Ctrl+V»; W5: `countdown` — `text` = оставшиеся секунды в том же чипе, `shot_failed` / `text_copied` / `text_empty` — §18.3–18.4; INT-5: `text_unavailable` — «Текст с экрана» без языковых пакетов OCR; W8-A: `save_failed` — «Сохранить как…» из шелфа не записал файл, шелф к этому моменту спрятан) | picker/paste/hotkeys/screenshot → hud |
 | `ocr:progress` | `{ done: number; total: number }` | ocr → settings |
 | `import:progress` | `{ phase: string; done: number; total: number }` | import → settings |
 | `theme://changed` ⚑ | `'light'\|'dark'` | theme → все |
@@ -1842,6 +1842,21 @@ a_tray_pick_is_told_from_a_real_foreground, the_tray_fallback_takes_only_windows
 a_direct_capture_refocuses_only_after_hiding_the_shelf}`, `screenshot::commit::tests::what_follows_never_drops_the_shot`,
 `screenshot::files::tests::only_pictures_are_rewritten_in_place`, `store::shots::tests::a_lost_base_picture_drops_the_live_objects`,
 `import::tests::a_v2_backup_without_shot_docs_is_refused`. **Итог: `cargo test` 422 ×2, `pnpm test` 343, `pnpm check` 0/0.**
+
+**W7 слито (2026-11-27).** R1 + R2 + R3 + R4 в `main`: `cargo test` 426, `pnpm test` 363.
+
+**W8-A (хвосты после ревью W7, 2026-11-27).** Rust +5: `screenshot::sound::tests::{the_click_is_a_60_ms_pcm_wave_file,
+the_click_is_two_bursts_at_minus_6_dbfs_without_clipping}` (щелчок затвора — WAV в памяти), `capture::pipeline::tests::
+text_from_the_screen_is_judged_like_a_copy` («Текст с экрана» → текстовая запись: секреты, список игнора, типы),
+`screenshot::commit::tests::the_fast_path_keeps_an_empty_document_with_its_unit`, `store::shots::tests::
+screenshots_without_a_document_get_the_empty_one`; дополнены `screenshot::windows::tests::every_window_builder_passes_
+the_shared_browser_args` (6 окон из 7 без drop-обработчика wry — все, кроме HUD; без `--autoplay-policy`),
+`screenshot::editor::tests::the_window_fits_the_picture_into_80_percent_of_the_work_area` (шапка в три ряда под 820 px),
+`import::lt::tests::screenshots_land_as_screenshot_records_once` (строка `shot_docs`), `model::tests::screenshot_wire_shapes`
+(`HudKind::SaveFailed`). Node +6: `captureMachine` (документ уходит с каждым действием-картинкой; коммит без ответа —
+15 с), `dropGuard` 2 (настройки отвергают файл, не трогая перестановку), `editorDoc` (`unit` документа в окне
+редактора), `shotsMock` 2 (документ с масштабом монитора у каждой записи; отмена «Сохранить как…» в редакторе →
+`null`); `shotsQao` — без звука. **Итог: `cargo test` 431 ×2, `pnpm test` 369, `pnpm check` 0/0.**
 
 ## 13. Владение файлами и правила для агентов
 
@@ -2428,7 +2443,7 @@ SQLite лежат на смещении 1 ГиБ и чтению не мешаю
 | `kind` text · link · code · contact · color | текстовая запись; вид — заново `capture::classify::classify_text` (все текстовые виды — одно семейство хэша, метка на дедупликацию не влияет; `123456` без `#` больше не «цвет») |
 | `kind` image | `image`: `<dir>\<id>.png` (иначе абсолютный `content_ref`), декод в RGBA8 + нормализация как в захвате (полностью прозрачная → непрозрачная), `content::image_hash` по пикселям; PNG копируется как есть (перекодируется, только если нормализация его изменила); миниатюра ≤ 360 px строится сразу. Нет файла → `errors + 1` |
 | `kind` file | `file`: пути из `content_ref`/`preview` (через `\n`, ≤ 2000), `meta.ext`, `files` (`dropEffect` 1) |
-| `kind` screenshot (W6-B, §18.5) | `screenshot` **без документа аннотаций** (в LT они запечены в картинку), `meta.shot = {savedPath: null, edited: false}`. Файл — `content_ref` (иначе `preview`, LT пишет путь и туда): абсолютный путь, после `canonicalize` (`..`, ссылки) — файл **внутри кэша снимков LT** `%LOCALAPPDATA%\com.liquidtools.app\screenshots` (LT: `app_cache_dir()/screenshots`, `app_cache_dir` на Windows = `FOLDERID_LocalAppData` + идентификатор; путь — `SHGetKnownFolderPath`). Формат — по содержимому (`with_guessed_format`: LT сохранял PNG/JPG/WebP/AVIF); PNG копируется как есть, иное декодируемое сборкой — перекодируется в PNG (в истории только PNG); хэш — `content::image_hash` (семейство `image`: тот же снимок, скопированный картинкой, — одна запись), миниатюра ≤ 360 px. Нет файла, путь вне кэша, относительный путь, папка, формат без декодера в сборке (WebP/AVIF; JPG — после фичи `jpeg` W6-A) → `skipped`; битый файл внутри кэша → `errors + 1`. `source_app`, `pinned`, `category` — как у остальных |
+| `kind` screenshot (W6-B, §18.5) | `screenshot` **без аннотаций** (в LT они запечены в картинку), `meta.shot = {savedPath: null, edited: false}`; W8-A: после прогона — строка `shot_docs` с пустым документом v1 (`unit` 1, `has_base = 0`; `Store::attach_missing_shot_docs`, инвариант §18.5). Файл — `content_ref` (иначе `preview`, LT пишет путь и туда): абсолютный путь, после `canonicalize` (`..`, ссылки) — файл **внутри кэша снимков LT** `%LOCALAPPDATA%\com.liquidtools.app\screenshots` (LT: `app_cache_dir()/screenshots`, `app_cache_dir` на Windows = `FOLDERID_LocalAppData` + идентификатор; путь — `SHGetKnownFolderPath`). Формат — по содержимому (`with_guessed_format`: LT сохранял PNG/JPG/WebP/AVIF); PNG копируется как есть, иное декодируемое сборкой — перекодируется в PNG (в истории только PNG); хэш — `content::image_hash` (семейство `image`: тот же снимок, скопированный картинкой, — одна запись), миниатюра ≤ 360 px. Нет файла, путь вне кэша, относительный путь, папка, формат без декодера в сборке (WebP/AVIF; JPG — после фичи `jpeg` W6-A) → `skipped`; битый файл внутри кэша → `errors + 1`. `source_app`, `pinned`, `category` — как у остальных |
 | `kind` любой другой | не переносится и не считается. Диктовки живут в `dictation-history.json`, в этой базе их нет |
 | полный текст | `content_ref` (> 280 символов), иначе `preview` (Liquid Tools хранил текст ≤ 280 символов обрезанным по краям пробелов); усечение до 2 МБ (`meta.truncated`); `content_ref` читается как `substr(…, 1, 2 100 000)` — результат тот же, память страницы ограничена |
 | `html` (сырой CF_HTML с заголовком) | формат `html` без заголовка (`StartHTML..EndHTML`; без контекста — фрагмент в минимальном документе), `SourceURL` → `meta.url/host`, если у записи нет ссылки |
@@ -2680,7 +2695,14 @@ impl Store {
 > `shot_docs` отклоняется; потерянный исходник не удваивает аннотации — §17.4, §18.3–18.5; `cargo test`
 > 422 ×2. W7-R2 (2026-11-27, ревью окон, `lib.rs`, событий, прав, импорта LT): защита навигации всех 7
 > окон (§18.2), `liqlip --capture` при холодном старте (§3 шаг 11), гонки окна редактора (§18.9), claim QAO
-> (§18.8), `shot_status` только читает (§18.11). Нативно не запускалось. Продукт — SPEC §9. Источник
+> (§18.8), `shot_status` только читает (§18.11). Нативно не запускалось. W8-A (2026-11-27, хвосты ревью W7 —
+> последняя кодовая волна v1.1): щелчок затвора из Rust при любом коммите (§18.4, `sound.rs`; из QAO и из
+> аргументов WebView2 убран), «Текст с экрана» → текстовая запись истории (§18.4), документ с масштабом монитора
+> у каждого снимка (оверлей шлёт и пустой; §18.4, §18.7), строка `shot_docs` у снимков импорта LT (§18.5), drop
+> выключен у `editor` и `pin-*` (§18.2) и отвергается в настройках, коммит без ответа — 15 с (§18.7), правый клик
+> во время драга области (§18.7), «Сохранить как…» редактора — модальный, `null` при отмене (§18.9, §18.10),
+> шапка редактора в три ряда (§18.9), HUD `save_failed` (§18.10), права окон сужены (§18.10); `cargo test` 431 ×2,
+> `pnpm test` 369; браузер — свой headless Chrome по CDP. Нативно не запускалось. Продукт — SPEC §9. Источник
 > переноса и разбор его
 > дефектов — `docs/prompts/_RESEARCH-W5-SCREENSHOT-SOURCE.md`; эталоны взаимодействия —
 > `docs/prompts/_RESEARCH-W5-ANNOTATION-UX.md` (локальные файлы координатора, абсолютные пути — в
@@ -2710,8 +2732,8 @@ W6-B присылает свои строки сниппетом в отчёте
 |---|---|---|
 | `capture` | **заранее в `setup()`**, скрытое (захват должен показываться мгновенно) | прозрачное, без рамки, always-on-top, skip-taskbar, focusable, `shadow(false)`, `disable_drag_drop_handler`; размер/позиция = монитор захвата (физ. px, позиция → размер → позиция, как §7.4); `SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE)`; `CloseRequested` → отмена сессии + hide |
 | `shots` (QAO) | **по требованию** при первом снимке, затем живёт скрытым | прозрачное, без рамки, always-on-top, skip-taskbar, `focusable(false)` (`WS_EX_NOACTIVATE`; клики и drag-out работают без активации), показ через `show_no_activate`, `disable_drag_drop_handler`, `WDA_EXCLUDEFROMCAPTURE`; ширина 304 логических px, низ окна = низ рабочей области монитора снимка, сторона — `corner`, без отступа (поле 24 страницы — зазор); высота от числа карточек (`shots_hud_layout`), не больше рабочей области |
-| `editor` | **по требованию**, одно; закрытие = уничтожение (память) | обычное окно: системный заголовок, на панели задач, мин. 640×420, по умолчанию вписать картинку в 80 % рабочей области; заголовок из `i18n_native` («Имя — Liqlip») |
-| `pin-<n>` | **по требованию**, до 6; закрытие = уничтожение | прозрачное, без рамки, always-on-top, skip-taskbar, focusable, `shadow(false)`; размер = картинка × `scale` в физ. px (1 = 100 %, при открытии ≤ 80 % монитора) + поле 24 логических px с каждой стороны |
+| `editor` | **по требованию**, одно; закрытие = уничтожение (память) | обычное окно: системный заголовок, на панели задач, мин. 640×420, по умолчанию вписать картинку в 80 % рабочей области; заголовок из `i18n_native` («Имя — Liqlip»); `disable_drag_drop_handler` (W8-A) |
+| `pin-<n>` | **по требованию**, до 6; закрытие = уничтожение | прозрачное, без рамки, always-on-top, skip-taskbar, focusable, `shadow(false)`, `disable_drag_drop_handler` (W8-A); размер = картинка × `scale` в физ. px (1 = 100 %, при открытии ≤ 80 % монитора) + поле 24 логических px с каждой стороны |
 
 **Исключение из правила «окна только в `setup()`»** (CLAUDE.md, правило 2). Документация Tauri
 (`WebviewWindowBuilder::new`, раздел Known issues) говорит, что построение окна дедлочит на Windows
@@ -2748,9 +2770,11 @@ synchronous command or event handlers»; у `build` своего раздела 
 - `editor` и `pin-*` уничтожаются при закрытии (`destroy()`); `WindowEvent::Destroyed` чистит состояние зоны.
   `shots` не уничтожается: `CloseRequested` → `prevent_close` + hide; если окно всё же умерло (сбой
   WebView2) — следующий снимок построит его заново.
-- **Аргументы WebView2 (INT-5).** Все окна процесса — четыре из `setup()` и три по требованию — строятся
-  с одной строкой `additional_browser_args(screenshot::windows::BROWSER_ARGS)` =
-  `--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --autoplay-policy=no-user-gesture-required`.
+- **Аргументы WebView2 (INT-5; W8-A — без автозапуска звука).** Все окна процесса — четыре из `setup()` и три по
+  требованию — строятся с одной строкой `additional_browser_args(screenshot::windows::BROWSER_ARGS)` =
+  `--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection` (до W8-A — ещё
+  `--autoplay-policy=no-user-gesture-required` для щелчка QAO; щелчок теперь играет Rust, §18.4, ни одна страница
+  звук не воспроизводит — ключ убран).
   Окна делят одно окружение WebView2 (одна папка данных), а wry 0.55.1 (`WebViewBuilderExtWindows::
   with_additional_browser_args`): «Webview instances with different browser arguments must also have
   different data directories» — поэтому строка одна на всех. Заданная явно, она **заменяет** умолчание
@@ -2758,16 +2782,17 @@ synchronous command or event handlers»; у `build` своего раздела 
   своём `autoplay`, который Tauri 2.11.2 не выставляет) — умолчание сохранено дословно. Документация:
   docs.rs tauri 2.11.2 `WebviewWindowBuilder::additional_browser_args` (предупреждение про умолчание wry);
   learn.microsoft.com `ICoreWebView2EnvironmentOptions::put_AdditionalBrowserArguments` (ключи через
-  пробел, значения одного `--disable-features` — через запятую). Зачем: щелчок затвора QAO — Web Audio в
-  окне, которое никогда не активируется и не получает жеста пользователя (политика автозапуска Chromium).
+  пробел, значения одного `--disable-features` — через запятую). Строка осталась явной константой: окружение
+  общее, и новое окно с другими аргументами отказало бы в окружении только нативно.
   W7-R2: тест `every_window_builder_passes_the_shared_browser_args` обходит все `src/**/*.rs` и требует у
-  каждого `WebviewWindowBuilder::new(` эту строку (и защиту навигации ниже); окон ровно 7 — новое окно без
-  аргументов WebView2 отказало бы в окружении только нативно.
+  каждого `WebviewWindowBuilder::new(` эту строку (и защиту навигации ниже); окон ровно 7. W8-A: тот же тест
+  требует `disable_drag_drop_handler` у каждого окна, кроме HUD (он прозрачен для мыши), — 6 из 7.
 - **Защита навигации (W7-R2).** Все 7 окон строятся с `.on_navigation(screenshot::windows::navigation_guard(app))`
   (docs.rs tauri 2.11.2 `WebviewWindowBuilder::on_navigation`: «Returning `false` cancels the navigation»): грузятся
   только наши страницы — `http(s)://tauri.localhost/…` (собранный фронт на Windows, tauri 2.11.2
   `manager/mod.rs::tauri_protocol_url`), `about:blank` и в dev-сборке (`cfg(dev)` от tauri-build) — источник
-  `devUrl`. Причина: у окон с `disable_drag_drop_handler()` (шелф, настройки, `capture`, `shots`) остаётся
+  `devUrl`. Причина: у окон с `disable_drag_drop_handler()` (шелф, настройки, `capture`, `shots`; с W8-A — и
+  `editor`, `pin-*`) остаётся
   собственный приём внешнего drop у WebView2 (`AllowExternalDrop`, по умолчанию TRUE — learn.microsoft.com
   `ICoreWebView2Controller4`; wry выключает его только для своего обработчика, `webview2/mod.rs`), и файл или
   ссылка, брошенные на страницу, которая drop не обрабатывает, уводят webview на себя: карточка QAO,
@@ -2775,7 +2800,13 @@ synchronous command or event handlers»; у `build` своего раздела 
   снимка (оверлей — до перезапуска). Наши страницы никуда не переходят (ни ссылок, ни `location`), так что
   ничего законного не режется. Отказ пишется в лог только схемой (путь может называть содержимое
   пользователя). Тест `only_our_own_pages_may_load`. Курсор «копировать» над окном и `dropped` у источника
-  при отменённой навигации остаются — их убирает страница (`dragover` → `dropEffect = 'none'`, предложение R4).
+  при отменённой навигации остаются — их убирает страница (`dragover` → `dropEffect = 'none'`: `refuseDrop` у
+  `capture`, `shots`, `pin-*`, шелфа и окна редактора — W7-R3/R4; в настройках — `refuseFileDrop`, только файлы, W8-A).
+- **Drop у `editor` и `pin-*` (W8-A, находка R4).** Эти окна строились с drop-обработчиком wry 0.55.1: его
+  drop-target для `CF_HDROP` отвечает `DROPEFFECT_COPY`, и карточка QAO, отпущенная над пином или редактором,
+  считалась перенесённой (`dropped`) и закрывалась — страничный `refuseDrop` там не действовал. Теперь
+  `.disable_drag_drop_handler()` у обоих, как у остальных окон (кроме HUD): drop видит страница и отвергает
+  его. Вставка картинки в редактор — `Ctrl+V`, не перетаскиванием.
 
 `setup()` (§3): шаг 6 добавляет `capture`; шаг 7 применяет 5 новых хоткеев; новых `manage()` —
 `ScreenshotState` (сессия, кадры, последняя область, стопка-счётчик окон) **до** создания окон.
@@ -2897,6 +2928,10 @@ synchronous command or event handlers»; у `build` своего раздела 
 
 - `rect` — физические px в системе кадра монитора сессии; Rust зажимает в кадр (`clamp_crop` LT + тесты).
 - Нет аннотаций (`doc == null` или `objects` пуст) → RGBA не передаётся, Rust режет кадр сам (быстрый путь).
+  W8-A: оверлей шлёт документ и без объектов (пустой `objects`, `unit` = масштаб монитора), Rust хранит его в
+  `shot_docs` с `w/h` = вырезанный кроп (`commit::sized_doc`) — окно редактора рисует таким `unit`, и стрелки/текст
+  на мониторе 150–200 % той же толщины, что в оверлее. Режимы без оверлея (экран/окно/повтор) документа не шлют —
+  стор пишет пустой с масштабом своего монитора (`NewShot.unit` → `empty_doc`). Действие `text` документа не шлёт.
 - Есть аннотации → webview прислал сведённый RGBA кропа (WYSIWYG — тот же рендер, что на экране);
   Rust дополнительно режет **исходник** того же `rect` из кадра → `media/base/<id>.png`; документ
   (координаты относительно кропа) → `shot_docs.doc`.
@@ -2909,8 +2944,9 @@ synchronous command or event handlers»; у `build` своего раздела 
   подавление собственной записи; нужен `pub(crate)`-хелпер `paste::copy_png(&[u8])`); (4) запись в
   стор (`store::shots::insert_screenshot`, тип `screenshot`, источник — приложение с фокусом в момент
   триггера, миниатюра); (5) файл в папку (`files.rs`: шаблон имени, уникализация `(2)`, создание
-  папки); (6) `emit shot:added` → QAO (или открыть редактор / ничего по `afterCapture`); (7) звук
-  играет QAO. Ошибка любого шага после (3) не отменяет предыдущие; ошибка сохранения → `error:
+  папки); (6) `emit shot:added` → QAO (или открыть редактор / ничего по `afterCapture`). Звук затвора —
+  Rust, сразу после (1) (W8-A, ниже; до W8-A его играл QAO на `shot:added`, и коммиты без карточки были
+  беззвучны). Ошибка любого шага после (3) не отменяет предыдущие; ошибка сохранения → `error:
   'save_failed'` в `shot:added`.
 - Тумблер типа `screenshot` в `storage.types` выключен → шаг (4) пропускается, QAO получает `clip:
   null` и работает с временным файлом в `%TEMP%\Liqlip\shots\` (удаляется при закрытии карточки и на
@@ -2925,7 +2961,17 @@ synchronous command or event handlers»; у `build` своего раздела 
   `session::close` (окно не остаётся на экране и при ошибке запроса) → `rect_to_crop` (вне кадра —
   `invalid`) → `finish`. Режим сессии `text` всегда даёт действие `text`. Кадры освобождаются после
   коммита, затем `qao::restore_after_capture`.
-- Картинка (`picture`): без тела — кроп кадра (документ, если прислан объектом, хранится как есть);
+- **Звук затвора (W8-A, `screenshot/sound.rs`).** В `finish`, как только план действия есть (любое действие,
+  кроме `text`) и `settings.screenshot.sound`: `sound::shutter()` — winmm `PlaySoundW(wav, NULL, SND_MEMORY |
+  SND_ASYNC | SND_NODEFAULT)` (learn.microsoft.com, PlaySound: `SND_MEMORY` — «points to a sound loaded in
+  memory», `SND_ASYNC` — возврат сразу; Remarks: при `SND_MEMORY | SND_ASYNC` буфер должен жить, пока звук играет —
+  он `static`, собран один раз). Звук — синтезированный WAV в памяти, без файлов: PCM 16 бит, моно, 44,1 кГц,
+  60 мс; два шумовых всплеска с экспоненциальным спадом через полосовой biquad (Audio EQ Cookbook, тот же фильтр, что
+  `BiquadFilterNode` прежнего Web Audio): 28 мс на 2,6 кГц и 26 мс на 3,6 кГц с 34 мс, пик −6 dBFS; шум
+  детерминированный (xorshift32). Новый щелчок останавливает предыдущий своего процесса. Отказ (нет устройства) —
+  лог. `windows` += фича `Win32_Media_Audio` (связь через `windows-link`, без новых крейтов; `Cargo.lock` не
+  изменился). Тесты: заголовок WAV и длина, два всплеска без клиппинга и с тишиной на краях, один буфер.
+- Картинка (`picture`): без тела — кроп кадра (документ, если прислан объектом, хранится, `w/h` = кроп — W8-A);
   тело размера кропа — сведённый RGBA, кроп кадра → `base_png`, документ хранится; тело другого
   размера — берётся как картинка (это видел пользователь), но без исходника и документа (лог).
 - План (`commit::plan`, чистая функция, тест): `done` — `copy`/`save`/`afterCapture` из настроек;
@@ -2951,7 +2997,13 @@ synchronous command or event handlers»; у `build` своего раздела 
   файл прямо в папке после `canonicalize`), иначе `invalid` / `not_found`.
 - `action: 'text'` → `ocr::recognize_png(app, png)` (новый `pub(crate)`: свой поток в MTA WinRT,
   обычный приоритет, язык `ocr.language`, без проверки `ocr.enabled` — явное действие над картинкой,
-  которую никто не хранит; ждёт ≤ 10 с) → `paste::copy_text` + HUD `text_copied`; пусто → HUD
+  которую никто не хранит; ждёт ≤ 10 с) → `paste::copy_text` + HUD `text_copied` → **текст в историю** (W8-A,
+  решение координатора: «всё скопированное — в истории»): `capture::store_text(app, text, ctx.source)` —
+  обычная текстовая запись, судимая как копирование этого текста (`capture::pipeline::text_record`: приложение-
+  источник из списка игнора → нет; секретные шаблоны → нет; классификация `text`/`link`/…; выключенный тип → нет),
+  затем то, что получает пойманная копия (`clips:changed`, стопка вставки в режиме сбора, иконка источника).
+  `copy_text` пишет буфер как свою запись — слушатель её не ловит, поэтому запись создаётся здесь; источник —
+  приложение, активное в момент хоткея; ошибка вставки — лог. Картинка по-прежнему не хранится; пусто → HUD
   `text_empty`; нет языков (`ocr::NO_LANGUAGE`) → HUD `text_unavailable` (INT-5) + ошибка команды;
   прочая ошибка распознавания → ошибка команды.
 - «Сохранить как…» коммита — `blocking_save_file` диалог-плагина (документирован для `async`-команд,
@@ -2996,7 +3048,11 @@ synchronous command or event handlers»; у `build` своего раздела 
 - Резервная копия `.liqlip` (`store/bulk.rs`, §17): таблица `shot_docs` и `media/base/*` входят в
   экспорт, восстанавливаются в `replace` и `merge` (в `merge` — с новым id записи).
 - Импорт LT (W6-B, `import/lt.rs`): записи LT `kind='screenshot'` (файл по `content_ref` в кэше LT)
-  → `screenshot` без документа аннотаций; отсутствующий файл — `skipped`.
+  → `screenshot` без аннотаций (в LT они запечены в картинку); отсутствующий файл — `skipped`. W8-A:
+  инвариант «строка есть у каждого `screenshot`» держится и здесь — после прогона
+  `Store::attach_missing_shot_docs()` даёт каждому снимку без строки пустой документ v1 размера картинки
+  (`unit` 1 — масштаба LT не хранит), `has_base = 0`, без `saved_path`; существующие строки не трогаются (тест
+  `screenshots_without_a_document_get_the_empty_one`, `screenshots_land_as_screenshot_records_once`).
 
 **Как сделано (W6-A, 2026-11-27).** Схема — §4.2a. `store/shots.rs`:
 
@@ -3437,10 +3493,28 @@ null` (Rust режет кадр сам) → `shotCommit(header, rgba)` → `idle
 чужой `shot:end`, `sessionChange`, заголовок §18.4, лестница `Esc`, документ рамки — `cropDoc` + `bounds`
 редактора, как `frameDoc`; пустой документ кадра).
 
+**W8-A (2026-11-27).**
+- **Документ — с каждым действием-картинкой** (`commitHeader`: `doc` уходит всегда, кроме `text`; раньше только с
+  пикселями). Нет объектов — `frameDoc(editor.doc() ?? пустой документ кадра, рамка)`: пустой `objects`, `unit` =
+  масштаб монитора сессии; Rust хранит его в быстром пути (§18.4) — окно редактора рисует тем же `unit`, что оверлей.
+- **Коммит без ответа** (`COMMIT_TIMEOUT_MS` = 15 с, `commitTimedOut`): если `shot_commit` не ответил (зависший
+  буфер, диск, потерянный ответ), оверлей выходит из `committing` туда, откуда начал (как при ошибке), показывает
+  «Снимок не завершился вовремя…» (`capture.error.timeout`), клавиши (и `Esc`) и панель снова работают; поздний
+  отказ этого коммита молчит, поздний успех закрывает оверлей (Rust уже забрал сессию). Rust-таймаута нет.
+  Мок: `?mock-shot-fail=hang` — `shot_commit` не отвечает никогда.
+- **Правый клик во время драга области** отменяет его (SPEC §9.2): при зажатой левой браузер не шлёт второй
+  `pointerdown` (chorded press), приходит `pointermove` с `button === 2` — `onPointerMove` ловит его тем же
+  `secondaryPress` редактора (экспорт `$lib/editor`, W7-R3) и зовёт `cancelGesture()`.
+- Проверено своим headless Chrome по CDP (`/capture.html`, Vite `:1481`, Chrome `:1480`): драг + правая кнопка →
+  панели нет (без правки — панель появлялась, A/B), обычный драг → панель; `?mock-shot-fail=hang` → `Enter` →
+  `aria-busy`, `Esc` глушится, через 15 с тост и `aria-busy=false`, `Esc` (шаг редактора) и второй `Esc` закрывают.
+  Тесты: `captureMachine` (документ без объектов в заголовке, `text` — без; таймаут → этап и рамка целы, повтор
+  возможен, чужой/поздний таймер ничего не меняет).
+
 ### 18.8. QAO и закрепление (`src/windows/shots/`, `src/windows/pin/`, W6-E; нативное — W6-B)
 
 - QAO держит стопку на фронте (`stack.ts` LT как основа: до 4, новая снизу); на каждое `shot:added`
-  — карточка + звук (WebAudio, синтез щелчка ~60 мс, если `settings.screenshot.sound`); высоту окна
+  — карточка (звук затвора с W8-A играет Rust в момент коммита — §18.4); высоту окна
   сообщает `shots_hud_layout({ height })`, пустая стопка → `shots_hud_hide()`. Таймер — по
   `settings.screenshot.timeout` (0 — не скрывать), пауза на ховере/драге. Кнопки — §SPEC 9.4 через команды
   §18.10 и существующие `clip_copy`, `clips_delete`, `clip_ocr` + `text_copy`, `clip_drag_out`.
@@ -3488,7 +3562,7 @@ null` (Rust режет кадр сам) → `shotCommit(header, rgba)` → `idle
 - **`pin-<n>`**: `shot_pin(id)` / `pin::open` (редактор, коммит W6-A) — запись `image`/`screenshot` с размером,
   иначе `invalid`. Метки — растущий счётчик процесса (`pin-1`, `pin-2`, …, не повторяются); до `MAX_PINS` = 6,
   седьмое уничтожает самое старое. Окно: прозрачное, без рамки, always-on-top, skip-taskbar, focusable,
-  `focused(false)`, `shadow(false)`, вне Alt+Tab, **не** исключено из захвата; показ без активации (клик
+  `focused(false)`, `shadow(false)`, `disable_drag_drop_handler` (W8-A), вне Alt+Tab, **не** исключено из захвата; показ без активации (клик
   активирует — тогда работают `Esc` и меню). Размер: картинка 1:1 (1 px картинки = 1 физ. px монитора — снимок
   выглядит как на экране), ужатая до 80 % монитора, плюс поле `BLEED` = **24 логических px** с каждой стороны
   (INT-5, = `pinMath.ts::PIN_BLEED`) под тень страницы (W6-E рисует внутри; начальный масштаб страница
@@ -3506,7 +3580,7 @@ null` (Rust режет кадр сам) → `shotCommit(header, rgba)` → `idle
 Файлы: `src/windows/shots/` — `Shots.svelte` (корень: подписки, тик, мок-кнопки), `ShotCard.svelte`
 (карточка), `qao.ts` (контроллер без рун: стопка, таймеры, кнопки, жизненный цикл drag-out; корень
 передаёт `$state`-объект и настоящие команды, тест — обычный объект и подделки), `stack.ts` (чистая
-модель + геометрия), `shutter.ts` (звук). Булавка — общая `<Ico name="pin">` (`src/lib/heroicons/pin.svelte`,
+модель + геометрия); `shutter.ts` (звук) удалён в W8-A. Булавка — общая `<Ico name="pin">` (`src/lib/heroicons/pin.svelte`,
 INT-5: одна на оверлей, QAO, окно редактора и меню шелфа). Тесты: `tests/shotsStack.test.mjs`,
 `tests/shotsQao.test.mjs`.
 
@@ -3555,7 +3629,7 @@ INT-5: одна на оверлей, QAO, окно редактора и мен�
   `preventDefault`; MDN «Drag operations»: `none` — «no drop is allowed at this location»). Иначе WebView2
   по умолчанию принимает файл, и карточка, отпущенная обратно над стопкой, считалась `dropped` и закрывалась;
   внешний файл теперь видимо отвергается. Работает только при `disable_drag_drop_handler` у окна — у `pin-*`
-  и `editor` его нет (там отвечает drop-target wry: для файлов `DROPEFFECT_COPY`) — в отчёт R2.
+  и `editor` его не было (отвечал drop-target wry: для файлов `DROPEFFECT_COPY`); W8-A выключил и там (§18.2).
 - **Тосты — внутри карточки** (капсула 32 у нижнего края, над полоской; 1,6 с, ошибки 2,6 с):
   «Скопировано», «Текст скопирован», «Текст не найден», «Распознаю текст…», «Сохранено» и ошибки.
   «Не удалось сохранить · Изменить папку» (`shot:added.error = 'save_failed'` или отказ `shot_save`) —
@@ -3572,12 +3646,9 @@ INT-5: одна на оверлей, QAO, окно редактора и мен�
 - **Превью**: `clip.thumbUrl`, без него — `clip_detail(id).imageUrl`; пока грузится — скелетон колодца,
   битая — глиф. Загрузка ключуется по URL (сброс эффектом мог прийти после `load` закэшированной
   картинки и оставить скелетон).
-- **Звук** (`shutter.ts`): Web Audio API — два коротких шумовых щелчка через полосовой фильтр, ~60 мс,
-  без файла; на каждое `shot:added` при `settings.screenshot.sound`. `AudioContext` без жеста
-  пользователя может стартовать `suspended` (политика автозапуска Chromium); `resume()` пробуется,
-  отказ тихий. INT-5: все окна процесса строятся с `--autoplay-policy=no-user-gesture-required` (§18.2,
-  «Аргументы WebView2») — окно QAO никогда не активируется и жеста не получает. Слышен ли щелчок —
-  живая проверка.
+- **Звук** — с W8-A не здесь: QAO слышал только `shot:added`, и снимок с «Затем: редактор / ничего», `Ctrl+C` /
+  `Ctrl+S` из оверлея был беззвучен. Щелчок играет Rust при любом коммите (§18.4, `sound.rs`); `shutter.ts`,
+  `QaoApi.shutter` и поле `sound` состояния QAO удалены, ключ `--autoplay-policy` из аргументов WebView2 — тоже.
 - **Мок** (`/shots.html`, только вне Tauri): капсула «Мок» вверху слева — «Добавить снимок»
   (`shotCapture('screen')` → мок шлёт `shot:added`), «Снимок · ошибка сохранения», «Снимок · не в
   истории» (подменяют полезную нагрузку следующего `shot:added` у себя, мок не трогают). В браузере
@@ -3626,7 +3697,8 @@ INT-5: одна на оверлей, QAO, окно редактора и мен�
 > темы; нативно не запускалось — `onCloseRequested`/`destroy()` проверит INT-5). INT-5: окно ↔ `editor.rs`
 > сведены — `dirtyGuard`, смена записи с «Сохранить», «Готово» без изменений, «Закрепить» с несохранённым
 > (ниже, «Сведение INT-5»); `cargo test` и браузер на моке. W7-R3 (ревью): порядок загрузок, подписка до
-> запроса, отмена «Сохранить как…», отказ от drop, узкое окно — «Ревью W7-R3» в конце раздела.
+> запроса, отмена «Сохранить как…», отказ от drop, узкое окно — «Ревью W7-R3» в конце раздела. W8-A: шапка в три
+> ряда в `CHROME`, «Сохранить как…» модален окну редактора и отвечает `null` при отмене, drop-обработчик wry выключен.
 
 - На старте `shot_editor_get()` → `ShotEditorPayload`; базовая картинка — `baseUrl` (`liq://base/<id>`).
   `shot:editor` — смена записи в уже открытом окне (если нет несохранённых изменений; иначе окно само
@@ -3658,7 +3730,8 @@ INT-5: одна на оверлей, QAO, окно редактора и мен�
 - **Окно**: одно, строится по требованию из `shot_edit` (async) — §18.2; обычное окно (системный заголовок,
   панель задач, Alt+Tab, тема из настроек), мин. 640×420; размер — картинка 1:1 + место под панели (`CHROME`
   48×156 логических px — раскладка W6-C: поле вписывания 24 × 2 по ширине; 12 + 40 + 8 + 40 + 8 панелей + 48
-  поля по высоте, INT-5), ужатая до 80 % рабочей области монитора
+  поля по высоте, INT-5; окно уже 820 логических px — шапка в три ряда, `CHROME_NARROW_H` = 204: вписывание
+  пересчитывается с ней и окно остаётся узким, W8-A по замечанию W7-R3, тест), ужатая до 80 % рабочей области монитора
   курсора, по центру (тест). Перед показом открытый шелф прячется (`picker::hide_now`: always-on-top закрыл бы
   редактор), затем `show` + `SetForegroundWindow` (право есть после клика в QAO/шелфе или хоткея; отказ —
   мигает кнопка на панели задач, ничего не форсируем). Заголовок «Имя — Liqlip», следует за языком
@@ -3694,8 +3767,10 @@ INT-5: одна на оверлей, QAO, окно редактора и мен�
   `files::overwrite_saved(app, id, png)` (ошибки после правки — лог); `done` → окно уничтожается (кроме
   ожидающей смены), `pin` → `pin::open`. `done` без пикселей → картинка записи в буфер (при `copy`) +
   закрытие. `copy` → `paste::copy_png` (пиксели тела или картинка записи). `save_as` →
-  `files::save_png_as(app, id, png).await` (диалог без родителя, формат по расширению, `saved_path`), ответ —
-  свежая запись.
+  `files::save_png_as(app, id, png, Some("editor")).await` (W8-A: диалог **модален окну редактора** —
+  `FileDialogBuilder::set_parent` tauri-plugin-dialog 2.7.1, как `pick_exe`; раньше без родителя, и в редакторе можно
+  было работать при открытом диалоге; формат по расширению, `saved_path`), ответ — свежая запись, **`null` — диалог
+  отменён** (W8-A, аддитивно: `Option<Clip>` / `Clip | null`).
 
 **Как сделано (W6-C).** `editor.ts` монтирует `EditorWindow.svelte` (заглушка `Editor.svelte` W5-A удалена).
 - **Загрузка**: `shot_editor_get()`; `null` → пустое состояние (учит: «выберите в шелфе и нажмите E»); иначе
@@ -3740,8 +3815,8 @@ INT-5: одна на оверлей, QAO, окно редактора и мен�
 - **Подписка до запроса** (замечание W7-R2): сначала `onShotEditor` (дождаться подписки), затем
   `shot_editor_get` — смена записи между ними не теряется.
 - **«Сохранить как…» отменено** (замечание W7-R2): ответ `null` — тоста нет (по пути записи отмену от
-  сохранения не отличить: путь мог быть и раньше). Rust пока отвечает записью и на отмену — предложение в отчёте
-  W7-R3 (`Clip | null`).
+  сохранения не отличить: путь мог быть и раньше). W8-A: Rust отвечает `null` на отмену (`shot_editor_commit` →
+  `Clip | null`), страница показывает «Сохранено как…» при любой записи в ответе.
 - **Drop** на странице отклоняется (`dragover`/`drop` → `preventDefault`, `dropEffect = 'none'`).
 - **Узкое окно** (< 820 px — например, минимум 640 × 420 у маленькой картинки): шапка — сетка в три ряда
   (инструменты / свойства / масштаб · действия, 156 px вместо прежних четырёх рядов по 200 px); шире — два ряда,
@@ -3805,13 +3880,13 @@ screenshot: {
 | `shot_edit` | `id` → `()` (открыть окно редактора) |
 | `shot_editor_get` | → `ShotEditorPayload \| null` |
 | `shot_editor_switch` | `accept: boolean` → `()` |
-| `shot_editor_commit` | сырое тело (то же кадрирование, JSON `ShotEditorCommit`) → `Clip` |
+| `shot_editor_commit` | сырое тело (то же кадрирование, JSON `ShotEditorCommit`) → `Clip \| null` (`null` — «Сохранить как…» отменён; W8-A) |
 | `shot_pin` | `id` → `()` |
 | `shot_pin_get` | → `PinPayload \| null` (по метке вызывающего окна) |
 | `shot_pin_resize` | `scale: number` → `()` |
 | `shot_pin_close` | → `()` |
 | `shot_save` | `id` → `string` (путь; папка снимков, имя по шаблону) |
-| `shot_save_as` | `id` → `string \| null` (диалог) |
+| `shot_save_as` | `id` → `string \| null` (диалог; из шелфа ошибка записи — HUD `save_failed`, W8-A: шелф уже спрятан) |
 | `shot_reveal` | `id` → `()` (Проводник с выделением `saved_path`) |
 | `shots_hud_layout` | `{ height: number }` → `()` |
 | `shots_hud_hide` | → `()` |
@@ -3830,7 +3905,7 @@ screenshot: {
 | `shot:end` | `{ sessionId: number }` | screenshot → capture, shots |
 | `shot:added` | `{ clip: Clip \| null; savedPath: string \| null; tempPath: string \| null; monitor: string; error: 'save_failed' \| null }` | screenshot → shots (до `shots_pending` — копится в Rust; INT-5) |
 | `shot:editor` | `ShotEditorPayload` (`dirtyGuard: true` — только здесь) | screenshot → editor |
-| `hud:show` | `kind` += `'countdown' \| 'shot_failed' \| 'text_copied' \| 'text_empty' \| 'text_unavailable'` (INT-5) | screenshot → hud |
+| `hud:show` | `kind` += `'countdown' \| 'shot_failed' \| 'text_copied' \| 'text_empty' \| 'text_unavailable'` (INT-5) `\| 'save_failed'` (W8-A) | screenshot → hud |
 | `clips:changed` | (§9.7) | … → ещё и все `pin-*` (фильтр по префиксу метки; INT-5) |
 
 **URI**: `/shot/<sessionId>/<monitorIndex>.bmp` · `/base/<clipId>?v=<n>` (§18.3) · `/temp/<имя>` (INT-5, §9.8).
@@ -3860,10 +3935,10 @@ RGBA или кроп кадра; запись `screenshot` в мок-ленту 
 с `meta.shot`, затем `shot:end` и то, что следует за коммитом по плану Rust (`afterCommit`, W7-R4: раньше
 `shot:added` шёл после любого действия): только `done` — по `afterCapture` (`overlay` → `shot:added`,
 `clip: null` + `tempPath`, если тип выключен в `storage.types`; `editor` без записи → тоже QAO); `copy` /
-`save` / `save_as` — ничего; `pin` — пин записи (без записи — ничего); `save_as` с
+`save` / `save_as` — ничего; `pin` — пин записи (без записи — QAO с `tempPath`, как Rust `after_step`; W8-A, было «ничего»); `save_as` с
 `?mock-shot-dialog=cancel` файла не пишет; `action: 'text'` — текст и HUD `text_copied` без
 записи. `shot_capture`: `screen`/`window`/`repeat` (без прошлой области — как `region`) коммитят сразу,
-`delay` шлёт `hud:show countdown` по секундам; повторный триггер при открытой сессии игнорируется. Флаг `?mock-shot-fail=commit` (W7-R4) — каждый `shot_commit` после разбора тела отвечает `failed:` (путь ошибки оверлея).
+`delay` шлёт `hud:show countdown` по секундам; повторный триггер при открытой сессии игнорируется. Флаг `?mock-shot-fail=commit` (W7-R4) — каждый `shot_commit` после разбора тела отвечает `failed:` (путь ошибки оверлея); `?mock-shot-fail=hang` (W8-A) — не отвечает вовсе (таймаут оверлея 15 с). W8-A, как Rust: у каждой новой записи-снимка документ (`shotDoc`: присланный — с `w/h` кропа, без пикселей; иначе пустой с `?mock-scale`), окно редактора получает его `unit`; `shot_editor_commit {save_as}` с `?mock-shot-dialog=cancel` отвечает `null`.
 Редактор: `shot_editor_get` — по `?clip=`, иначе последняя `shot_edit`, иначе новейшая картинка;
 `shot_editor_commit {done}` хранит документ и первый исходник (`baseUrl`). Плюс флаги
 `?mock-snipping=1` (`shot_status`: PrtSc у «Ножниц», `hotkeys.shotRegion` — `taken`) и
@@ -3905,6 +3980,19 @@ RGBA или кроп кадра; запись `screenshot` в мок-ленту 
 `capabilities/screenshot.json` (`pin-*`: `core:window:allow-start-dragging`; `editor`:
 `core:window:allow-destroy` — `onCloseRequested` в `@tauri-apps/api` 2.11 сам зовёт `destroy()`, если
 обработчик не отменил закрытие); таймер QAO — поле `timeout` (в §18.8 было `overlayTimeout`).
+
+**Права — сужены (W8-A, замечание W7-R2).** Страницы зовут из `@tauri-apps/api` только `invoke` (свои команды —
+им права не нужны, `build.rs` без манифеста команд), `listen` и пять методов окна; плагины (autostart, dialog,
+opener) из JS не вызывает ни одна страница — их зовёт Rust, а Rust-API плагинов права окон не касаются. Сверено
+поиском по `src/` (`@tauri-apps/api`, `getCurrentWindow`, `plugin:`) и по `reference.md` прав tauri 2.11.2:
+- `default.json` — все 7 окон: только `core:default` (`core:event:default` — `listen`/`unlisten`/`emit`;
+  `core:window:default` — в т. ч. `allow-is-visible` шелфа); убраны `core:window:allow-{show, set-focus,
+  set-focusable, set-size, set-position, set-ignore-cursor-events, set-always-on-top}`, `autostart:*`,
+  `dialog:allow-{open,save,message}`, `opener:default` — ни одна страница их не вызывала;
+- `settings.json` (новый) — `settings`: `core:window:allow-hide` (онбординг прячет окно, `Onboarding.svelte`);
+- `screenshot.json` — без изменений (`pin-*`: перетаскивание; `editor`: `destroy`).
+Внедряемый скрипт opener (`open_js_links_on_click`) срабатывает только на ссылках — в страницах их нет. Ошибку
+прав видно только нативно (сценарий живой проверки в отчёте W8-A); `tauri-build` проверяет имена прав при сборке.
 
 ### 18.11. Хоткеи (W6-A)
 

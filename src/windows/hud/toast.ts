@@ -9,8 +9,9 @@ export const VISIBLE_MS = 1400;
 /** `countdown` · `shot_failed` · `text_copied` · `text_empty` — W5 (screenshots, ARCHITECTURE §18.10):
  *  the countdown's `text` is the seconds left, drawn as a large digit in place of the {keys}
  *  chip (W6-F, `countdownDigit`). `text_unavailable` — INT-5: "Copy text from screen" without
- *  an OCR language pack. */
-export const HUD_KINDS: readonly HudKind[] = ["copied", "elevated", "stack_empty", "paused", "resumed", "skip_next", "countdown", "shot_failed", "text_copied", "text_empty", "text_unavailable"];
+ *  an OCR language pack. `save_failed` — W8-A: "Save as…" from the shelf failed (the shelf is
+ *  hidden by then). */
+export const HUD_KINDS: readonly HudKind[] = ["copied", "elevated", "stack_empty", "paused", "resumed", "skip_next", "countdown", "shot_failed", "text_copied", "text_empty", "text_unavailable", "save_failed"];
 
 /** i18n key per kind (`hud.*`). */
 export const KIND_KEY = {
@@ -25,6 +26,7 @@ export const KIND_KEY = {
   text_copied: "hud.textCopied",
   text_empty: "hud.textEmpty",
   text_unavailable: "hud.textUnavailable",
+  save_failed: "hud.saveFailed",
 } as const satisfies Record<HudKind, string>;
 
 /** Icon per kind (`src/lib/icons.ts`). */
@@ -40,6 +42,7 @@ export const KIND_ICON = {
   text_copied: "ocr",
   text_empty: "info",
   text_unavailable: "warning",
+  save_failed: "warning",
 } as const satisfies Record<HudKind, string>;
 
 export type Segment = { kind: "text"; text: string } | { kind: "keys" };

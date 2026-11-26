@@ -388,9 +388,10 @@ export const shotEditorGet = (): Promise<ShotEditorPayload | null> =>
 export const shotEditorSwitch = (accept: boolean): Promise<void> =>
   call<void>("shot_editor_switch", { accept });
 
-/** `shot_editor_commit` — Copy / pin / save as / Done from the editor (raw body, same framing). */
-export const shotEditorCommit = (commit: ShotEditorCommit, rgba: Pixels | null = null): Promise<Clip> =>
-  call<Clip>("shot_editor_commit", frameBody(commit, rgba));
+/** `shot_editor_commit` — Copy / pin / save as / Done from the editor (raw body, same framing) →
+ *  the record; `null` — "Save as…" was cancelled (W8-A). */
+export const shotEditorCommit = (commit: ShotEditorCommit, rgba: Pixels | null = null): Promise<Clip | null> =>
+  call<Clip | null>("shot_editor_commit", frameBody(commit, rgba));
 
 /** `shot_pin` — Pin a record on the screen (up to 6). */
 export const shotPin = (id: number): Promise<void> =>

@@ -181,7 +181,6 @@ fn run_action(app: &AppHandle, action: HotkeyAction) {
 /// unparsable / duplicate ones of the saved settings and the chords the OS has not given us
 /// (after one retry). For `shot_status` (W6-B filters the `hotkeys.shot*` fields). Blocking
 /// (a registrar round trip, ≤ 2 s) — call from a worker.
-#[allow(dead_code)] // W6-B: screenshot/status.rs — `ShotStatus.hotkeyErrors`
 pub(crate) fn current_errors(app: &AppHandle) -> Vec<SettingsError> {
     let h = crate::settings::get(app).hotkeys;
     let (_, parse_errs) = combo::desired(&h, &h);

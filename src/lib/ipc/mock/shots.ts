@@ -18,12 +18,16 @@
 // URL flags (also listed in bus.ts): ?mock-shot=text (OCR session) · ?mock-shot-quick=1 (skip
 // the frame stage) · ?mock-scale=1.5 (monitor scale) · ?mock-snipping=1 (Windows gives PrtSc
 // to the Snipping Tool) · ?mock-shot-dialog=cancel (Save as… is cancelled) · ?mock-shot-fail=commit
-// (W7-R4: every `shot_commit` rejects "failed:" after parsing the body — the overlay's error path).
+// (W7-R4: every `shot_commit` rejects "failed:" after parsing the body — the overlay's error path)
+// · ?mock-shot-fail=hang (W8-A: `shot_commit` never answers — the overlay's 15 s timeout).
 //
 // INT-5: `shots_pending` answers `[]` (the mock emits `shot:added` only to live listeners);
 // `shot_temp_copy` / `shot_temp_save_as` accept the bare file names the mock hands out in
 // `tempPath`; the editor commit follows Rust (`done` without pixels = nothing changed, `pin`
 // with pixels applies the edit first).
+// W8-A, as Rust: every shot record has a document (the one the overlay sent, sized to the crop,
+// or an empty one with the monitor scale — the editor draws with its `unit`); "Pin" without a
+// record ends on the QAO card; `shot_editor_commit` answers `null` when "Save as…" is cancelled.
 import type {
   AnnotDoc,
   Clip,
@@ -311,16 +315,24 @@ function hud(p: HudShow): void {
 /** Recognised text of a region (`action: 'text'`). */
 const OCR_REGION_TEXT = "Liqlip — a keyboard-first clipboard manager";
 
-/** What follows a commit on screen — Rust's `commit::plan` + step (6) (§18.4; W7-R4: the mock
+/** What follows a commit on screen — Rust's `commit::plan` + `after_step` (§18.4; W7-R4: the mock
  *  showed the QAO after every action): only `done` follows "After capture"; `copy` / `save` /
- *  `save_as` show nothing; `pin` pins the record; with no record the editor falls back to the
- *  QAO and a pin to nothing. */
+ *  `save_as` show nothing; `pin` pins the record; with no record the editor and a pin fall back
+ *  to the QAO card (W7-R1 in Rust, the mock since W8-A: the shot is never lost). */
 export function afterCommit(action: Exclude<ShotAction, "text">, setting: "overlay" | "editor" | "none", hasRecord: boolean): "qao" | "editor" | "pin" | "nothing" {
   const after = action === "done" ? setting : action === "pin" ? "pin" : "none";
   if (after === "overlay") return "qao";
   if (after === "editor") return hasRecord ? "editor" : "qao";
-  if (after === "pin") return hasRecord ? "pin" : "nothing";
+  if (after === "pin") return hasRecord ? "pin" : "qao";
   return "nothing";
+}
+
+/** The document Rust stores with a new shot (W8-A): the one sent — sized to the crop when the
+ *  picture is the crop (`commit.rs::sized_doc`) — else an empty one with the monitor scale
+ *  (`store::shots::empty_doc`). */
+export function shotDoc(doc: AnnotDoc | null, w: number, h: number, scale: number, cropped: boolean): AnnotDoc {
+  if (!doc) return { v: 1, w, h, unit: scale, crop: null, objects: [] };
+  return cropped ? { ...structuredClone(doc), w, h } : structuredClone(doc);
 }
 
 /** What Rust's commit does (§18.4), on the mock feed. */
@@ -348,7 +360,7 @@ async function finishShot(region: Rect, rgba: Uint8Array | null, size: { w: numb
     const c: MockClip = makeClip(d.nextId++, "screenshot", rng(shotSeq), now(), d.apps[0]?.id ?? null);
     Object.assign(c, { width: w, height: h, thumbUrl: picture, imageUrl: picture, size: Math.round((w * h * 4) / 6) });
     c.meta = { shot: { savedPath: path, edited: !!doc && Array.isArray(doc.objects) && doc.objects.length > 0 } };
-    if (doc) docs.set(c.id, structuredClone(doc));
+    docs.set(c.id, shotDoc(doc, w, h, f.scale, !rgba));
     d.clips.unshift(c);
     clip = toClip(c);
     emitChanged("added", [c.id], "capture");
@@ -407,6 +419,7 @@ async function commit(args: Args): Promise<ShotCommitResult> {
   if (!ACTIONS.includes(head.action)) throw fail("invalid", `action ${String(head.action)}`);
   if (session.mode === "text" && head.action !== "text") throw fail("invalid", "a text session commits `text`");
   if (param("mock-shot-fail") === "commit") throw fail("failed", "the commit failed (mock-shot-fail)");
+  if (param("mock-shot-fail") === "hang") return new Promise<never>(() => {}); // W8-A: no answer, ever
   return finishShot(head.rect, rgba, { w: head.width, h: head.height }, head.action, head.doc ?? null);
 }
 
@@ -453,7 +466,7 @@ function editorGet(): ShotEditorPayload | null {
 
 /** Rust's `editor::commit` (§18.9): `done` / `pin` WITH pixels apply the edit (pin then pins);
  *  `done` without pixels changes nothing; `copy` / `save_as` never touch the record. */
-async function editorCommit(args: Args): Promise<Clip> {
+async function editorCommit(args: Args): Promise<Clip | null> {
   const { head, rgba } = parseFrameBody<ShotEditorCommit>(body(args as Args | Uint8Array));
   if (!EDITOR_ACTIONS.includes(head.action)) throw fail("invalid", `action ${String(head.action)}`);
   if (!head.doc || typeof head.doc !== "object") throw fail("invalid", "doc");
@@ -468,7 +481,10 @@ async function editorCommit(args: Args): Promise<Clip> {
     emitChanged("updated", [c.id]);
   }
   if (head.action === "pin") console.info("[mock] shot pinned", c.id);
-  if (head.action === "save_as" && !shotFlags().dialogCancel) savePicture(c, `C:\\Users\\me\\Documents\\${nameOf(c)}.png`);
+  if (head.action === "save_as") {
+    if (shotFlags().dialogCancel) return null; // W8-A: a cancelled dialog answers `null`
+    savePicture(c, `C:\\Users\\me\\Documents\\${nameOf(c)}.png`);
+  }
   return toClip(c);
 }
 

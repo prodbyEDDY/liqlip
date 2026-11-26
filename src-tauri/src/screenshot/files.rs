@@ -313,7 +313,7 @@ pub(crate) fn save(app: &AppHandle, id: i64) -> Result<String, String> {
 pub(crate) async fn save_as(app: AppHandle, id: i64) -> Result<Option<String>, String> {
     let src = app.state::<Store>().shot_source(id)?;
     let png = std::fs::read(&src.png).map_err(|_| format!("not_found: picture of clip {id}"))?;
-    save_png_as(app, id, png).await
+    save_png_as(app, id, png, None).await
 }
 
 /// RGBA8 of a PNG, only when the target format needs pixels (JPG).
@@ -328,14 +328,21 @@ fn pixels_for(format: ShotFormat, png: &[u8]) -> Result<(Vec<u8>, u32, u32), Str
     }
 }
 
-/// "Save as…" of a picture of record `id` (`shot_save_as`; the editor's "Save as…"): the dialog (no parent window; it answers through a callback, as
-/// `settings::pick_exe`), then the PNG written in the format of the chosen extension, recorded
-/// as the record's saved file (`clips:changed`). `None` = cancelled.
-pub(crate) async fn save_png_as(app: AppHandle, id: i64, png: Vec<u8>) -> Result<Option<String>, String> {
+/// "Save as…" of a picture of record `id` (`shot_save_as`; the editor's "Save as…"): the dialog
+/// (it answers through a callback, as `settings::pick_exe`), then the PNG written in the format of
+/// the chosen extension, recorded as the record's saved file (`clips:changed`). `None` =
+/// cancelled. `parent` — the label of the window the dialog is modal to (W8-A: the editor; the
+/// shelf hides itself before the dialog and passes none).
+pub(crate) async fn save_png_as(app: AppHandle, id: i64, png: Vec<u8>, parent: Option<&str>) -> Result<Option<String>, String> {
     let s = settings::get(&app).screenshot;
     let src = app.state::<Store>().shot_source(id)?;
     let (tx, rx) = tokio::sync::oneshot::channel();
-    save_dialog(&app, &s, dialog_name(&s, src.app.as_deref(), src.created_at)).save_file(move |p| {
+    let mut dialog = save_dialog(&app, &s, dialog_name(&s, src.app.as_deref(), src.created_at));
+    // tauri-plugin-dialog 2.7.1 `FileDialogBuilder::set_parent` (as `settings::pick_exe`).
+    if let Some(win) = parent.and_then(|label| app.get_webview_window(label)) {
+        dialog = dialog.set_parent(&win);
+    }
+    dialog.save_file(move |p| {
         let _ = tx.send(p);
     });
     let Some(file) = rx.await.map_err(|_| "failed: dialog closed".to_string())? else { return Ok(None) };

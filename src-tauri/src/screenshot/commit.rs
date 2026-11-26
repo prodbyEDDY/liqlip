@@ -6,7 +6,8 @@
 //! none (no annotations → the crop of the frozen frame is the picture: the fast path).
 //!
 //! Order, tuned for "Ctrl+V right away": (1) the session is taken, the overlay hides and the
-//! focus goes back (`session::close`); (2) PNG encoding — on this thread, never the UI thread
+//! focus goes back (`session::close`); (1a) the shutter click (`sound.rs`, if
+//! `settings.screenshot.sound`; every action but `text` — W8-A); (2) PNG encoding — on this thread, never the UI thread
 //! (an `async` command runs on the runtime's workers; a hotkey capture on its own thread);
 //! (3) the clipboard FIRST (`paste::copy_png`: PNG + DIB in one transaction, our own write is
 //! not captured again); (4) the store (`insert_screenshot`, kind `screenshot`, source = the app
@@ -143,8 +144,21 @@ fn picture<'a>(frame: &Frame, crop: (u32, u32, u32, u32), sent: Option<(&'a [u8]
             logx::warn("screenshot", &format!("commit pixels {sw}×{sh} ≠ crop {w}×{h}: document not kept"));
             Picture { width: sw, height: sh, rgba: Cow::Borrowed(px), base: None, doc: None }
         }
-        None => Picture { width: w, height: h, rgba: Cow::Owned(frame.crop_rgba(x, y, w, h)), base: None, doc },
+        // The fast path: the overlay sends the document of a shot without objects too (W8-A: its
+        // `unit` is the monitor scale, so the editor draws at the overlay's size on HiDPI); it
+        // describes the crop Rust actually cut (the overlay's rect is rounded and clamped here).
+        None => Picture { width: w, height: h, rgba: Cow::Owned(frame.crop_rgba(x, y, w, h)), base: None, doc: doc.map(|d| sized_doc(d, w, h)) },
     }
+}
+
+/// The document's `w` / `h` set to the picture's size (the fast path: no pixels were sent, the
+/// picture is Rust's crop of the frame).
+fn sized_doc(mut doc: serde_json::Value, width: u32, height: u32) -> serde_json::Value {
+    if let Some(map) = doc.as_object_mut() {
+        map.insert("w".into(), width.into());
+        map.insert("h".into(), height.into());
+    }
+    doc
 }
 
 /// `shot_commit` (raw body §18.4).
@@ -189,7 +203,11 @@ fn finish(
     doc: Option<serde_json::Value>,
 ) -> Result<ShotCommitResult, String> {
     let pic = picture(frame, crop, sent, doc);
-    let Some(plan) = plan(action, &ctx.settings) else { return recognize(app, &pic) };
+    let Some(plan) = plan(action, &ctx.settings) else { return recognize(app, ctx, &pic) };
+    // (1a) The shutter click — every shot that is taken, whatever follows on screen (W8-A).
+    if ctx.settings.sound {
+        super::sound::shutter();
+    }
     let png = encode_png(pic.width, pic.height, &pic.rgba)?;
     // (3) Clipboard first.
     if plan.copy {
@@ -313,9 +331,12 @@ fn store_app_icon(store: &Store, app_id: i64, exe: &str) {
 }
 
 /// `action: 'text'`: OCR of the region → the clipboard, HUD `text_copied` / `text_empty`; no
-/// record, no file. No OCR language → HUD `text_unavailable` (the overlay is already gone, so
-/// the HUD is where it can be seen) and the command's error; other failures are the error.
-fn recognize(app: &AppHandle, pic: &Picture<'_>) -> Result<ShotCommitResult, String> {
+/// picture record, no file. W8-A: the text itself goes to the history as an ordinary text record
+/// (`capture::store_text` — everything copied is in the history; source = the app focused at the
+/// hotkey; ignore list, secret patterns and type toggles as for a copy). No OCR language → HUD
+/// `text_unavailable` (the overlay is already gone, so the HUD is where it can be seen) and the
+/// command's error; other failures are the error.
+fn recognize(app: &AppHandle, ctx: &Context, pic: &Picture<'_>) -> Result<ShotCommitResult, String> {
     let png = encode_png(pic.width, pic.height, &pic.rgba)?;
     let text = crate::ocr::recognize_png(app, png).inspect_err(|e| {
         if e == crate::ocr::NO_LANGUAGE {
@@ -329,6 +350,10 @@ fn recognize(app: &AppHandle, pic: &Picture<'_>) -> Result<ShotCommitResult, Str
     }
     paste::copy_text(&text)?;
     picker::hud::show(app, HudKind::TextCopied, None);
+    // The clipboard first (Ctrl+V right away), then the history; a failed insert is only logged.
+    if let Err(e) = crate::capture::store_text(app, &text, ctx.source.clone()) {
+        logx::warn("screenshot", &format!("text from the screen: history: {e}"));
+    }
     Ok(ShotCommitResult { clip_id: None, saved_path: None, text: Some(text) })
 }
 
@@ -415,11 +440,11 @@ mod tests {
     fn the_picture_is_the_crop_or_the_flattened_pixels() {
         let f = frame_4x3();
         let doc = serde_json::json!({ "v": 1, "objects": [{ "id": "a" }] });
-        // Fast path: the crop, the document kept as sent.
+        // Fast path: the crop, the document kept as sent — sized to the crop (W8-A).
         let p = picture(&f, (1, 1, 2, 1), None, Some(doc.clone()));
         assert_eq!((p.width, p.height, p.base.is_none()), (2, 1, true));
         assert_eq!(&p.rgba[..], &[0, 0, 5, 255, 0, 0, 6, 255]);
-        assert_eq!(p.doc, Some(doc.clone()));
+        assert_eq!(p.doc, Some(serde_json::json!({ "v": 1, "w": 2, "h": 1, "objects": [{ "id": "a" }] })));
         // Annotated: the sent pixels are the picture, the crop becomes the base.
         let flat = [9u8; 8];
         let p = picture(&f, (1, 1, 2, 1), Some((&flat, 2, 1)), Some(doc.clone()));
@@ -432,6 +457,20 @@ mod tests {
         assert_eq!((p.width, p.height, p.base, p.doc), (3, 1, None, None));
         // A document that is not an object is dropped.
         assert_eq!(picture(&f, (0, 0, 1, 1), None, Some(serde_json::json!([1]))).doc, None);
+    }
+
+    /// W8-A: the overlay sends the document of a shot without objects (its `unit` = the monitor
+    /// scale); the fast path keeps it, sized to the crop Rust cut.
+    #[test]
+    fn the_fast_path_keeps_an_empty_document_with_its_unit() {
+        let f = frame_4x3();
+        let sent = serde_json::json!({ "v": 1, "w": 3, "h": 2, "unit": 1.5, "crop": null, "objects": [] });
+        let p = picture(&f, (1, 1, 2, 1), None, Some(sent));
+        assert_eq!(p.doc, Some(serde_json::json!({ "v": 1, "w": 2, "h": 1, "unit": 1.5, "crop": null, "objects": [] })));
+        assert!(p.base.is_none(), "nothing drawn: no base picture");
+        // No document at all (a capture without overlay): the store writes the empty one with the
+        // monitor's scale (`NewShot.unit`, store::shots::empty_doc).
+        assert_eq!(picture(&f, (0, 0, 2, 2), None, None).doc, None);
     }
 
     #[test]

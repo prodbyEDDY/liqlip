@@ -12,8 +12,9 @@
 //!
 //! Mapping: `clipboard_entries` rows of kind text|link|code|contact|color|image|file|screenshot;
 //! dictations (they are not in this database at all) and unknown kinds are skipped. Screenshots
-//! (W6-B, ARCHITECTURE §18.5) → `screenshot` records without an annotation document (Liquid
-//! Tools baked annotations into the picture): the file is `content_ref`, read only when it lies
+//! (W6-B, ARCHITECTURE §18.5) → `screenshot` records with an empty annotation document (Liquid
+//! Tools baked annotations into the picture; the `shot_docs` row is added after the run, W8-A —
+//! `Store::attach_missing_shot_docs`): the file is `content_ref`, read only when it lies
 //! inside Liquid Tools' screenshot cache (`%LOCALAPPDATA%\com.liquidtools.app\screenshots`); a
 //! missing file, a path elsewhere or a format this build cannot decode counts as `skipped`.
 //! Text kinds are re-classified with `capture::classify::classify_text` (all text
@@ -684,6 +685,12 @@ pub(crate) fn run_in(
         }
         Ok(Some(page))
     })?;
+    // §18.5: every screenshot has a `shot_docs` row (W8-A) — the empty document of a shot without
+    // annotations. A failure costs nothing visible (the editor opens a shot without a row as a
+    // plain picture): logged, the import stands.
+    if let Err(e) = store.attach_missing_shot_docs() {
+        crate::logx::warn("import", &format!("screenshot documents: {e}"));
+    }
     let skipped = skipped_shots.get();
     if skipped > 0 {
         report.skipped += skipped;
@@ -859,8 +866,14 @@ mod tests {
         let s = store_in(c.dir.path());
         let r = run_in(&s, &db, Some(&c.shots), None, true, &[], &quiet).unwrap();
         assert_eq!((r.imported, r.skipped, r.errors), (2, 2, 0), "{r:?}");
-        let shots: i64 = s.lock().query_row("SELECT count(*) FROM clips WHERE kind = 'screenshot'", [], |r| r.get(0)).unwrap();
+        let (shots, id): (i64, i64) = s
+            .lock()
+            .query_row("SELECT count(*), max(id) FROM clips WHERE kind = 'screenshot'", [], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap();
         assert_eq!(shots, 1);
+        // W8-A: the §18.5 invariant — the imported shot has its `shot_docs` row, the empty document.
+        let d = s.shot_doc(id).unwrap().expect("a shot_docs row");
+        assert_eq!((d.doc, d.has_base, d.saved_path), (crate::store::shots::empty_doc(64, 40, 1.0), false, None));
         let again = run_in(&s, &db, Some(&c.shots), None, true, &[], &quiet).unwrap();
         assert_eq!((again.imported, again.skipped, again.errors), (0, 4, 0), "re-import adds nothing: {again:?}");
     }

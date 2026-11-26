@@ -247,6 +247,15 @@ mod runtime {
         });
     }
 
+    /// A record built outside the clipboard listener (`super::store_text`): the worker's own
+    /// insert + `inserted` (event, collect-mode stack push, source icon).
+    pub fn store(app: &AppHandle, clip: NewClip, exe: Option<&str>) -> Result<i64, String> {
+        let mut sink = AppSink { app: app.clone() };
+        let outcome = sink.insert(clip)?;
+        sink.inserted(&outcome, exe, state().collect());
+        Ok(outcome.id)
+    }
+
     pub fn stop() {
         let Some(rt) = runtime().get() else { return };
         rt.stopping.store(true, Ordering::SeqCst);
@@ -264,6 +273,31 @@ pub fn start(app: &AppHandle) {
     runtime::start(app);
     #[cfg(not(windows))]
     let _ = app;
+}
+
+/// "Copy text from screen" (W8-A, ARCHITECTURE §18.4): the recognised text — already on the
+/// clipboard as Liqlip's own write, which the listener skips — becomes an ordinary text record,
+/// judged like a copy of it (`pipeline::text_record`: ignore list by `source`, secret patterns,
+/// classification, type toggles), followed by what a captured copy gets (`clips:changed`, the
+/// paste stack in collect mode, the source app's icon). `Ok(None)` = not stored by the settings.
+/// Blocking (store write) — call from a worker.
+pub(crate) fn store_text(app: &AppHandle, text: &str, source: Option<crate::store::SourceApp>) -> Result<Option<i64>, String> {
+    let cfg = CaptureConfig::from(&crate::settings::get(app));
+    let exe = source.as_ref().map(|s| s.exe.clone());
+    let clip = match pipeline::text_record(text, &cfg, source, now_ms()) {
+        Ok(c) => c,
+        Err(reason) => {
+            logx::warn("capture", &format!("text from the screen not stored: {}", reason.as_str()));
+            return Ok(None);
+        }
+    };
+    #[cfg(windows)]
+    return runtime::store(app, clip, exe.as_deref()).map(Some);
+    #[cfg(not(windows))]
+    {
+        let _ = (clip, exe);
+        Ok(None)
+    }
 }
 
 /// `RunEvent::Exit`: remove the clipboard listener (`RemoveClipboardFormatListener`) and stop

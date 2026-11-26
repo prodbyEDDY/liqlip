@@ -42,7 +42,6 @@
   import { motionDuration } from "$lib/motion";
   import { createQao, initialState } from "./qao";
   import ShotCard from "./ShotCard.svelte";
-  import { playShutter } from "./shutter";
   import { BLEED, GAP } from "./stack";
 
   const qs = $state(initialState());
@@ -62,7 +61,6 @@
     shotsHudLayout,
     shotsHudHide,
     settingsOpen,
-    shutter: playShutter,
     now: () => performance.now(),
     later: (fn, ms) => {
       const h = setTimeout(fn, ms);
@@ -88,7 +86,6 @@
   }
   function applySettings(s: Settings): void {
     qs.timeout = s.screenshot.timeout;
-    qs.sound = s.screenshot.sound;
     qs.corner = s.screenshot.corner;
     ocrEnabled = s.ocr.enabled;
     gateOcr();

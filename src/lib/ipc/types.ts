@@ -487,7 +487,7 @@ export interface HotkeysCaptured {
 
 /** `resumed` / `skip_next` — W1-D, additive: feedback for the pause / skip hotkeys.
  *  `countdown` (text = seconds left) / `shot_failed` / `text_copied` / `text_empty` — W5, additive (§18.10). */
-export type HudKind = "copied" | "stack_empty" | "paused" | "elevated" | "resumed" | "skip_next" | "countdown" | "shot_failed" | "text_copied" | "text_empty" | "text_unavailable";
+export type HudKind = "copied" | "stack_empty" | "paused" | "elevated" | "resumed" | "skip_next" | "countdown" | "shot_failed" | "text_copied" | "text_empty" | "text_unavailable" | "save_failed";
 
 export interface HudShow {
   kind: HudKind;

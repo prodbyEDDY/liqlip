@@ -68,6 +68,14 @@ test("an unknown version opens the picture without objects (the caller shows a t
   assert.deepEqual([n.doc.w, n.doc.h, n.doc.unit, n.doc.objects.length], [10, 20, 2, 0]);
 });
 
+test("the editor window draws with the stored unit (W8-A): an empty document's monitor scale wins, no document → 1", () => {
+  // EditorWindow.svelte: `loadDoc(payload.doc, bitmap.width, bitmap.height, 1)`
+  const shot = { v: 1, w: 3000, h: 2000, unit: 2, crop: null, objects: [] }; // a 200 % monitor, nothing drawn
+  assert.equal(D.loadDoc(shot, 3000, 2000, 1).doc.unit, 2);
+  assert.equal(D.loadDoc(null, 3000, 2000, 1).doc.unit, 1, "an image never edited has no document");
+  assert.equal(D.loadDoc({ ...shot, unit: 0 }, 3000, 2000, 1).doc.unit, 1, "a broken unit falls back");
+});
+
 test("untrusted input: extra fields ignored, broken objects dropped, ids made unique", () => {
   const raw = {
     v: 1,

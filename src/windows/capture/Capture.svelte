@@ -33,6 +33,7 @@
     emptyDoc,
     frameDoc,
     PropsBar,
+    secondaryPress,
     Toolbar,
     type EditorApi,
     type EditorIntent,
@@ -61,7 +62,7 @@
     type Point,
   } from "./geometry";
   import { LOUPE_DEFAULT_ZOOM, zoomBy } from "./loupe";
-  import { begin, choose, CONFIRM_MS, commitFailed, commitHeader, escapeLadder, IDLE, reportedStage, sessionChange, startCommit, type HostState } from "./machine";
+  import { begin, choose, COMMIT_TIMEOUT_MS, CONFIRM_MS, commitFailed, commitHeader, commitTimedOut, escapeLadder, IDLE, reportedStage, sessionChange, startCommit, type HostState } from "./machine";
   import FrameChrome from "./FrameChrome.svelte";
   import HintBar from "./HintBar.svelte";
   import Loupe from "./Loupe.svelte";
@@ -321,33 +322,49 @@
     if (action) void commit(action);
   }
 
+  /** The commit in flight (its timer and its answer check that they are still the current one). */
+  let attempt = 0;
+
   async function commit(action: ShotAction): Promise<void> {
     const next = startCommit(host, action);
     const rect = next?.frame ? snapRect(next.frame, frameSize) : null;
-    if (!next || !rect) return;
+    if (!next || !rect || !session) return;
     const id = next.sessionId!;
+    const mine = ++attempt;
     host = next;
     gesture = null;
     clearNotice();
+    // W8-A: no answer in 15 s (a hung clipboard or disk) → back to the stage, Esc / Cancel work again
+    const timer = setTimeout(() => {
+      if (attempt !== mine) return;
+      attempt++; // a late failure of this commit says nothing more
+      host = commitTimedOut(host, id);
+      showError(t("capture.error.timeout"));
+    }, COMMIT_TIMEOUT_MS);
     try {
-      let header = commitHeader(id, rect, action, null, null);
+      // the frame-relative document goes with every picture action (W8-A: also without objects —
+      // its `unit` is the monitor scale the editor window draws with later); text reads the screen
+      const base = editor?.doc() ?? editorDoc ?? emptyDoc(frameSize.w, frameSize.h, session.monitor.scale);
+      const doc = action === "text" ? null : frameDoc(base, rect);
+      let header = commitHeader(id, rect, action, doc, null);
       let rgba: Uint8Array | null = null;
-      // the drawing goes as the flattened crop + the frame-relative document (§18.4); text reads the screen
-      if (action !== "text" && editor?.hasObjects()) {
-        const doc = frameDoc(editor.doc(), rect);
-        if (doc.objects.length) {
-          const px = await editor.exportRGBA(rect);
-          header = commitHeader(id, rect, action, doc, { width: px.width, height: px.height });
-          rgba = px.data;
-        }
+      // the drawing goes as the flattened crop (§18.4)
+      if (doc?.objects.length && editor) {
+        const px = await editor.exportRGBA(rect);
+        header = commitHeader(id, rect, action, doc, { width: px.width, height: px.height });
+        rgba = px.data;
       }
       await shotCommit(header, rgba);
+      // also a late answer: Rust took and closed the session, the overlay is done
       if (host.sessionId === id) toIdle();
     } catch (e) {
       console.error("[capture] shot_commit failed", e);
-      if (host.sessionId !== id) return;
+      if (attempt !== mine || host.sessionId !== id) return;
       host = commitFailed(host);
       showError(`${t("capture.error.commit")} ${errorMessage(e)}`);
+    } finally {
+      clearTimeout(timer);
+      if (attempt === mine) attempt++;
     }
   }
 
@@ -478,6 +495,10 @@
 
   function onPointerMove(e: PointerEvent): void {
     if (!session) return;
+    // A right press while a host gesture holds the left button arrives as a pointermove with
+    // `button === 2` — Pointer Events send no second pointerdown for a chorded press (W7-R3, as in
+    // the editor): it cancels the gesture (SPEC §9.2 "a right click cancels the gesture").
+    if (gesture && secondaryPress(e)) return cancelGesture();
     // An editor gesture whose release never reached this window (let go over another monitor)
     // would keep the panel see-through and click-through: no button held = it is over (W7-R4).
     if (editorGesture && (e.buttons & 1) === 0) editorGesture = false;

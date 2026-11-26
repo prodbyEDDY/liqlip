@@ -7,6 +7,7 @@
   // `settings:navigate { section }` (from `settings_open`) and `?section=` in the URL
   // (browser checks; kept in sync with replaceState). `?onboarding=1` forces the onboarding.
   import { isBrowserShortcut } from "$lib/browserKeys";
+  import { refuseFileDrop } from "$lib/dropGuard";
   import Button from "$lib/components/Button.svelte";
   import EmptyState from "$lib/components/EmptyState.svelte";
   import { tick } from "svelte";
@@ -135,7 +136,8 @@
   }
 </script>
 
-<svelte:window onkeydown={onKeydown} />
+<!-- A file from Explorer: refused (W8-A) — the reorder of folders / snippets is left alone. -->
+<svelte:window onkeydown={onKeydown} ondragenter={refuseFileDrop} ondragover={refuseFileDrop} ondrop={refuseFileDrop} />
 
 {#if onboarding}
   <Onboarding onFinish={finishOnboarding} />
