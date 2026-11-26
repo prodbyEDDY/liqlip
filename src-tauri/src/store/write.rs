@@ -40,7 +40,7 @@ impl FilesBlob {
 }
 
 pub(crate) fn is_text_kind(kind: Kind) -> bool {
-    !matches!(kind, Kind::Image | Kind::File)
+    !(kind.is_image() || kind == Kind::File)
 }
 
 /// A validated, normalised [`NewClip`].
@@ -187,7 +187,7 @@ fn prepare(clip: NewClip, now: i64) -> Result<Prepared, String> {
         copied_at: if copied_at > 0 { copied_at } else { now },
     };
     match kind {
-        Kind::Image => {
+        Kind::Image | Kind::Screenshot => {
             let png = png.filter(|b| media::is_png(b)).ok_or("invalid: image record without a PNG")?;
             // Dimensions from the PNG header (authoritative, cheap).
             let (w, h) = ImageReader::with_format(Cursor::new(&png), ImageFormat::Png)
@@ -375,7 +375,7 @@ impl Store {
         media::remove_files(&leftovers);
         let out = result?;
         self.wake(Wake::Inserted);
-        if p.kind == Kind::Image {
+        if p.kind.is_image() {
             self.ocr_wake(); // W2-A: a new image may be queued for OCR
         }
         Ok(out)
@@ -417,9 +417,14 @@ impl Store {
             let (id, created) = match existing {
                 Some((id, old_meta)) => {
                     let meta = merge_meta(parse_meta(old_meta.as_deref()), &p.meta);
+                    // A picture stays the kind it is (W6-A, §18.5): a screenshot equal to an
+                    // image raises the image, a copy of a screenshot keeps the screenshot.
                     tx.execute(
                         "UPDATE clips SET copied_at = max(copied_at, ?1), copy_count = copy_count + 1,
-                           deleted_at = NULL, app_id = coalesce(?2, app_id), kind = ?3, meta = ?4
+                           deleted_at = NULL, app_id = coalesce(?2, app_id),
+                           kind = CASE WHEN kind IN ('image', 'screenshot') AND ?3 IN ('image', 'screenshot')
+                                       THEN kind ELSE ?3 END,
+                           meta = ?4
                          WHERE id = ?5",
                         params![p.copied_at, app_id, p.kind.as_str(), meta_json(&meta), id],
                     )
@@ -451,7 +456,7 @@ impl Store {
                     (tx.last_insert_rowid(), true)
                 }
             };
-            if p.kind == Kind::Image {
+            if p.kind.is_image() {
                 self.ocr_enqueue_in(&tx, id)?; // W2-A: pending while OCR is on
             }
             if let Some(png) = &p.png {

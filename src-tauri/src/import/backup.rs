@@ -1,5 +1,6 @@
 //! `.liqlip` backups (ARCHITECTURE §16.2): a zip with `manifest.json`, `clipboard.db` (a
-//! consistent snapshot of `liqlip.db`), `media/<id>.png`, `media/thumbs/<id>.png`,
+//! consistent snapshot of `liqlip.db`), `media/<id>.png`, `media/thumbs/<id>.png`, `media/base/<id>.png`
+//! (W6-A: pictures without annotations; the documents ride in the `shot_docs` table),
 //! `icons/<id>.png` and `settings.json`.
 //!
 //! - **Export** writes `<target>.<pid>.part` beside the target and renames it into place.
@@ -14,6 +15,7 @@ use super::runner::{self, Page, Progress, PAGE};
 use super::tmp::TempDir;
 use crate::model::{ClipMeta, ImportReport, Kind};
 use crate::store::bulk::{parse_files_blob, ImportItem, SnippetRow, SCHEMA_VERSION, STAGING_PREFIX};
+use crate::store::shots::ShotDocImport;
 use crate::store::{ClipFiles, NewClip, SourceApp, Store};
 use rusqlite::{Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
@@ -106,7 +108,7 @@ pub(crate) fn export(
     let snap = tmp.path().join("clipboard.db");
     store.snapshot_to(&snap)?;
     let db_err = |e: rusqlite::Error| format!("failed: backup snapshot: {e}");
-    let (mut counts, png_ids, image_ids, icon_ids) = {
+    let (mut counts, png_ids, image_ids, base_ids, icon_ids) = {
         let c = ro(&snap).map_err(db_err)?;
         let counts = ManifestCounts {
             clips: count(&c, "SELECT count(*) FROM clips").map_err(db_err)?,
@@ -119,7 +121,9 @@ pub(crate) fn export(
         (
             counts,
             ids(&c, "SELECT clip_id FROM clip_formats WHERE format = 'png' ORDER BY clip_id").map_err(db_err)?,
-            ids(&c, "SELECT id FROM clips WHERE kind = 'image' ORDER BY id").map_err(db_err)?,
+            ids(&c, "SELECT id FROM clips WHERE kind IN ('image', 'screenshot') ORDER BY id").map_err(db_err)?,
+            // W6-A (schema v2): pictures without annotations of screenshots / edited images.
+            ids(&c, "SELECT clip_id FROM shot_docs WHERE has_base = 1 ORDER BY clip_id").map_err(db_err)?,
             ids(&c, "SELECT id FROM apps WHERE icon_path IS NOT NULL ORDER BY id").map_err(db_err)?,
         )
     };
@@ -130,6 +134,7 @@ pub(crate) fn export(
     files.extend(
         image_ids.iter().map(|id| (format!("media/thumbs/{id}.png"), data.join("media").join("thumbs").join(format!("{id}.png")))),
     );
+    files.extend(base_ids.iter().map(|id| (format!("media/base/{id}.png"), data.join("media").join("base").join(format!("{id}.png")))));
     files.extend(icon_ids.iter().map(|id| (format!("icons/{id}.png"), data.join("icons").join(format!("{id}.png")))));
     files.retain(|(_, p)| p.is_file());
     counts.media = files.len() as i64;
@@ -215,6 +220,9 @@ fn entry_target(name: &str) -> Option<(PathBuf, u64)> {
     }
     if let Some(rest) = name.strip_prefix("media/thumbs/") {
         return png_id(rest).map(|id| (Path::new("media").join("thumbs").join(format!("{id}.png")), PNG_MAX));
+    }
+    if let Some(rest) = name.strip_prefix("media/base/") {
+        return png_id(rest).map(|id| (Path::new("media").join("base").join(format!("{id}.png")), PNG_MAX));
     }
     if let Some(rest) = name.strip_prefix("media/") {
         return png_id(rest).map(|id| (Path::new("media").join(format!("{id}.png")), PNG_MAX));
@@ -387,10 +395,10 @@ fn backup_item(
     }
     let media = dir.join("media").join(format!("{}.png", r.id));
     let png = if formats.contains_key("png") { std::fs::read(&media).ok() } else { None };
-    if kind == Kind::Image && png.is_none() {
+    if kind.is_image() && png.is_none() {
         return Err("not_found: image file missing in the backup".into());
     }
-    let thumb = (kind == Kind::Image)
+    let thumb = kind.is_image()
         .then(|| std::fs::read(dir.join("media").join("thumbs").join(format!("{}.png", r.id))).ok())
         .flatten();
     let files = match formats.get("files") {
@@ -443,6 +451,51 @@ fn backup_item(
         ocr_state: r.ocr_state,
         app_icon: app.and_then(|a| a.icon.clone()),
     })
+}
+
+/// Annotation documents per merge batch (each may bring its base picture into memory).
+const SHOT_DOC_BATCH: usize = 50;
+
+/// W6-A (schema v2, §17.5): after the records, the backup's `shot_docs` rows (and their base
+/// pictures from `media/base/`) are attached to the records the merge created or found, by
+/// hash (`Store::import_shot_docs`). A v1 backup has no such table — nothing to do.
+fn merge_shot_docs(store: &Store, src: &Connection, dir: &Path, cutoff: i64, filter: &str) -> Result<(), String> {
+    let err = |e: rusqlite::Error| format!("failed: backup database: {e}");
+    let has_table = count(src, "SELECT count(*) FROM sqlite_schema WHERE type = 'table' AND name = 'shot_docs'").map_err(err)? > 0;
+    if !has_table {
+        return Ok(());
+    }
+    type Row = (String, String, bool, Option<String>, i64, i64);
+    let rows: Vec<Row> = {
+        let mut st = src
+            .prepare(&format!(
+                "SELECT c.hash, s.doc, s.has_base, s.saved_path, s.updated_at, s.clip_id
+                 FROM shot_docs s JOIN clips c ON c.id = s.clip_id WHERE {filter} ORDER BY s.clip_id"
+            ))
+            .map_err(err)?;
+        let mapped = st
+            .query_map([cutoff], |r| Ok((r.get(0)?, r.get(1)?, r.get::<_, i64>(2)? != 0, r.get(3)?, r.get(4)?, r.get(5)?)))
+            .map_err(err)?;
+        mapped.collect::<Result<_, _>>().map_err(err)?
+    };
+    let mut added = 0;
+    for chunk in rows.chunks(SHOT_DOC_BATCH) {
+        let batch = chunk
+            .iter()
+            .map(|(hash, doc, has_base, saved_path, updated_at, id)| ShotDocImport {
+                hash: hash.clone(),
+                doc: doc.clone(),
+                base_png: has_base.then(|| std::fs::read(dir.join("media").join("base").join(format!("{id}.png"))).ok()).flatten(),
+                saved_path: saved_path.clone(),
+                updated_at: *updated_at,
+            })
+            .collect();
+        added += store.import_shot_docs(batch)?;
+    }
+    if added > 0 {
+        crate::logx::warn("import", &format!("backup merge: {added} annotation documents attached"));
+    }
+    Ok(())
 }
 
 /// `backup_import('merge')`: the backup's live records through the shared import loop
@@ -540,6 +593,7 @@ pub(crate) fn restore_merge(
             rows.into_iter().map(|r| backup_item(&src, &dir, r, &apps, &favs)).collect(),
         ))
     })?;
+    merge_shot_docs(store, &src, tmp.path(), cutoff, FILTER)?;
     let snippets: Vec<SnippetRow> = {
         let mut st = src
             .prepare("SELECT name, body, keyword, created_at, updated_at, use_count FROM snippets ORDER BY position, id")

@@ -750,3 +750,47 @@ fn export_failure_leaves_no_partial_file() {
     assert!(backup::export(&kit.store, b"{}", "1", T, zip::DateTime::default(), &dest, p).unwrap_err().starts_with("failed:"));
     assert!(!kit.dir.path().join("missing-dir").exists());
 }
+
+/// W6-A (schema v2): a screenshot's annotation document and base picture travel in a backup —
+/// restored by `replace` as they were, attached by `merge` to the record found by hash.
+#[test]
+fn screenshots_keep_their_documents_through_a_backup() {
+    use crate::store::shots::NewShot;
+    let a = Kit::new();
+    let picture = png(40, 30, 255);
+    let base = png(40, 30, 128);
+    let doc = serde_json::json!({ "v": 1, "w": 40, "h": 30, "unit": 2, "crop": null, "objects": [{ "id": "1", "kind": "rect" }] });
+    let shot = NewShot {
+        hash: content::image_hash(40, 30, decode(&picture).as_raw()),
+        png: picture,
+        width: 40,
+        height: 30,
+        thumb_png: None,
+        base_png: Some(base.clone()),
+        doc: Some(doc.clone()),
+        unit: 2.0,
+        saved_path: Some(r"D:\Shots\a.png".into()),
+        source: None,
+        copied_at: T - 1_000,
+    };
+    let id = a.store.insert_screenshot(shot).unwrap().id;
+    let dest = a.dir.path().join("shots.liqlip");
+    let m = export_to(&a, &dest);
+    assert_eq!(m.schema_version, 2);
+    assert_eq!(m.counts.media, 2, "the picture and its base");
+
+    let b = Kit::new();
+    backup::restore_replace(&b.store, &dest, &quiet()).unwrap();
+    assert_eq!(b.store.shot_doc(id).unwrap(), a.store.shot_doc(id).unwrap());
+    assert_eq!(b.store.serve_base(id), Some(base.clone()));
+
+    let c = Kit::new();
+    c.store.insert_clip(text_clip("already here", T - 5)).unwrap();
+    let r = backup::restore_merge(&c.store, &dest, None, true, &[], &quiet()).unwrap();
+    assert_eq!(r.imported, 1);
+    let merged: i64 = c.one("SELECT id FROM clips WHERE kind = 'screenshot'", []);
+    assert_ne!(merged, id, "a merge gives the record a new id");
+    let d = c.store.shot_doc(merged).unwrap().unwrap();
+    assert_eq!((d.doc, d.has_base, d.saved_path.as_deref()), (doc, true, Some(r"D:\Shots\a.png")));
+    assert_eq!(c.store.serve_base(merged), Some(base));
+}

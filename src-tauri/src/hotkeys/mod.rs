@@ -14,7 +14,8 @@ mod combo;
 #[cfg(windows)]
 mod native;
 
-use crate::model::{HotkeySettings, HudKind, SettingsError, SettingsErrorCode};
+use crate::model::{HotkeySettings, HudKind, SettingsError, SettingsErrorCode, ShotMode};
+use combo::SLOTS;
 use crate::{capture, events, logx, paste, picker};
 use parking_lot::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -33,15 +34,38 @@ pub enum HotkeyAction {
     PauseToggle,
     /// `capture::ignore_next`
     IgnoreNext,
+    /// Screenshots (W6-A, §18.11): `shot_capture { mode }` on the action's own thread.
+    ShotRegion,
+    ShotScreen,
+    ShotWindow,
+    ShotRepeat,
+    ShotText,
 }
 
 /// Slot order = `combo::FIELDS` order.
-pub(crate) const ACTIONS: [HotkeyAction; 4] = [
+pub(crate) const ACTIONS: [HotkeyAction; SLOTS] = [
     HotkeyAction::Summon,
     HotkeyAction::StackNext,
     HotkeyAction::PauseToggle,
     HotkeyAction::IgnoreNext,
+    HotkeyAction::ShotRegion,
+    HotkeyAction::ShotScreen,
+    HotkeyAction::ShotWindow,
+    HotkeyAction::ShotRepeat,
+    HotkeyAction::ShotText,
 ];
+
+/// The capture mode of a screenshot action.
+fn shot_mode(action: HotkeyAction) -> Option<ShotMode> {
+    Some(match action {
+        HotkeyAction::ShotRegion => ShotMode::Region,
+        HotkeyAction::ShotScreen => ShotMode::Screen,
+        HotkeyAction::ShotWindow => ShotMode::Window,
+        HotkeyAction::ShotRepeat => ShotMode::Repeat,
+        HotkeyAction::ShotText => ShotMode::Text,
+        _ => return None,
+    })
+}
 
 /// An armed recorder (between `hotkey_record_start` and a commit / cancel / stop).
 #[derive(Default)]
@@ -140,7 +164,28 @@ fn run_action(app: &AppHandle, action: HotkeyAction) {
             Ok(_) => {}
             Err(e) => logx::warn("hotkeys", &format!("ignore next: {e}")),
         },
+        // The screenshot module's command entry (it returns at once: the capture runs on its
+        // own thread). This is the action's own thread, not an async-runtime worker, so
+        // `block_on` is allowed here.
+        action => {
+            if let Some(mode) = shot_mode(action) {
+                if let Err(e) = tauri::async_runtime::block_on(crate::screenshot::shot_capture(app.clone(), mode, None)) {
+                    logx::warn("hotkeys", &format!("screenshot: {e}"));
+                }
+            }
+        }
     }
+}
+
+/// Current errors of every hotkey field (`hotkeys.<name>`, as `SettingsResult.errors`): the
+/// unparsable / duplicate ones of the saved settings and the chords the OS has not given us
+/// (after one retry). For `shot_status` (W6-B filters the `hotkeys.shot*` fields). Blocking
+/// (a registrar round trip, ≤ 2 s) — call from a worker.
+#[allow(dead_code)] // W6-B: screenshot/status.rs — `ShotStatus.hotkeyErrors`
+pub(crate) fn current_errors(app: &AppHandle) -> Vec<SettingsError> {
+    let h = crate::settings::get(app).hotkeys;
+    let (_, parse_errs) = combo::desired(&h, &h);
+    to_errors(&merge(parse_errs, native_status()))
 }
 
 /// Main (non-modifier) virtual key of a chord in the settings notation (`"Alt + Shift + V"` →
@@ -159,7 +204,7 @@ fn to_errors(errs: &[Option<SettingsErrorCode>]) -> Vec<SettingsError> {
         .collect()
 }
 
-fn merge(a: [Option<SettingsErrorCode>; 4], b: [Option<SettingsErrorCode>; 4]) -> [Option<SettingsErrorCode>; 4] {
+fn merge(a: [Option<SettingsErrorCode>; SLOTS], b: [Option<SettingsErrorCode>; SLOTS]) -> [Option<SettingsErrorCode>; SLOTS] {
     std::array::from_fn(|i| a[i].or(b[i]))
 }
 
@@ -224,9 +269,9 @@ fn end_recording() {
 
 #[cfg(windows)]
 fn native_apply(
-    prev: [Option<combo::Combo>; 4],
-    want: [Option<combo::Combo>; 4],
-) -> [Option<SettingsErrorCode>; 4] {
+    prev: [Option<combo::Combo>; SLOTS],
+    want: [Option<combo::Combo>; SLOTS],
+) -> [Option<SettingsErrorCode>; SLOTS] {
     native::request(|reply| native::Request::Apply { prev, want, reply }).unwrap_or_else(|e| {
         logx::warn("hotkeys", &format!("apply: {e}"));
         // The engine is unreachable: every requested chord is unusable for now.
@@ -235,10 +280,10 @@ fn native_apply(
 }
 
 #[cfg(windows)]
-fn native_status() -> [Option<SettingsErrorCode>; 4] {
+fn native_status() -> [Option<SettingsErrorCode>; SLOTS] {
     native::request(|reply| native::Request::Status { reply }).unwrap_or_else(|e| {
         logx::warn("hotkeys", &format!("status: {e}"));
-        [None; 4]
+        [None; SLOTS]
     })
 }
 
@@ -261,12 +306,12 @@ fn sync_hook_result() -> Result<(), String> {
 }
 
 #[cfg(not(windows))]
-fn native_apply(_: [Option<combo::Combo>; 4], _: [Option<combo::Combo>; 4]) -> [Option<SettingsErrorCode>; 4] {
-    [None; 4]
+fn native_apply(_: [Option<combo::Combo>; SLOTS], _: [Option<combo::Combo>; SLOTS]) -> [Option<SettingsErrorCode>; SLOTS] {
+    [None; SLOTS]
 }
 #[cfg(not(windows))]
-fn native_status() -> [Option<SettingsErrorCode>; 4] {
-    [None; 4]
+fn native_status() -> [Option<SettingsErrorCode>; SLOTS] {
+    [None; SLOTS]
 }
 #[cfg(not(windows))]
 fn native_suspend(_: bool) {}
@@ -297,9 +342,15 @@ mod tests {
 
     #[test]
     fn parse_errors_win_over_os_errors() {
-        let a = [Some(SettingsErrorCode::Invalid), None, None, None];
-        let b = [Some(SettingsErrorCode::Taken), Some(SettingsErrorCode::Taken), None, None];
-        assert_eq!(merge(a, b), [Some(SettingsErrorCode::Invalid), Some(SettingsErrorCode::Taken), None, None]);
+        let mut a = [None; SLOTS];
+        let mut b = [None; SLOTS];
+        a[0] = Some(SettingsErrorCode::Invalid);
+        b[0] = Some(SettingsErrorCode::Taken);
+        b[1] = Some(SettingsErrorCode::Taken);
+        b[8] = Some(SettingsErrorCode::Taken);
+        let m = merge(a, b);
+        assert_eq!((m[0], m[1], m[2], m[8]), (Some(SettingsErrorCode::Invalid), Some(SettingsErrorCode::Taken), None, Some(SettingsErrorCode::Taken)));
+        assert_eq!(to_errors(&m).last().unwrap().field, "hotkeys.shotText");
     }
 
     /// W3-A: every main key the grammar binds is the key the paste waits for — not only the
@@ -333,5 +384,10 @@ mod tests {
         assert_eq!(ACTIONS.len(), combo::FIELDS.len());
         assert_eq!(ACTIONS[0], HotkeyAction::Summon);
         assert_eq!(combo::FIELDS[1], "hotkeys.stackNext");
+        // W6-A: each screenshot slot fires its own capture mode.
+        let modes: Vec<Option<ShotMode>> = ACTIONS.iter().map(|a| shot_mode(*a)).collect();
+        assert_eq!(&modes[..4], [None; 4]);
+        assert_eq!(&modes[4..], [Some(ShotMode::Region), Some(ShotMode::Screen), Some(ShotMode::Window), Some(ShotMode::Repeat), Some(ShotMode::Text)]);
+        assert_eq!(combo::FIELDS[4], "hotkeys.shotRegion");
     }
 }

@@ -1,6 +1,7 @@
 //! Files next to the database (ARCHITECTURE §4.1): `media\<id>.png` (full images and the
 //! PNG alternative of text records), `media\thumbs\<id>.png` (≤ 360 px previews),
-//! `icons\<appId>.png` (source-app icons), and the `liq` URI scheme (§9.8).
+//! `media\base\<id>.png` (W6-A: the picture of a screenshot / an edited image without its
+//! annotations, §18.5), `icons\<appId>.png` (source-app icons), and the `liq` URI scheme (§9.8).
 //!
 //! File names are derived from ids only (never from stored paths), and ids are never
 //! reused (`AUTOINCREMENT`), so a file can be deleted after its row's transaction commits
@@ -31,6 +32,8 @@ pub(crate) struct Paths {
     pub db: PathBuf,
     pub media: PathBuf,
     pub thumbs: PathBuf,
+    /// W6-A: `media\base\` — pictures without annotations (§18.5).
+    pub base: PathBuf,
     pub icons: PathBuf,
 }
 
@@ -44,13 +47,14 @@ impl Paths {
             data: data.clone(),
             db: data.join("liqlip.db"),
             thumbs: media.join("thumbs"),
+            base: media.join("base"),
             media,
             icons: data.join("icons"),
         }
     }
 
     pub fn create_dirs(&self) -> Result<(), String> {
-        for d in [&self.data, &self.media, &self.thumbs, &self.icons] {
+        for d in [&self.data, &self.media, &self.thumbs, &self.base, &self.icons] {
             std::fs::create_dir_all(d).map_err(|e| format!("failed: create {}: {e}", d.display()))?;
         }
         Ok(())
@@ -62,6 +66,11 @@ impl Paths {
 
     pub fn thumb_png(&self, id: i64) -> PathBuf {
         self.thumbs.join(format!("{id}.png"))
+    }
+
+    /// W6-A: the picture of a screenshot / an edited image without annotations.
+    pub fn base_png(&self, id: i64) -> PathBuf {
+        self.base.join(format!("{id}.png"))
     }
 
     pub fn icon_png(&self, app_id: i64) -> PathBuf {
@@ -142,9 +151,11 @@ pub(crate) fn remove_files<'a>(files: impl IntoIterator<Item = &'a PathBuf>) {
     }
 }
 
-/// Delete `media\<id>.png` and `media\thumbs\<id>.png` of hard-deleted records.
+/// Delete `media\<id>.png`, `media\thumbs\<id>.png` and `media\base\<id>.png` of hard-deleted
+/// records (their `shot_docs` rows go with the record: `ON DELETE CASCADE`).
 pub(crate) fn remove_clip_files(paths: &Paths, ids: &[i64]) {
-    let files: Vec<PathBuf> = ids.iter().flat_map(|&id| [paths.media_png(id), paths.thumb_png(id)]).collect();
+    let files: Vec<PathBuf> =
+        ids.iter().flat_map(|&id| [paths.media_png(id), paths.thumb_png(id), paths.base_png(id)]).collect();
     remove_files(&files);
 }
 
@@ -233,7 +244,11 @@ impl Store {
         let live_image = || -> Option<bool> {
             let conn = self.lock();
             let found = conn
-                .query_row("SELECT 1 FROM clips WHERE id = ?1 AND kind = 'image' AND deleted_at IS NULL", [id], |_| Ok(()))
+                .query_row(
+                    "SELECT 1 FROM clips WHERE id = ?1 AND kind IN ('image', 'screenshot') AND deleted_at IS NULL",
+                    [id],
+                    |_| Ok(()),
+                )
                 .optional()
                 .ok()?;
             Some(found.is_some())
@@ -304,12 +319,14 @@ impl Store {
     }
 
     /// Remove files that no row references: a crash between writing a file and committing,
-    /// a thumbnail of a deleted image, stale staging files (> 1 h), icons of unknown apps.
+    /// a thumbnail of a deleted image, a base picture without its `shot_docs` row (W6-A), stale
+    /// staging files (> 1 h), icons of unknown apps.
     /// Lists the directories BEFORE reading the database: a file renamed in by an insert is
     /// only visible together with its committed row (both happen under the DB lock).
     pub(crate) fn sweep_orphans(&self) -> Result<usize, String> {
         let media = png_ids(&self.paths().media);
         let thumbs = png_ids(&self.paths().thumbs);
+        let bases = png_ids(&self.paths().base);
         let icons = png_ids(&self.paths().icons);
         let stale_staging: Vec<PathBuf> = std::fs::read_dir(&self.paths().media)
             .map(|rd| {
@@ -326,7 +343,7 @@ impl Store {
                     .collect()
             })
             .unwrap_or_default();
-        let (with_png, images, apps) = {
+        let (with_png, images, with_base, apps) = {
             let conn = self.lock();
             let set = |sql: &str| -> Result<HashSet<i64>, String> {
                 let mut st = conn.prepare(sql).map_err(db_err)?;
@@ -335,13 +352,15 @@ impl Store {
             };
             (
                 set("SELECT clip_id FROM clip_formats WHERE format = 'png'")?,
-                set("SELECT id FROM clips WHERE kind = 'image'")?,
+                set("SELECT id FROM clips WHERE kind IN ('image', 'screenshot')")?,
+                set("SELECT clip_id FROM shot_docs WHERE has_base = 1")?,
                 set("SELECT id FROM apps WHERE icon_path IS NOT NULL")?,
             )
         };
         let mut doomed: Vec<PathBuf> = stale_staging;
         doomed.extend(media.into_iter().filter(|(id, _)| !with_png.contains(id)).map(|(_, p)| p));
         doomed.extend(thumbs.into_iter().filter(|(id, _)| !images.contains(id)).map(|(_, p)| p));
+        doomed.extend(bases.into_iter().filter(|(id, _)| !with_base.contains(id)).map(|(_, p)| p));
         doomed.extend(icons.into_iter().filter(|(id, _)| !apps.contains(id)).map(|(_, p)| p));
         remove_files(&doomed);
         Ok(doomed.len())

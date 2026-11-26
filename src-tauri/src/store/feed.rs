@@ -34,18 +34,21 @@ const TRIGRAM_MIN_CHARS: usize = 3;
 const STAT_BUDGET: Duration = Duration::from_secs(2);
 
 /// Columns of a feed row (no full text — it can be 2 MB). Indexes used by [`row_to_clip`].
+/// The last one (W6-A) is `shot_docs.updated_at` — the picture version of an edited record,
+/// so its `?v=` changes with every edit (a primary-key lookup per row).
 pub(crate) const CLIP_COLS: &str = "c.id, c.kind, c.title, c.preview, c.app_id, c.created_at, c.copied_at, \
      c.copy_count, c.used_at, c.use_count, c.favorite, c.folder_id, c.size, c.width, c.height, \
      c.char_count, c.file_count, c.meta, c.ocr_state, c.fav_order, \
-     (SELECT group_concat(f.format) FROM clip_formats f WHERE f.clip_id = c.id)";
-const CLIP_COLS_N: usize = 21;
+     (SELECT group_concat(f.format) FROM clip_formats f WHERE f.clip_id = c.id), \
+     (SELECT s.updated_at FROM shot_docs s WHERE s.clip_id = c.id)";
+const CLIP_COLS_N: usize = 22;
 
 /// `Clip.formats` in canonical order from the stored `clip_formats` rows.
 pub(crate) fn formats_for<'a>(kind: Kind, present: impl IntoIterator<Item = &'a str>) -> Vec<Format> {
     let present: Vec<&str> = present.into_iter().collect();
     let has = |f: &str| present.contains(&f);
     match kind {
-        Kind::Image => if has("png") { vec![Format::Png] } else { Vec::new() },
+        Kind::Image | Kind::Screenshot => if has("png") { vec![Format::Png] } else { Vec::new() },
         Kind::File => vec![Format::Files, Format::Text],
         _ => {
             let mut v = vec![Format::Text];
@@ -80,6 +83,8 @@ pub(crate) fn row_to_clip(r: &rusqlite::Row<'_>) -> rusqlite::Result<(Clip, Opti
     let kind = Kind::parse(&r.get::<_, String>(1)?).unwrap_or(Kind::Text);
     let created_at: i64 = r.get(5)?;
     let formats: Option<String> = r.get(20)?;
+    // `?v=` of the picture URLs: the last edit when there is one (W6-A), else the creation.
+    let version: i64 = r.get::<_, Option<i64>>(21)?.unwrap_or(created_at);
     let clip = Clip {
         id,
         kind,
@@ -98,7 +103,7 @@ pub(crate) fn row_to_clip(r: &rusqlite::Row<'_>) -> rusqlite::Result<(Clip, Opti
         height: r.get(14)?,
         char_count: r.get(15)?,
         file_count: r.get(16)?,
-        thumb_url: (kind == Kind::Image).then(|| thumb_url(id, created_at)),
+        thumb_url: kind.is_image().then(|| thumb_url(id, version)),
         formats: formats_for(kind, formats.as_deref().unwrap_or("").split(',').filter(|s| !s.is_empty())),
         meta: parse_meta(r.get::<_, Option<String>>(17)?.as_deref()),
         ocr: match r.get::<_, i64>(18)? {
@@ -397,7 +402,8 @@ impl Store {
     /// Quick Look record: full text, metrics, files with `exists`/`size` (stat outside the
     /// DB lock, at most `FILES_MAX` paths), image URL, OCR text.
     pub(crate) fn clip_detail(&self, id: i64) -> Result<ClipDetail, String> {
-        type DetailRow = ((Clip, Option<f64>), Option<String>, Option<i64>, Option<i64>, Option<String>, Option<Vec<u8>>);
+        type DetailRow =
+            ((Clip, Option<f64>), Option<String>, Option<i64>, Option<i64>, Option<String>, Option<Vec<u8>>, Option<i64>);
         let row: DetailRow = {
             let conn = self.lock();
             conn.query_row(
@@ -409,14 +415,14 @@ impl Store {
                 [id],
                 |r| {
                     let n = CLIP_COLS_N;
-                    Ok((row_to_clip(r)?, r.get(n)?, r.get(n + 1)?, r.get(n + 2)?, r.get(n + 3)?, r.get(n + 4)?))
+                    Ok((row_to_clip(r)?, r.get(n)?, r.get(n + 1)?, r.get(n + 2)?, r.get(n + 3)?, r.get(n + 4)?, r.get(n - 1)?))
                 },
             )
             .optional()
             .map_err(db_err)?
             .ok_or_else(|| format!("not_found: clip {id}"))?
         };
-        let ((clip, _), text, word_count, line_count, ocr_text, files_blob) = row;
+        let ((clip, _), text, word_count, line_count, ocr_text, files_blob, version) = row;
         let files = (clip.kind == Kind::File).then(|| {
             let paths: Vec<String> = files_blob
                 .as_deref()
@@ -440,7 +446,7 @@ impl Store {
                 })
                 .collect()
         });
-        let image_url = (clip.kind == Kind::Image).then(|| media_url(clip.id, clip.created_at));
+        let image_url = clip.kind.is_image().then(|| media_url(clip.id, version.unwrap_or(clip.created_at)));
         Ok(ClipDetail { clip, text, word_count, line_count, files, image_url, ocr_text })
     }
 

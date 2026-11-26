@@ -5,7 +5,7 @@
 //! cheap, callable from any thread and never waits (the rebuild runs on the main thread).
 
 use crate::i18n_native::{self, Key, Lang};
-use crate::model::{ChangeOrigin, ClipsChange, ClipsChanged};
+use crate::model::{ChangeOrigin, ClipsChange, ClipsChanged, ShotMode};
 use crate::{capture, events, logx, paste, picker, settings, store};
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::image::Image;
@@ -48,6 +48,24 @@ const DELETES: [(&str, i64, Key); 5] = [
     ("delete:1440", 1440, Key::TrayDelete24h),
 ];
 
+/// Screenshot items (W6-A, SPEC §9.8 + the tray entries of §9.1): menu id, mode, label.
+const SHOTS: [(&str, ShotMode, Key); 5] = [
+    ("shot:region", ShotMode::Region, Key::TrayShotRegion),
+    ("shot:screen", ShotMode::Screen, Key::TrayShotScreen),
+    ("shot:window", ShotMode::Window, Key::TrayShotWindow),
+    ("shot:repeat", ShotMode::Repeat, Key::TrayShotRepeat),
+    ("shot:text", ShotMode::Text, Key::TrayShotText),
+];
+/// "Capture with delay ▸" (a region capture after the countdown).
+const SHOT_DELAYS: [(&str, u32, Key); 3] = [
+    ("shot:delay:3", 3, Key::TrayShotDelay3s),
+    ("shot:delay:5", 5, Key::TrayShotDelay5s),
+    ("shot:delay:10", 10, Key::TrayShotDelay10s),
+];
+/// The tray menu fades out after a click: a capture started from it waits this long, so the
+/// menu is not frozen into the shot.
+const MENU_SETTLE: std::time::Duration = std::time::Duration::from_millis(250);
+
 /// `setup()` step 8.
 pub fn build(app: &AppHandle) -> tauri::Result<()> {
     let state = TrayState::read(app);
@@ -70,11 +88,11 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
         .on_menu_event(on_menu_event)
         .build(app)?;
 
-    // Language / summon-hotkey changes re-label the menu.
+    // Language / hotkey changes re-label the menu (the screenshot items show their chords).
     settings::subscribe(app, {
         let app = app.clone();
         move |old, new| {
-            if old.general.language != new.general.language || old.hotkeys.summon != new.hotkeys.summon {
+            if old.general.language != new.general.language || old.hotkeys != new.hotkeys {
                 refresh(&app);
             }
         }
@@ -131,6 +149,8 @@ fn rebuild(app: &AppHandle) {
 struct TrayState {
     lang: Lang,
     summon: String,
+    /// `hotkeys.shot*` in `SHOTS` order (the right-aligned chord hints).
+    shot_keys: [String; 5],
     paused: bool,
     /// `CaptureStatus.pausedUntil`: `None` recording, [`PAUSED_UNTIL_RESUMED`], or Unix ms.
     paused_until: Option<i64>,
@@ -143,8 +163,11 @@ impl TrayState {
     fn read(app: &AppHandle) -> TrayState {
         let s = settings::get(app);
         let status = capture::status(app);
+        let h = &s.hotkeys;
+        let shot_keys = [h.shot_region.clone(), h.shot_screen.clone(), h.shot_window.clone(), h.shot_repeat.clone(), h.shot_text.clone()];
         TrayState {
             lang: i18n_native::resolve(s.general.language),
+            shot_keys,
             summon: s.hotkeys.summon,
             paused: status.paused_until.is_some(),
             paused_until: status.paused_until,
@@ -211,15 +234,33 @@ fn chord_hint(combo: &str) -> String {
     combo.split('+').map(str::trim).collect::<Vec<_>>().join("+")
 }
 
-fn build_menu(app: &AppHandle, st: &TrayState) -> tauri::Result<Menu<tauri::Wry>> {
-    // A tab right-aligns the text after it in a Win32 menu — muda uses the same
-    // mechanism for accelerators (muda windows/mod.rs), without parsing our chord.
-    let open_label = if st.summon.is_empty() {
-        st.t(Key::TrayOpen).to_string()
+/// A menu label with its chord right-aligned after a tab (none when the chord is not set).
+/// A tab right-aligns the text after it in a Win32 menu — muda uses the same mechanism for
+/// accelerators (muda windows/mod.rs), without parsing our chord.
+fn with_chord(label: &str, chord: &str) -> String {
+    if chord.trim().is_empty() {
+        label.to_string()
     } else {
-        format!("{}\t{}", st.t(Key::TrayOpen), chord_hint(&st.summon))
-    };
-    let open = MenuItem::with_id(app, "open", open_label, true, None::<&str>)?;
+        format!("{label}\t{}", chord_hint(chord))
+    }
+}
+
+fn build_menu(app: &AppHandle, st: &TrayState) -> tauri::Result<Menu<tauri::Wry>> {
+    let open = MenuItem::with_id(app, "open", with_chord(st.t(Key::TrayOpen), &st.summon), true, None::<&str>)?;
+
+    // Screenshots (SPEC §9.8): region, screen, window, previous region, delay ▸, text.
+    let shot_items = SHOTS
+        .iter()
+        .zip(&st.shot_keys)
+        .map(|((id, _, key), chord)| MenuItem::with_id(app, *id, with_chord(st.t(*key), chord), true, None::<&str>))
+        .collect::<tauri::Result<Vec<_>>>()?;
+    let delay_items = SHOT_DELAYS
+        .iter()
+        .map(|(id, _, key)| MenuItem::with_id(app, *id, st.t(*key), true, None::<&str>))
+        .collect::<tauri::Result<Vec<_>>>()?;
+    let delay_refs: Vec<&dyn IsMenuItem<tauri::Wry>> = delay_items.iter().map(|i| i as _).collect();
+    let delay = Submenu::with_items(app, st.t(Key::TrayShotDelay), true, &delay_refs)?;
+    let sep_shots = PredefinedMenuItem::separator(app)?;
 
     let pause_or_resume: Box<dyn IsMenuItem<tauri::Wry>> = if st.paused {
         Box::new(MenuItem::with_id(app, "resume", st.t(Key::TrayResume), true, None::<&str>)?)
@@ -254,8 +295,13 @@ fn build_menu(app: &AppHandle, st: &TrayState) -> tauri::Result<Menu<tauri::Wry>
     let sep1 = PredefinedMenuItem::separator(app)?;
     let sep2 = PredefinedMenuItem::separator(app)?;
 
-    let mut items: Vec<&dyn IsMenuItem<tauri::Wry>> =
-        vec![&open, &sep1, pause_or_resume.as_ref(), &ignore, &delete];
+    let mut items: Vec<&dyn IsMenuItem<tauri::Wry>> = vec![&open, &sep_shots];
+    // Region, screen, window, previous region, then the delay submenu, then text.
+    for item in &shot_items[..4] {
+        items.push(item);
+    }
+    items.extend([&delay as &dyn IsMenuItem<tauri::Wry>, &shot_items[4]]);
+    items.extend([&sep1 as &dyn IsMenuItem<tauri::Wry>, pause_or_resume.as_ref(), &ignore, &delete]);
     if st.stack > 0 {
         items.push(&stack);
     }
@@ -288,6 +334,12 @@ fn on_menu_event(app: &AppHandle, event: MenuEvent) {
             } else if let Some((_, minutes, key)) = DELETES.iter().find(|(did, _, _)| *did == id) {
                 confirm_delete_recent(app, *minutes, *key);
                 Ok(())
+            } else if let Some((_, mode, _)) = SHOTS.iter().find(|(sid, _, _)| *sid == id) {
+                start_shot(app, *mode, None);
+                Ok(())
+            } else if let Some((_, secs, _)) = SHOT_DELAYS.iter().find(|(sid, _, _)| *sid == id) {
+                start_shot(app, ShotMode::Region, Some(*secs));
+                Ok(())
             } else {
                 Ok(())
             }
@@ -297,6 +349,22 @@ fn on_menu_event(app: &AppHandle, event: MenuEvent) {
         logx::warn("tray", &format!("{id}: {e}"));
     }
     refresh(app);
+}
+
+/// A capture from the menu (this runs on the main thread): a short thread lets the menu fade
+/// out, then starts it through the screenshot module's command entry (which returns at once —
+/// the capture has its own thread; `block_on` is fine off the async runtime).
+fn start_shot(app: &AppHandle, mode: ShotMode, delay: Option<u32>) {
+    let app = app.clone();
+    let spawned = std::thread::Builder::new().name("liqlip-tray-shot".into()).spawn(move || {
+        std::thread::sleep(MENU_SETTLE);
+        if let Err(e) = tauri::async_runtime::block_on(crate::screenshot::shot_capture(app, mode, delay)) {
+            logx::warn("tray", &format!("screenshot: {e}"));
+        }
+    });
+    if let Err(e) = spawned {
+        logx::warn("tray", &format!("screenshot thread: {e}"));
+    }
 }
 
 /// "Delete recent" is irreversible (SPEC §2.4.6) → native confirmation first.
@@ -445,6 +513,24 @@ mod tests {
     fn chord_hint_compacts_spaces() {
         assert_eq!(chord_hint("Alt + V"), "Alt+V");
         assert_eq!(chord_hint("Ctrl + Shift + NumAdd"), "Ctrl+Shift+NumAdd");
+        assert_eq!(with_chord("Capture screen", "Ctrl + PrtSc"), "Capture screen\tCtrl+PrtSc");
+        assert_eq!(with_chord("Capture active window", ""), "Capture active window", "no chord, no hint");
+    }
+
+    /// W6-A: the screenshot items have their own ids and labels in both languages, and the
+    /// delays stay within what `shot_capture` accepts.
+    #[test]
+    fn screenshot_items_are_distinct() {
+        let mut ids: Vec<&str> = SHOTS.iter().map(|s| s.0).chain(SHOT_DELAYS.iter().map(|d| d.0)).collect();
+        ids.extend(PAUSES.iter().map(|p| p.0).chain(DELETES.iter().map(|d| d.0)));
+        let n = ids.len();
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(ids.len(), n, "menu ids must be unique");
+        assert!(SHOT_DELAYS.iter().all(|d| d.1 <= 10), "screenshot::session::DELAY_MAX");
+        for lang in [Lang::En, Lang::Ru] {
+            assert!(SHOTS.iter().all(|s| !i18n_native::tr(lang, s.2).is_empty()));
+        }
     }
 
     #[test]

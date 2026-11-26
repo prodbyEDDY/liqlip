@@ -14,7 +14,7 @@
 | UI | **Svelte 5 (runes)** + **Vite MPA** + **Tailwind v4** + TypeScript | одна HTML-точка на окно, как в Liquid Tools |
 | Шрифты | `@fontsource-variable/inter`, `@fontsource-variable/jetbrains-mono` | self-hosted |
 | Иконки | Heroicons outline через локальный `src/lib/heroicons/` + `Ico` (как Liquid Tools после 2026-09-22) | |
-| Rust | `rusqlite` **0.43.0** `bundled` (libsqlite3-sys 0.40.0 → SQLite **3.54.1**, собрано с `SQLITE_ENABLE_FTS5`; на rustc 1.99 собирается — пин `=0.38` из Liquid Tools не нужен), `windows` 0.62.2 (Win32/WinRT; фичи — по назначению, с комментарием `# W1-X`), `image` 0.25.10 (`png`), `xxhash-rust` 0.8.21 (`xxh3`, общий хэш — §15), `serde` 1.0.228, `serde_json` 1.0.150, `parking_lot` 0.12.5, `base64` 0.22, `tokio` 1.52 (`sync`). `arboard` W0 **не** добавлял — чтение/запись своими Win32-вызовами (решают W1-B/W1-C) | `enigo` **не** используем — `SendInput` напрямую |
+| Rust | `rusqlite` **0.43.0** `bundled` (libsqlite3-sys 0.40.0 → SQLite **3.54.1**, собрано с `SQLITE_ENABLE_FTS5`; на rustc 1.99 собирается — пин `=0.38` из Liquid Tools не нужен), `windows` 0.62.2 (Win32/WinRT; фичи — по назначению, с комментарием `# W1-X`), `image` 0.25.10 (`png`, `bmp`; W6-A: `jpeg` — файлы снимков в JPG, в лок добавлены только `zune-core` 0.5.3 и `zune-jpeg` 0.5.15), `xxhash-rust` 0.8.21 (`xxh3`, общий хэш — §15), `serde` 1.0.228, `serde_json` 1.0.150, `parking_lot` 0.12.5, `base64` 0.22, `tokio` 1.52 (`sync`). `arboard` W0 **не** добавлял — чтение/запись своими Win32-вызовами (решают W1-B/W1-C) | `enigo` **не** используем — `SendInput` напрямую |
 | Тесты | `node:test` + `esbuild` (как Liquid Tools) для чистой TS-логики; **`cargo test` в крейте `src-tauri` работает** (W0, 2026-11-26: 24 теста, тест-бинарник стартует со всеми плагинами) — Rust TDD доступен, отдельный `liqlip-core` не нужен (§12) | |
 
 Toolchain на машине (2026-11-25): rustc/cargo 1.99, node 24.21, pnpm 12.6.
@@ -164,6 +164,9 @@ Alt+Tab, а tao пересчитывает `GWL_EXSTYLE` из своих фла�
 > ждёт настроек восстановленной копии, приватные действия чистят старые копии данных, `-"фраза"`,
 > спецсимволы и длинные термы в поиске, `ClipMeta.dir` (FIX-08), восстановление прерванного
 > `replace`, уведомления настроек вне замка записи (находка W3-A); `cargo test` 334/334 дважды (после слияния W3-A).
+> W6-A (2026-11-27): схема v2 (`shot_docs`, §4.2a), вид `screenshot` во всех ветках хранилища
+> (вставка, лента, превью, OCR, сироты, бэкап), `media\base\`; `cargo test` 394/394 дважды; нативно
+> не запускалось.
 
 ### 4.1. Файлы
 
@@ -173,7 +176,8 @@ Alt+Tab, а tao пересчитывает `GWL_EXSTYLE` из своих фла�
   liqlip.db.check              маркер: в работе встретился SQLITE_CORRUPT → на следующем старте quick_check
   liqlip.db.corrupt-<ms>       битая база, отодвинутая при открытии (+ media.corrupt-<ms>, icons.corrupt-<ms>)
   media\<id>.png               полноразмерные картинки и PNG-альтернатива текстовых записей (Excel)
-  media\thumbs\<id>.png        превью ≤ 360 px по длинной стороне (только image)
+  media\thumbs\<id>.png        превью ≤ 360 px по длинной стороне (image и screenshot)
+  media\base\<id>.png          W6-A: картинка снимка / отредактированной картинки без аннотаций (§18.5)
   media\.staging-*.png         временные файлы вставки (переименовываются в <id>.png в транзакции)
   icons\<appId>.png            иконки приложений-источников (одна на exe)
   settings.json                Settings (§9.4), с полем version
@@ -333,8 +337,35 @@ CREATE VIRTUAL TABLE snippets_fts USING fts5(name, body, content='snippets', con
 - **Восстановление**: файл, который не открывается как база (`SQLITE_NOTADB`/`SQLITE_CORRUPT`), или
   чужая SQLite-база без нашей версии отодвигаются вместе с `media\`/`icons\` (`*.corrupt-<ms>`) и
   создаются заново; ошибка `SQLITE_CORRUPT` во время работы оставляет маркер `liqlip.db.check` →
-  следующий старт делает `quick_check`. База **новее** сборки (`user_version > 1`) не открывается
-  (`failed: …`, старт прерывается) — данные не уничтожаются.
+  следующий старт делает `quick_check`. База **новее** сборки (`user_version > 2`) не открывается
+  (`failed: …`, старт прерывается) — данные не уничтожаются. Liqlip 1.0 базу v2 не откроет
+  (сообщит о более новой схеме) — откат версии приложения требует резервной копии.
+
+### 4.2a. Схема v2 (`PRAGMA user_version = 2`, W6-A, 2026-11-27)
+
+Шаг миграции `store/schema.rs::V2`, своя транзакция после шага v1 (у новой базы — оба подряд):
+
+```sql
+CREATE TABLE IF NOT EXISTS shot_docs (
+  clip_id    INTEGER PRIMARY KEY REFERENCES clips(id) ON DELETE CASCADE,
+  doc        TEXT NOT NULL,     -- AnnotDoc v1 (JSON, §18.6); у снимка без аннотаций — пустой документ
+  has_base   INTEGER NOT NULL,  -- 1 = media\base\<id>.png хранит картинку без аннотаций
+  saved_path TEXT,              -- последний файл в папке снимков
+  updated_at INTEGER NOT NULL   -- последнее изменение картинки / документа (мс) → ?v= ссылок
+);
+PRAGMA user_version = 2;
+```
+
+- `IF NOT EXISTS` — повторный прогон шага безвреден (тест `v1_database_migrates_to_v2`: база v1 с
+  записью → v2, запись цела, повторный шаг без ошибки, переоткрытие держит v2).
+- `clips.kind` — `TEXT` без `CHECK`: новый вид `screenshot` таблицу не перестраивает. Удаление записи
+  удаляет строку каскадом (`foreign_keys = ON`), файл `media\base\<id>.png` — вместе с остальными файлами
+  записи (`media::remove_clip_files`), сироты — фоновой уборкой (§4.6).
+- `clips.meta.shot` (`ShotMeta {savedPath, edited}`) — зеркало строки для ленты, пишется в той же
+  транзакции (`store/shots.rs::sync_meta`); `edited` = в документе есть объекты или обрезка.
+- `?v=` у `thumbUrl`/`imageUrl` = `shot_docs.updated_at`, если строка есть, иначе `created_at`
+  (`CLIP_COLS` получил подзапрос по первичному ключу `shot_docs`): после правки картинка в шелфе
+  обновляется, у записей без строки ссылки прежние.
 
 ### 4.3. Порядок ленты и курсор
 
@@ -379,7 +410,8 @@ CREATE VIRTUAL TABLE snippets_fts USING fts5(name, body, content='snippets', con
 
 ### 4.5. Медиа и схема `liq`
 
-`store::serve_uri(app, path)` (`media.rs::serve_path`): `/thumb/<id>` — только живая запись `image`;
+`store::serve_uri(app, path)` (`media.rs::serve_path`): `/thumb/<id>` — только живая запись `image`
+или `screenshot` (W6-A; `/base/<id>` и кадры `/shot/…` отдаёт модуль `screenshot`, §18.3);
 нет файла превью → строится из `media\<id>.png` (≤ 360 px по длинной стороне, аспект сохранён,
 `image::DynamicImage::thumbnail`; картинка меньше — отдаётся как есть; > 64 МП — отказ) и
 записывается; `/media/<id>` — живая запись со строкой `clip_formats` 'png'; `/icon/<appId>` — приложение
@@ -393,7 +425,8 @@ CREATE VIRTUAL TABLE snippets_fts USING fts5(name, body, content='snippets', con
 `storage.*`): каждые 30 с — истёкшие токены, чистка мягко удалённых (> 2 мин), маркер повреждения;
 ретенция — на старте, раз в час, после вставки (≥ 30 с от прошлой), по смене настроек; раз в час —
 `PRAGMA optimize` и `incremental_vacuum` при ≥ 4 МБ свободных страниц; на старте — уборка сирот
-(файлы `media`/`thumbs`/`icons` без строки, `.staging-*` старше часа; каталоги читаются **до** запроса
+(файлы `media`/`thumbs`/`icons` без строки, `media\base\<id>.png` без строки `shot_docs` с `has_base = 1`
+(W6-A), `.staging-*` старше часа; каталоги читаются **до** запроса
 к БД, поэтому файл свежей вставки не удаляется); затем — разовая дозаливка `meta.dir` у старых файловых
 записей (FIX-08, `write.rs::backfill_file_dirs`: живые `kind = 'file'` без `dir`, пачками по 500, только
 JSON `meta`, без миграции; при изменениях — `clips:changed {origin:'user', change:'updated'}`). Поток
@@ -1181,7 +1214,8 @@ SWP_NOACTIVATE)` и прячется `ShowWindow(SW_HIDE)`; tao `show()` не в
 
 > Замер: 2026-11-26 (W1-D: реализовано; нативно не запускалось). W3-A: маска после проглоченной
 > клавиши при Alt/Win, `main_vk`; нативно не запускалось. W4-A (2026-11-26): сторож LL-хука —
-> переустановка каждые 10 с (FIX-12); нативно не запускалось.
+> переустановка каждые 10 с (FIX-12); нативно не запускалось. W6-A (2026-11-27): 9 слотов — пять
+> действий скриншотов (§18.11); нативно не запускалось.
 
 Перенос движка Liquid Tools `src-tauri/src/hotkeys.rs` **без** диктовки, PrintScreen-спецслучая,
 Esc-перехвата, кнопок мыши, «голых» модификаторов и `crate::Feature`. Файлы: `combo.rs` (нотация +
@@ -1189,7 +1223,9 @@ Esc-перехвата, кнопок мыши, «голых» модификат
 `commands.rs`.
 
 ```rust
-enum HotkeyAction { Summon, StackNext, PauseToggle, IgnoreNext }   // слоты = поля hotkeys.* по порядку
+enum HotkeyAction { Summon, StackNext, PauseToggle, IgnoreNext,                  // слоты = поля hotkeys.* по порядку
+                    ShotRegion, ShotScreen, ShotWindow, ShotRepeat, ShotText }   // W6-A
+// combo::SLOTS = 9, Slots<T> = [T; SLOTS], combo::FIELDS — "hotkeys.summon" … "hotkeys.shotText"
 ```
 
 - **Нотация** `"Alt + V"` (модификаторы Ctrl · Alt · Shift · Super, затем одна клавиша) ⇄ VK-коды
@@ -1248,7 +1284,12 @@ enum HotkeyAction { Summon, StackNext, PauseToggle, IgnoreNext }   // слоты
   `bareModifier`/`mouse` (движок их отклоняет).
 - **Действия**: `Summon → picker::summon`; `StackNext → paste::stack::paste_next` (HUD пустой
   очереди / `copied` / `elevated` показывает сама вставка); `PauseToggle → capture::toggle_pause`
-  (HUD `paused`/`resumed`); `IgnoreNext → capture::ignore_next` (HUD `skip_next`).
+  (HUD `paused`/`resumed`); `IgnoreNext → capture::ignore_next` (HUD `skip_next`); `Shot* →
+  screenshot::shot_capture { mode }` через `tauri::async_runtime::block_on` на потоке действия (не на
+  воркере рантайма; команда сразу возвращается — захват идёт на своём потоке, §18.3).
+- **Ошибки для `shot_status`** (W6-A): `hotkeys::current_errors(app)` — ошибки разбора/дубли текущих
+  настроек + сочетания, которые ОС не отдала (после одной попытки), по всем 9 полям; W6-B берёт поля
+  `hotkeys.shot*`.
 - **Маска после проглоченной клавиши** (W3-A). Хук глотает главную клавишу (`Alt + F12`,
   `Super + Menu`) или записанную (`Super + X` в записи) — тогда зажатые Alt/Win отпустились бы
   «голыми»: у Alt — режим меню окна, у Win — «Пуск». Если среди удерживаемых модификаторов есть
@@ -1730,6 +1771,20 @@ stroke 1.5, `1em`), реестр `src/lib/icons.ts`, лицензия `public/li
 `tests/fixtures/settings.v1.0.json`), `model::tests::screenshot_wire_shapes`,
 `paste::compose::tests::screenshot_composes_like_an_image`.
 
+**W6-A (нативный захват, 2026-11-27).** Rust, +42 (394 всего): `screenshot::frame` (BMP-заголовок
+читается `image` обратно, кроп BGRA → RGBA, `clamp_crop` LT, округление `Rect`, маршруты),
+`screenshot::grab` (монитор точки / ближайший, порядок, список мониторов Win32 без чтения экрана),
+`screenshot::targets` (клип, дерево и предел 32 уровней, рендереры первыми, порядок бюджета детей,
+предел узлов), `screenshot::session` (одна сессия за раз и токены, payload по монитору, этапы, кроп
+окна, `--capture`), `screenshot::commit` (план действий, 64 Мп, картинка/исходник/документ,
+миниатюра), `screenshot::files` (шаблон, `{n}` / ` (2)`, атомарное имя во временной папке, JPG поверх
+белого, папка, даты UTC), `store::shots` (вставка, аннотированный снимок и удаление, дедуп и вид,
+первая правка `image`, `saved_path`, сироты `media\base`, импорт документов, валидация),
+`store::schema::v1_database_migrates_to_v2`, `store::ocr::screenshots_are_queued_with_images`,
+`hotkeys` (9 слотов), `tray` (пункты скриншотов), `import::tests::screenshots_keep_their_documents_through_a_backup`.
+Сам захват GDI, окна, фокус и `PrtSc` в тестах не трогаются (нужен живой рабочий стол) — чек-лист
+отчёта W6-A.
+
 ## 13. Владение файлами и правила для агентов
 
 - **Файлы-узлы координатора:** `src-tauri/src/lib.rs`, `src-tauri/tauri.conf.json`,
@@ -2079,6 +2134,14 @@ UTF-16 (предел `szTip`, тест).
 принимается по текущему статусу, а не по увиденной галочке. Когда пропуск срабатывает (захват
 тратит его) или снимается, `capture` зовёт `publish` → `tray::refresh` — отметка исчезает.
 
+**Скриншоты** (W6-A, SPEC §9.8 + пункты «трей» из §9.1), сразу после «Открыть Liqlip»: «Снимок
+области» · «Снимок экрана» · «Снимок активного окна» · «Повторить прошлую область» · «Снимок с
+задержкой ▸ 3 / 5 / 10 с» (область после отсчёта) · «Скопировать текст с экрана». Справа — сочетание из
+`hotkeys.shot*` (через таб, как у «Открыть»; не задано — без подсказки). Клик (главный поток) →
+короткий поток ждёт 250 мс, пока меню растворится (иначе оно попадёт в кадр), и зовёт
+`screenshot::shot_capture { mode, delay }`. Ключи `i18n_native::TrayShot*`. Меню перестраивается при
+смене любого хоткея (`old.hotkeys != new.hotkeys`).
+
 **Обновление.** `refresh` вызывается при смене паузы, пропуска, очереди, языка, хоткея и темы. На смену
 масштаба на лету отдельного вызова нет (сниппет для `lib.rs` — в отчёте W2-D); иначе иконка
 обновится при ближайшем `refresh`.
@@ -2345,9 +2408,15 @@ manifest.json          Deflate
 clipboard.db           Deflate (ZIP64, если ≥ 4 ГиБ) — снимок liqlip.db
 settings.json          Deflate — Settings на момент экспорта
 media/<id>.png         Stored — PNG записей (картинки и PNG-альтернативы текста)
-media/thumbs/<id>.png  Stored — миниатюры картинок
+media/thumbs/<id>.png  Stored — миниатюры картинок и снимков
+media/base/<id>.png    Stored — W6-A: картинки без аннотаций (строки shot_docs с has_base = 1)
 icons/<id>.png         Stored — иконки приложений
 ```
+
+W6-A (схема v2): документы аннотаций едут в таблице `shot_docs` внутри `clipboard.db`, исходники — в
+`media/base/`; `schemaVersion` новой копии = 2, копию v2 Liqlip 1.0 не примет («made by a newer
+Liqlip»), копия v1 восстанавливается в v2 (`replace` мигрирует базу при открытии, в `merge` таблицы
+`shot_docs` просто нет).
 
 ```json
 { "format": "liqlip-backup", "formatVersion": 1, "appVersion": "0.1.0", "schemaVersion": 1,
@@ -2437,7 +2506,12 @@ PNG-альтернатива), заголовок, счётчики, време�
 избранное — в порядке копии после имеющегося. Потом сниппеты: такой же (имя + тело) пропускается, иначе
 добавляется в конец, ключевое слово — только если свободно. Настройки не трогаются. Прогресс: `media`
 (распаковка), `folders`, `clips`. В конце — `clips:changed { origin: 'import', change: 'added' }` и
-`ocr::wake`.
+`ocr::wake`. W6-A: после записей — строки `shot_docs` копии (с тем же фильтром) пачками по 50
+(`backup.rs::merge_shot_docs` → `Store::import_shot_docs`): запись находится по хэшу (новый id), строка
+добавляется, только если у записи её ещё нет, исходник `media/base/<старый id>.png` ложится как
+`media\base\<новый id>.png`; документ — только JSON-объект (копия — это ввод). Вид записи `screenshot`
+переносится как есть (`bulk.rs::normalize`: ветка картинок для `k.is_image()`); совпала с имеющейся
+`image` — остаётся `image`. Тест `screenshots_keep_their_documents_through_a_backup`.
 
 ### 17.6. Команды, ошибки, конкуренция
 
@@ -2494,7 +2568,9 @@ impl Store {
 > Замер: 2026-11-26 (W5-A: фундамент — контракт §18.10 в `model.rs` ≡ `types.ts` и §9.10, настройки,
 > модуль `screenshot/` с командами-делегатами и заглушками, окно `capture` в `setup()`, маршруты `liq`,
 > права, точки входа четырёх окон с заглушками, мок `mock/shots.ts`; гейты зелёные; нативно не
-> запускалось; захвата, окон по требованию, редактора ещё нет — это W6). Продукт — SPEC §9. Источник переноса и разбор его
+> запускалось; захвата, окон по требованию, редактора ещё нет — это W6). W6-A (2026-11-27): нативный
+> захват, сессии, коммит, файлы, стор (схема v2), 9 хоткеев, трей, `--capture` — §18.3–18.5, §18.11
+> «Как сделано»; `cargo test` 394/394 дважды; нативно не запускалось (сценарии — в отчёте W6-A). Продукт — SPEC §9. Источник переноса и разбор его
 > дефектов — `docs/prompts/_RESEARCH-W5-SCREENSHOT-SOURCE.md`; эталоны взаимодействия —
 > `docs/prompts/_RESEARCH-W5-ANNOTATION-UX.md` (локальные файлы координатора, абсолютные пути — в
 > промптах). Studio не переносится; всё, что в LT существует только ради studio (кнопка Mockup,
@@ -2568,6 +2644,64 @@ W6-B присылает свои строки сниппетом в отчёте
   затем обычный триггер.
 - Повторный триггер при активной сессии — игнор (лог `debug`).
 
+**Как сделано (W6-A, 2026-11-27).**
+
+- **`grab.rs`** — мониторы `EnumDisplayMonitors` + `GetMonitorInfoW(MONITORINFOEXW)` (`id` =
+  `szDevice`, тот же, что `Monitor::name` у Tauri/tao) + `GetDpiForMonitor(MDT_EFFECTIVE_DPI)` / 96;
+  порядок слева направо, сверху вниз (`index` сессии). Win32 напрямую, без кругового рейса Tauri на
+  главный поток. Заморозка — перенос LT: `GetDC(NULL)` → `CreateCompatibleDC/Bitmap` →
+  `BitBlt(SRCCOPY | CAPTUREBLT)` → битмап снят с DC → `GetDIBits` 32 bpp top-down **прямо в буфер BMP
+  кадра**; неполный `GetDIBits` — ошибка; все GDI-объекты освобождаются на любом пути. `monitor_at` —
+  монитор точки, между мониторами — ближайший (как `MONITOR_DEFAULTTONEAREST`), тест.
+- **`frame.rs`** — `Frame` = один `Vec<u8>`: `BITMAPFILEHEADER` + `BITMAPINFOHEADER` (32 bpp `BI_RGB`,
+  отрицательная высота) + строки B,G,R,X, X → 255 (декодер, читающий 4-й байт как альфу, видит
+  непрозрачную картинку). Схема отдаёт его как есть, коммит режет из него же (`crop_rgba`: B↔R, альфа
+  255, один проход). Кадр держит сессия в `Arc`; `serve` клонирует `Arc` под замком и копирует байты
+  уже без него (тело ответа схемы — `Vec`, одна временная копия на запрос). `clamp_crop` — перенос LT
+  с его тестами; `rect_to_crop` — каждая грань `Rect` округляется до ближайшего пикселя, затем
+  `clamp_crop` (**оверлей с аннотациями экспортирует ровно этот прямоугольник**). Маршруты
+  `/shot/<id>/<index>.bmp` (только открытая сессия) и `/base/<id>` (`Store::serve_base`).
+- **`targets.rs`** — перенос `enumerate_windows` + `child_regions` LT с лимитами (2048 узлов и 35 мс на
+  окно, 32 уровня, 120 мс на всех детей; сначала окно под курсором, потом Chromium). Свои окна
+  исключаются **по процессу** (`GetWindowThreadProcessId == GetCurrentProcessId`): оверлей, шелф, HUD,
+  QAO, редактор, `pin-*`, настройки, диалоги — без списка меток и без обращений к Tauri. Чистые части
+  (`local_region`, `tree`, `children`, `scan_order`, `keep_collecting`) — тесты.
+- **`session.rs`** — `capture(mode, delay)`: `delay ≤ 10` (иначе `invalid`), занятость
+  (`SessionState::begin` — токен подготовки; триггер при подготовке или открытой сессии игнорируется
+  с логом), поток `liqlip-shot`: отсчёт `hud:show countdown` по секунде → `focus_context` → шелф
+  прячется (`picker::hide_now`, если виден), HUD-тост прячется (`ShowWindow(SW_HIDE)` на главном
+  потоке — последняя секунда отсчёта не попадёт в кадр), QAO прячется (`qao_bridge::hide_for_capture`),
+  `DwmFlush` (если что-то спрятали) → мониторы → `screen` / `window` / `repeat` замораживают один
+  монитор, снимают занятость сразу после заморозки и идут в `commit::direct`; `region` / `text` —
+  все мониторы, дерево окон монитора курсора, `SessionState::open` (id сессий растут с 1),
+  `shot:session`, затем окно: позиция → размер → позиция, `WS_EX_TOOLWINDOW` до и после `show()`,
+  повтор геометрии, `set_focus` — всё на главном потоке с ожиданием ≤ 1,5 с (замок сессии в это время
+  не держится). Поток следования (50 мс) работает, пока сессия открыта, и двигает окно только в этапе
+  `select`. Ошибка заморозки → HUD `shot_failed` + лог + QAO назад.
+- **Фокус и источник** (`focus_context`): окно переднего плана до любых наших окон; шелф впереди (или
+  переднего окна нет даже через 200 мс — фокус в пути, например шелф закрылся из своего меню прямо
+  перед командой) → сохранённая цель вставки шелфа `paste::focus::current()`; источник записи —
+  `paste::focus::target_for` (только окно приложения). В отличие от `capture_target` цель вставки шелфа
+  не меняется. Возврат фокуса — `paste::focus::bring_to_front(hwnd, 500 мс)`.
+- **Режимы без оверлея**: `window` — границы DWM окна переднего плана (`DWMWA_EXTENDED_FRAME_BOUNDS`,
+  иначе `GetWindowRect`), монитор — по центру окна, кроп обрезан краем монитора (§9.10); нет окна
+  (рабочий стол) → весь монитор курсора. `repeat` — `last_region` (монитор по `id`); нет её или монитор
+  пропал → обычный выбор области. `last_region` запоминает коммит оверлея (кроме `text`).
+- **Конец сессии**: коммит забирает сессию (`session::take`) и закрывает её (`session::close`: скрыть
+  окно → фокус → `shot:end`); отмена (`shot_cancel`, Alt+F4 → `on_capture_close` с главного потока
+  уходит на короткий поток) — то же + кадры освобождаются + `qao_bridge::restore_after_capture`.
+  Устаревший `shot_stage` / `shot_cancel` молча игнорируются; `shot_commit` устаревшей сессии —
+  `not_found: session`.
+- **`liqlip --capture [region|screen|window|repeat|text]`** (и `--capture=<mode>`): разбор
+  `session::capture_arg` (тест), запуск `session::handle_args` — подключает координатор в колбэке
+  single-instance (сниппет в отчёте W6-A).
+- **Шелф и оверлей**: триггер прячет шелф до показа оверлея, так что одновременно они не открыты;
+  если шелф вызвать поверх открытого оверлея, `picker::Hwnds` знает окно `capture` (W6-A): клик по
+  оверлею — «клик снаружи», а не «свой диалог», и оверлей не становится окном возврата фокуса шелфа.
+- **Хуки W6-B** (`session::qao_bridge`, временные заглушки до интеграции): `hide_for_capture`,
+  `restore_after_capture`, `show_added(payload)` → `qao::*` B; пока `show_added` только шлёт
+  `shot:added`.
+
 ### 18.4. Коммит (W6-A)
 
 `shot_commit` принимает **сырое тело** (Tauri raw request body, как `screenshot_commit_raw` LT) в
@@ -2601,6 +2735,39 @@ W6-B присылает свои строки сниппетом в отчёте
 - Форматы: PNG (по умолчанию) и JPG (`image` с фичей `jpeg`, качество из настроек); в историю всегда
   PNG (как все картинки), формат касается файла в папке и буфера не касается (в буфер — PNG + DIB).
 
+**Как сделано (W6-A, 2026-11-27).**
+
+- `commit::commit` (команда `shot_commit`, `async` → воркер рантайма): `session::take` → **сразу**
+  `session::close` (окно не остаётся на экране и при ошибке запроса) → `rect_to_crop` (вне кадра —
+  `invalid`) → `finish`. Режим сессии `text` всегда даёт действие `text`. Кадры освобождаются после
+  коммита, затем `qao_bridge::restore_after_capture`.
+- Картинка (`picture`): без тела — кроп кадра (документ, если прислан объектом, хранится как есть);
+  тело размера кропа — сведённый RGBA, кроп кадра → `base_png`, документ хранится; тело другого
+  размера — берётся как картинка (это видел пользователь), но без исходника и документа (лог).
+- План (`commit::plan`, чистая функция, тест): `done` — `copy`/`save`/`afterCapture` из настроек;
+  `copy` — буфер; `save` — папка; `save_as` — диалог; `pin` — закрепить; история — всегда, если
+  включён тип `screenshot` и ≤ 64 Мп (`keeps_history`, тест).
+- Шаги: PNG (`PngEncoder`, по умолчанию быстрое сжатие) → буфер `paste::copy_png(png, Some((w, h,
+  rgba)))` (DIB строится из имеющихся пикселей без декодирования PNG; запись помечена своей — capture её
+  не записывает) → `Store::insert_screenshot` (хэш `content::image_hash`, миниатюра ≤ 360 px из RGBA,
+  `unit` = масштаб монитора, источник) + `clips:changed {origin:'capture'}` + иконка приложения из кэша
+  `capture::app_icon_data_url` (если её ещё нет) → файл (`files::save_new` / `save_new_as`) →
+  `set_saved_path` → QAO / редактор (`editor::open`) / закрепление (`pin::open`) / ничего. Ошибка
+  сохранения → `error: 'save_failed'`, и QAO показывается даже при `afterCapture: none`. Нет записи
+  (тип выключен / > 64 Мп) → QAO получает `tempPath` (`%TEMP%\Liqlip\shots\shot-<ms>-<n>.png`; папка
+  чистится на старте `session::init`, карточки — W6-B); `editor` без записи → QAO.
+- `action: 'text'` → `ocr::recognize_png(app, png)` (новый `pub(crate)`: свой поток в MTA WinRT,
+  обычный приоритет, язык `ocr.language`, без проверки `ocr.enabled` — явное действие над картинкой,
+  которую никто не хранит; ждёт ≤ 10 с) → `paste::copy_text` + HUD `text_copied`; пусто → HUD
+  `text_empty`; ошибка распознавания (нет языков) → ошибка команды (HUD-вида для неё в контракте нет).
+- «Сохранить как…» коммита — `blocking_save_file` диалог-плагина (документирован для `async`-команд,
+  никогда не главный поток), **без родителя** (оверлей уже скрыт, шелф скрыт).
+- **Коммит редактора** (`shot_editor_commit`) оркестрирует W6-B (`editor::commit`, решение координатора);
+  `commit::editor_commit` остаётся делегатом-заглушкой до интеграции. Шаги W6-A для B:
+  `commit::apply_edit(app, id, rgba, w, h, doc) -> (Clip, png)` (PNG, хэш, миниатюра,
+  `Store::apply_edit`, `clips:changed {origin:'user', change:'updated'}`), `commit::base_rgba(app, id)`,
+  `paste::copy_png`, `files::overwrite_saved(app, id, png)`, `files::save_png_as(app, id, png).await`.
+
 ### 18.5. Хранение (W6-A)
 
 - `Kind` += `screenshot` (аддитивно: `model.rs` + `types.ts`); все `match`/`switch` по `Kind` — Rust и
@@ -2632,6 +2799,26 @@ W6-B присылает свои строки сниппетом в отчёте
   экспорт, восстанавливаются в `replace` и `merge` (в `merge` — с новым id записи).
 - Импорт LT (W6-B, `import/lt.rs`): записи LT `kind='screenshot'` (файл по `content_ref` в кэше LT)
   → `screenshot` без документа аннотаций; отсутствующий файл — `skipped`.
+
+**Как сделано (W6-A, 2026-11-27).** Схема — §4.2a. `store/shots.rs`:
+
+| API | Что делает |
+|---|---|
+| `insert_screenshot(NewShot) -> InsertOutcome` | `insert_clip` (вид `screenshot`), затем вторая короткая транзакция — строка `shot_docs` (пустой документ `{"v":1,"w","h","unit","crop":null,"objects":[]}`, если не прислан) + `media\base\<id>.png` + `meta.shot`. Строка не записалась — запись есть и открывается как простая картинка (лог). У поднятой записи со строкой документ не трогается (только новый `saved_path`) |
+| `shot_doc(id) -> Option<ShotDoc>` | строка (`doc` как JSON, `has_base`, `saved_path`, `updated_at`); `not_found` для отсутствующей/удалённой записи (§18.5 `doc(id)`) |
+| `apply_edit(id, ShotEdit) -> Clip` | новая картинка, миниатюра, хэш, размеры, `size`, документ, `has_base = 1`, `updated_at` растёт строго; первая правка `image` сохраняет текущую картинку как исходник; хэш, занятый другой записью, получает суффикс `-e<id>` (правка не сливает записи); OCR заново (`pending`, если OCR включён). Файлы ставятся в конце транзакции: исходник → миниатюра → картинка |
+| `set_saved_path(id, Option<&str>)` | у `image` без строки создаёт её с пустым документом |
+| `shot_source(id)`, `shot_clip(id)`, `serve_base(id)` | данные для файлов/редактора/пина; запись как в ленте; байты `/base` (исходник, иначе картинка) |
+| `import_shot_docs(Vec<ShotDocImport>)` | merge бэкапа, §17.5 |
+
+- **Дедуп** (`write.rs`): при совпадении хэша картинка сохраняет свой вид — снимок, равный картинке
+  `image`, поднимает её (вид `image`, строки нет, пока её не сохранят/не отредактируют); копия снимка из
+  другого приложения поднимает снимок.
+- **Ветки по виду**: `write.rs` (`prepare`, OCR при вставке), `feed.rs` (`formats`, `thumbUrl`,
+  `imageUrl`), `media.rs` (`/thumb`, сироты), `ocr.rs` (`kind IN ('image','screenshot')`; следующая
+  задача — по одному поиску по индексу на вид, без сортировки), `bulk.rs`, `import/backup.rs`.
+  `Counts.kinds.screenshot` даёт прежний `GROUP BY kind`; пилюли и токен `type:screenshot|shot`
+  разбирает фронт (W6-F) — фильтр `kinds` в Rust уже принимает любой набор видов.
 
 ### 18.6. Редактор аннотаций (`src/lib/editor/`, W6-C)
 
@@ -2879,6 +3066,7 @@ RGBA или кроп кадра; запись `screenshot` в мок-ленту 
 | `session.rs` | `struct SessionState` (Default; поля — W6-A) · `init(app)` (пусто) · `capture(app, mode: ShotMode, delay: Option<u32>) -> Result<(), String>` · `current(app) -> Result<Option<ShotSession>, String>` · `stage(app, session_id: i64, stage: ShotStage) -> Result<(), String>` · `cancel(app, session_id: i64) -> Result<(), String>` · `on_capture_close(app)` (пусто) | W6-A |
 | `commit.rs` | `commit(app, req: ShotCommit, rgba: Option<&[u8]>) -> Result<ShotCommitResult, String>` · `editor_commit(app, req: ShotEditorCommit, rgba: Option<&[u8]>) -> Result<Clip, String>` (пиксели — срез тела IPC, живёт до конца вызова; на другой поток — `to_vec()`) | W6-A |
 | `files.rs` | `save(app, id: i64) -> Result<String, String>` · `async save_as(app: AppHandle, id: i64) -> Result<Option<String>, String>` · `reveal(app, id: i64) -> Result<(), String>` | W6-A (по §18.1; в диспетчере W6 «сохранение» записано за B — решает координатор) |
+| | **W6-A, как сделано:** папка `screenshot.folder` или `<Pictures>\Liqlip` (`SHGetKnownFolderPath(FOLDERID_Pictures)`); имя — шаблон: `{date}` = `yyyy-MM-dd`, `{time}` = `HHmmss` (как имена «Ножниц», без `:`), `{app}`, `{n}` — наименьшее свободное ≥ 1; без `{n}` занятое имя получает ` (2)`, ` (3)`…; запрещённые символы Windows выбрасываются, пробелы схлопываются, хвостовые точки/пробелы срезаются, зарезервированные имена (`CON`, `COM1`…) получают `_`; ≤ 150 символов; имя занимается атомарно (`create_new`). `save` — `{date}`/`{time}` момента создания записи; `save_as` / `save_png_as` — диалог без родителя, формат по расширению; `reveal` — `reveal_item_in_dir` плагина `opener` (`SHOpenFolderAndSelectItems`, как `clip_reveal`), нет файла → `not_found` | |
 | `frame.rs` | `serve(app, path: &str) -> Option<(String, Vec<u8>)>` (`None` → 404) | W6-A |
 | `grab.rs` · `targets.rs` | пустые (только описание): делегатов команд нет | W6-A |
 | `windows.rs` | `init(app)` (пусто) · `exclude_from_capture(win: &WebviewWindow) -> Result<(), String>` (**реализовано** W5) | W6-B |
@@ -2916,6 +3104,13 @@ RGBA или кроп кадра; запись `screenshot` в мок-ленту 
 версии Windows: на Windows 11 22H2+ по умолчанию включено — W6-B сверяет по документации Microsoft и
 фиксирует источник в отчёте). Реестр не пишем. Ошибки регистрации хоткеев — в `ShotStatus.hotkeyErrors`
 и в `SettingsResult.errors` как у остальных полей.
+
+**Как сделано (W6-A, 2026-11-27).** `combo::SLOTS = 9`, `FIELDS`/`strings` дополнены пятью полями
+`hotkeys.shot*` в порядке `HotkeySettings`; `HOOK_TABLE` — `[const { None }; SLOTS]`; движок,
+дубли, откаты и повторы работают по всем 9 слотам (тест `screenshot_slots_follow_the_settings_order`:
+`PrtSc` и `Ctrl + PrtSc` — OS-хоткеи, сочетание, равное сочетанию шелфа, — `invalid`). Действие →
+`screenshot::shot_capture { mode }` (`block_on` на потоке действия). Ошибки для `shot_status` —
+`hotkeys::current_errors(app)` (§8). Файл `settings.rs` уже знал все 9 полей (`revert_hotkey`).
 
 ### 18.12. Проверка
 

@@ -17,7 +17,7 @@ use std::path::Path;
 use std::time::Duration;
 
 /// Current schema version (`PRAGMA user_version`).
-pub(crate) const VERSION: i64 = 1;
+pub(crate) const VERSION: i64 = 2;
 
 /// FTS sync triggers for `clips` (fts5.html §4.4.3). `UPDATE OF` keeps feed bumps
 /// (`copied_at`, counters, flags) from re-tokenising the text. Kept separate so
@@ -148,6 +148,20 @@ END;
 PRAGMA user_version = 1;
 ";
 
+/// Schema v2 (W6-A, ARCHITECTURE §18.5): the annotation document of a screenshot / an edited
+/// image. `clips.kind` is a TEXT column without a CHECK, so the new kind `screenshot` needs no
+/// table rebuild. `IF NOT EXISTS`: running the step twice is harmless (idempotent migration).
+const V2: &str = "
+CREATE TABLE IF NOT EXISTS shot_docs (
+  clip_id    INTEGER PRIMARY KEY REFERENCES clips(id) ON DELETE CASCADE,
+  doc        TEXT NOT NULL,
+  has_base   INTEGER NOT NULL,
+  saved_path TEXT,
+  updated_at INTEGER NOT NULL
+);
+PRAGMA user_version = 2;
+";
+
 #[derive(Debug)]
 pub(crate) enum OpenError {
     /// The file is not a usable database (move aside + recreate).
@@ -255,8 +269,14 @@ fn migrate(conn: &mut Connection, tables: i64) -> Result<(), OpenError> {
         tx.commit()?;
         logx::warn("store", "created schema v1");
     }
-    // Future: `if version < 2 { tx.execute_batch(V2)?; … PRAGMA user_version = 2 }`, one step
-    // per version, each in its own transaction.
+    // One step per version, each in its own transaction (a crash between steps resumes at the
+    // next open from the version that was committed).
+    if version < 2 {
+        let tx = conn.transaction()?;
+        tx.execute_batch(V2)?;
+        tx.commit()?;
+        logx::warn("store", "migrated schema to v2");
+    }
     Ok(())
 }
 
@@ -375,6 +395,36 @@ mod tests {
         std::fs::write(t.dir().join("liqlip.db.check"), b"").unwrap();
         let t = t.open();
         assert!(!t.dir().join("liqlip.db.check").exists());
+    }
+
+    /// W6-A: a v1 database (Liqlip 1.0) is migrated to v2 at open, keeps its records, and the
+    /// step is idempotent.
+    #[test]
+    fn v1_database_migrates_to_v2() {
+        let t = TestStore::empty_dir();
+        {
+            let c = Connection::open(t.dir().join("liqlip.db")).unwrap();
+            c.execute_batch(V1).unwrap();
+            c.execute(
+                "INSERT INTO clips (kind, preview, text, hash, created_at, copied_at) VALUES ('text', 'old', 'old', 'h1', 1, 1)",
+                [],
+            )
+            .unwrap();
+        }
+        let t = t.open();
+        {
+            let c = t.lock();
+            let v: i64 = c.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
+            assert_eq!(v, 2);
+            let docs: i64 = c.query_row("SELECT count(*) FROM shot_docs", [], |r| r.get(0)).unwrap();
+            assert_eq!(docs, 0);
+            let clips: i64 = c.query_row("SELECT count(*) FROM clips", [], |r| r.get(0)).unwrap();
+            assert_eq!(clips, 1, "records survive the migration");
+            c.execute_batch(V2).unwrap(); // a second run changes nothing
+        }
+        let t = t.reopen();
+        let v: i64 = t.lock().query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
+        assert_eq!(v, 2);
     }
 
     #[test]

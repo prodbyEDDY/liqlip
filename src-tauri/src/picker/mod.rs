@@ -53,17 +53,22 @@ pub(crate) struct Picker {
 
 static PICKER: OnceLock<Picker> = OnceLock::new();
 
-/// HWNDs of the three pre-created windows (stable for the process lifetime).
+/// HWNDs of the pre-created windows (stable for the process lifetime).
 #[derive(Clone, Copy)]
 pub(crate) struct Hwnds {
     pub picker: Hwnd,
     pub hud: Hwnd,
     pub settings: Hwnd,
+    /// The capture overlay (W5/W6-A, §18.2; 0 if it failed to build). A trigger hides the shelf
+    /// before the overlay shows; should the shelf be summoned over an open overlay, a click on
+    /// the overlay is a click outside (not an own dialog) and the overlay is never the window
+    /// the shelf gives the focus back to.
+    pub capture: Hwnd,
 }
 
 impl Hwnds {
     pub fn is_ours(&self, h: Hwnd) -> bool {
-        h == self.picker || h == self.hud || h == self.settings
+        h == self.picker || h == self.hud || h == self.settings || (h != 0 && h == self.capture)
     }
 }
 
@@ -96,6 +101,7 @@ pub fn init(app: &AppHandle) {
         picker: hwnd_of(app, events::PICKER),
         hud: hwnd_of(app, events::HUD),
         settings: hwnd_of(app, events::SETTINGS),
+        capture: hwnd_of(app, events::CAPTURE),
     });
     let cfg = config_of(&settings::get(app));
     let _ = PICKER.set(Picker {
@@ -266,7 +272,7 @@ fn execute(app: &AppHandle, p: &Picker, fx: Effect) -> Option<Event> {
             // The settings window counts (Esc returns there); the shelf / HUD / taskbar do not.
             let ours = hwnds();
             let fg = win::foreground().filter(|&f| {
-                !ours.is_some_and(|o| f == o.picker || f == o.hud) && !win::is_shell_tray(f)
+                !ours.is_some_and(|o| f == o.picker || f == o.hud || (o.capture != 0 && f == o.capture)) && !win::is_shell_tray(f)
             });
             let target = paste::focus::capture_target(app);
             let mut s = p.state.lock();

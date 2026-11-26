@@ -14,7 +14,7 @@
 //!   the application to know whether the hook is removed". So the hook thread re-installs the
 //!   hook every [`HOOK_REFRESH_MS`] while it exists — the watchdog (W4, FIX-12).
 
-use super::combo::{self, Backend, Combo, Mods, Slots};
+use super::combo::{self, Backend, Combo, Mods, Slots, SLOTS};
 use super::{Capture, Job, CAPTURE};
 use crate::logx;
 use crate::model::SettingsErrorCode;
@@ -86,7 +86,7 @@ struct HookBinding {
     /// Latch: true while the main key is held (collapses auto-repeat, matches the up).
     down: bool,
 }
-static HOOK_TABLE: Mutex<Slots<Option<HookBinding>>> = Mutex::new([None, None, None, None]);
+static HOOK_TABLE: Mutex<Slots<Option<HookBinding>>> = Mutex::new([const { None }; SLOTS]);
 
 fn registrar() -> Result<&'static Registrar, String> {
     match REGISTRAR.get_or_init(spawn_registrar) {
@@ -198,7 +198,7 @@ impl Engine {
         );
         // A refused slot falls back to `prev` (what settings_set saves); others get `want`.
         let mut final_want = want;
-        for i in 0..4 {
+        for i in 0..SLOTS {
             if errs[i].is_some() {
                 final_want[i] = if live[i].is_some() { live[i] } else { prev[i] };
             }
@@ -210,7 +210,7 @@ impl Engine {
     }
 
     fn pending(&self) -> bool {
-        (0..4).any(|i| self.want[i].is_some() && self.live[i] != self.want[i])
+        (0..SLOTS).any(|i| self.want[i].is_some() && self.live[i] != self.want[i])
     }
 
     /// Thread timer (hWnd NULL → WM_TIMER on this thread's queue) while something is pending.
@@ -233,7 +233,7 @@ impl Engine {
             return;
         }
         self.suspended = true;
-        for i in 0..4 {
+        for i in 0..SLOTS {
             if let Some(c) = self.live[i] {
                 if combo::backend(&c) == Backend::Os {
                     self.unregister(i, c);
@@ -248,7 +248,7 @@ impl Engine {
             return;
         }
         self.suspended = false;
-        for i in 0..4 {
+        for i in 0..SLOTS {
             if let Some(c) = self.live[i] {
                 if combo::backend(&c) == Backend::Os && self.register(i, c).is_err() {
                     // Someone grabbed it while we were recording: pending, retried.
@@ -265,8 +265,8 @@ impl Engine {
             let want = self.want;
             return self.reconcile(want, want);
         }
-        let mut errs = [None; 4];
-        for i in 0..4 {
+        let mut errs = [None; SLOTS];
+        for i in 0..SLOTS {
             if self.want[i].is_some() && self.live[i] != self.want[i] {
                 errs[i] = Some(SettingsErrorCode::Taken);
             }
@@ -308,7 +308,7 @@ fn registrar_loop(ready: mpsc::Sender<u32>, rx: mpsc::Receiver<Request>) {
     if ready.send(unsafe { GetCurrentThreadId() }).is_err() {
         return;
     }
-    let mut engine = Engine { live: [None; 4], want: [None; 4], suspended: false, retry_timer: 0 };
+    let mut engine = Engine { live: [None; SLOTS], want: [None; SLOTS], suspended: false, retry_timer: 0 };
     loop {
         // SAFETY: standard message loop on this thread.
         let r = unsafe { GetMessageW(&mut msg, None, 0, 0) };
@@ -324,7 +324,7 @@ fn registrar_loop(ready: mpsc::Sender<u32>, rx: mpsc::Receiver<Request>) {
             }
             WM_HOTKEY => {
                 let slot = msg.wParam.0 as i64 - i64::from(ID_BASE);
-                if (0..4).contains(&slot) && !engine.suspended {
+                if (0..SLOTS as i64).contains(&slot) && !engine.suspended {
                     super::schedule(Job::Action(super::ACTIONS[slot as usize]));
                 }
             }

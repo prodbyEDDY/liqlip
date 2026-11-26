@@ -76,6 +76,20 @@ pub enum Key {
     BackupExportTitle,
     BackupRestoreTitle,
     BackupFilter,
+    /// Tray, screenshots (W6-A, SPEC §9.8)
+    TrayShotRegion,
+    TrayShotScreen,
+    TrayShotWindow,
+    TrayShotRepeat,
+    TrayShotDelay,
+    TrayShotDelay3s,
+    TrayShotDelay5s,
+    TrayShotDelay10s,
+    TrayShotText,
+    /// "Save as…" dialog of a screenshot (W6-A, §18.4)
+    ShotSaveAsTitle,
+    ShotFilterPng,
+    ShotFilterJpg,
 }
 
 pub fn tr(lang: Lang, key: Key) -> &'static str {
@@ -147,6 +161,30 @@ pub fn tr(lang: Lang, key: Key) -> &'static str {
         (Lang::Ru, BackupRestoreTitle) => "Восстановление из резервной копии Liqlip",
         (Lang::En, BackupFilter) => "Liqlip backup",
         (Lang::Ru, BackupFilter) => "Резервная копия Liqlip",
+        (Lang::En, TrayShotRegion) => "Capture region",
+        (Lang::Ru, TrayShotRegion) => "Снимок области",
+        (Lang::En, TrayShotScreen) => "Capture screen",
+        (Lang::Ru, TrayShotScreen) => "Снимок экрана",
+        (Lang::En, TrayShotWindow) => "Capture active window",
+        (Lang::Ru, TrayShotWindow) => "Снимок активного окна",
+        (Lang::En, TrayShotRepeat) => "Capture previous region",
+        (Lang::Ru, TrayShotRepeat) => "Повторить прошлую область",
+        (Lang::En, TrayShotDelay) => "Capture with delay",
+        (Lang::Ru, TrayShotDelay) => "Снимок с задержкой",
+        (Lang::En, TrayShotDelay3s) => "3 seconds",
+        (Lang::Ru, TrayShotDelay3s) => "3 секунды",
+        (Lang::En, TrayShotDelay5s) => "5 seconds",
+        (Lang::Ru, TrayShotDelay5s) => "5 секунд",
+        (Lang::En, TrayShotDelay10s) => "10 seconds",
+        (Lang::Ru, TrayShotDelay10s) => "10 секунд",
+        (Lang::En, TrayShotText) => "Copy text from screen",
+        (Lang::Ru, TrayShotText) => "Скопировать текст с экрана",
+        (Lang::En, ShotSaveAsTitle) => "Save screenshot as",
+        (Lang::Ru, ShotSaveAsTitle) => "Сохранить снимок как",
+        (Lang::En, ShotFilterPng) => "PNG image",
+        (Lang::Ru, ShotFilterPng) => "Изображение PNG",
+        (Lang::En, ShotFilterJpg) => "JPEG image",
+        (Lang::Ru, ShotFilterJpg) => "Изображение JPEG",
     }
 }
 
@@ -164,7 +202,9 @@ mod tests {
             TrayDelete5m, TrayDelete15m, TrayDelete30m, TrayDelete1h, TrayDelete24h, TrayStack,
             TraySettings, TrayQuit, SettingsWindowTitle, ConfirmDeleteRecentTitle,
             ConfirmDeleteRecentBody, ConfirmDelete, Cancel, PickExeTitle, PickExeFilter,
-            BackupExportTitle, BackupRestoreTitle, BackupFilter,
+            BackupExportTitle, BackupRestoreTitle, BackupFilter, TrayShotRegion, TrayShotScreen,
+            TrayShotWindow, TrayShotRepeat, TrayShotDelay, TrayShotDelay3s, TrayShotDelay5s,
+            TrayShotDelay10s, TrayShotText, ShotSaveAsTitle, ShotFilterPng, ShotFilterJpg,
         ];
         for k in keys {
             assert!(!tr(Lang::En, k).is_empty());

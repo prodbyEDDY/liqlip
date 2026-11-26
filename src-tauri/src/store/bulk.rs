@@ -210,7 +210,7 @@ fn normalize(mut item: ImportItem, now: i64) -> Result<Ready, String> {
     }
     let mut files_blob = None;
     match c.kind {
-        Kind::Image => {
+        k if k.is_image() => {
             let png = c.png.take().filter(|b| is_png(b)).ok_or("invalid: image record without a PNG")?;
             let (w, h) = ImageReader::with_format(Cursor::new(&png), ImageFormat::Png)
                 .into_dimensions()
@@ -289,7 +289,7 @@ fn normalize(mut item: ImportItem, now: i64) -> Result<Ready, String> {
     item.copy_count = item.copy_count.max(1);
     item.use_count = item.use_count.max(0);
     // Only images have an OCR state, and only the four known values (a backup is input).
-    let image = item.clip.kind == Kind::Image;
+    let image = item.clip.kind.is_image();
     if !image || !(super::ocr::STATE_NONE..=super::ocr::STATE_ERROR).contains(&item.ocr_state) {
         item.ocr_state = super::ocr::STATE_NONE;
     }

@@ -8,8 +8,9 @@
 //! a written text is searchable at once.
 //!
 //! Queries over the queue use `idx_clips_kind (kind, copied_at DESC, id DESC, deleted_at)
-//! WHERE deleted_at IS NULL` with `kind = 'image'` — only image rows are visited, newest first
-//! (test `queue_statements_use_the_kind_index`).
+//! WHERE deleted_at IS NULL` with `kind IN ('image', 'screenshot')` — only picture rows are
+//! visited (W6-A: screenshots are recognised like images). The next job is one newest-first seek
+//! per picture kind, so no sort is needed (test `queue_statements_use_the_kind_index`).
 //!
 //! Nothing here logs recognised text.
 
@@ -83,14 +84,14 @@ fn finish(conn: &rusqlite::Connection, id: i64, outcome: Result<&str, ()>, mode:
         Ok(text) => conn.execute(
             &format!(
                 "UPDATE clips SET ocr_text = ?1, ocr_state = ?2
-                 WHERE id = ?3 AND kind = 'image' AND deleted_at IS NULL{only_pending}"
+                 WHERE id = ?3 AND kind IN ('image', 'screenshot') AND deleted_at IS NULL{only_pending}"
             ),
             params![text, STATE_DONE, id],
         ),
         Err(()) => conn.execute(
             &format!(
                 "UPDATE clips SET ocr_state = ?1
-                 WHERE id = ?2 AND kind = 'image' AND deleted_at IS NULL{only_pending}"
+                 WHERE id = ?2 AND kind IN ('image', 'screenshot') AND deleted_at IS NULL{only_pending}"
             ),
             params![STATE_ERROR, id],
         ),
@@ -127,28 +128,33 @@ impl Store {
             return Ok(());
         }
         tx.execute(
-            "UPDATE clips SET ocr_state = ?1 WHERE id = ?2 AND kind = 'image' AND ocr_state = ?3",
+            "UPDATE clips SET ocr_state = ?1 WHERE id = ?2 AND kind IN ('image', 'screenshot') AND ocr_state = ?3",
             params![STATE_PENDING, id, STATE_NONE],
         )
         .map(|_| ())
         .map_err(db_err)
     }
 
-    /// Newest pending live image, if any.
+    /// Newest pending live picture (image or screenshot), if any: the newest of each kind's
+    /// own index seek.
     pub(crate) fn ocr_next(&self) -> Result<Option<OcrJob>, String> {
         let conn = self.lock();
         let generation = self.generation(); // read under the lock: a swap can't interleave
-        let id: Option<i64> = conn
-            .query_row(
-                "SELECT id FROM clips
-                 WHERE kind = 'image' AND deleted_at IS NULL AND ocr_state = ?1
-                 ORDER BY copied_at DESC, id DESC LIMIT 1",
-                [STATE_PENDING],
-                |r| r.get(0),
-            )
-            .optional()
-            .map_err(db_err)?;
-        Ok(id.map(|id| OcrJob { id, png: self.paths().media_png(id), generation }))
+        let mut best: Option<(i64, i64)> = None; // (copied_at, id)
+        for kind in ["image", "screenshot"] {
+            let found: Option<(i64, i64)> = conn
+                .query_row(
+                    "SELECT copied_at, id FROM clips
+                     WHERE kind = ?1 AND deleted_at IS NULL AND ocr_state = ?2
+                     ORDER BY copied_at DESC, id DESC LIMIT 1",
+                    params![kind, STATE_PENDING],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .optional()
+                .map_err(db_err)?;
+            best = best.max(found);
+        }
+        Ok(best.map(|(_, id)| OcrJob { id, png: self.paths().media_png(id), generation }))
     }
 
     /// Kind, state and text of a live record (`not_found: clip <id>` otherwise).
@@ -171,7 +177,7 @@ impl Store {
     pub(crate) fn ocr_job(&self, id: i64) -> Result<OcrJob, String> {
         let generation = self.generation();
         let rec = self.ocr_record(id)?;
-        if rec.kind != Kind::Image {
+        if !rec.kind.is_image() {
             return Err(format!("invalid: clip {id} is not an image"));
         }
         Ok(OcrJob { id, png: self.paths().media_png(id), generation })
@@ -200,7 +206,7 @@ impl Store {
     pub(crate) fn ocr_pending(&self) -> Result<i64, String> {
         self.lock()
             .query_row(
-                "SELECT count(*) FROM clips WHERE kind = 'image' AND deleted_at IS NULL AND ocr_state = ?1",
+                "SELECT count(*) FROM clips WHERE kind IN ('image', 'screenshot') AND deleted_at IS NULL AND ocr_state = ?1",
                 [STATE_PENDING],
                 |r| r.get(0),
             )
@@ -212,7 +218,7 @@ impl Store {
     pub(crate) fn ocr_requeue_all(&self) -> Result<i64, String> {
         self.lock()
             .execute(
-                "UPDATE clips SET ocr_state = ?1 WHERE kind = 'image' AND deleted_at IS NULL AND ocr_state <> ?1",
+                "UPDATE clips SET ocr_state = ?1 WHERE kind IN ('image', 'screenshot') AND deleted_at IS NULL AND ocr_state <> ?1",
                 [STATE_PENDING],
             )
             .map(|n| n as i64)
@@ -224,7 +230,7 @@ impl Store {
     pub(crate) fn ocr_enqueue_unprocessed(&self) -> Result<i64, String> {
         self.lock()
             .execute(
-                "UPDATE clips SET ocr_state = ?1 WHERE kind = 'image' AND deleted_at IS NULL AND ocr_state = ?2",
+                "UPDATE clips SET ocr_state = ?1 WHERE kind IN ('image', 'screenshot') AND deleted_at IS NULL AND ocr_state = ?2",
                 params![STATE_PENDING, STATE_NONE],
             )
             .map(|n| n as i64)
@@ -373,13 +379,35 @@ mod tests {
             let rows: Vec<String> = st.query_map([], |r| r.get::<_, String>(3)).unwrap().map(Result::unwrap).collect();
             rows.join(" | ")
         };
-        let next = plan(
-            "SELECT id FROM clips WHERE kind = 'image' AND deleted_at IS NULL AND ocr_state = 1
-             ORDER BY copied_at DESC, id DESC LIMIT 1",
+        for kind in ["image", "screenshot"] {
+            let next = plan(&format!(
+                "SELECT copied_at, id FROM clips WHERE kind = '{kind}' AND deleted_at IS NULL AND ocr_state = 1
+                 ORDER BY copied_at DESC, id DESC LIMIT 1"
+            ));
+            assert!(next.contains("idx_clips_kind") && !next.contains("TEMP B-TREE"), "{next}");
+        }
+        let count = plan(
+            "SELECT count(*) FROM clips WHERE kind IN ('image', 'screenshot') AND deleted_at IS NULL AND ocr_state = 1",
         );
-        assert!(next.contains("idx_clips_kind") && !next.contains("TEMP B-TREE"), "{next}");
-        let count = plan("SELECT count(*) FROM clips WHERE kind = 'image' AND deleted_at IS NULL AND ocr_state = 1");
         assert!(count.contains("idx_clips_kind"), "{count}");
+    }
+
+    /// W6-A: screenshots join the queue like images, and the next job is the newest picture.
+    #[test]
+    fn screenshots_are_queued_with_images() {
+        let t = TestStore::new();
+        t.ocr_set_queue_new(true);
+        let img = t.add_image(5, 5, 1_000, false);
+        let mut shot = super::super::testutil::image_clip(6, 6, 2_000, false);
+        shot.kind = Kind::Screenshot;
+        let shot = t.insert_clip(shot).unwrap().id;
+        assert_eq!(state(&t, shot).0, STATE_PENDING);
+        assert_eq!(t.ocr_pending().unwrap(), 2);
+        assert_eq!(t.ocr_next().unwrap().unwrap().id, shot, "newest picture first");
+        assert!(t.ocr_job(shot).is_ok());
+        assert!(t.ocr_finish(shot, Ok("from the screen"), OcrWrite::Queued).unwrap());
+        assert_eq!(t.ocr_next().unwrap().unwrap().id, img);
+        assert_eq!(search(&t, "screen"), vec![shot]);
     }
 
     /// W3: a job taken before a `replace` restore swapped the database names a record of the

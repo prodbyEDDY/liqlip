@@ -214,6 +214,29 @@ pub(crate) fn clip_text(app: &AppHandle, id: i64) -> Result<String, String> {
     })
 }
 
+/// One-off recognition of a PNG that is not a record (W6-A: "Copy text from the screen",
+/// ARCHITECTURE §18.4): on its own short thread inside the WinRT apartment, at normal priority
+/// (the user waits for it), in the `ocr.language` language. Not gated by `ocr.enabled` — that
+/// switch is about indexing the history; this is an explicit action on a picture nobody keeps.
+/// Waits at most [`DIRECT_TIMEOUT`]. Nothing is stored or logged.
+pub(crate) fn recognize_png(app: &AppHandle, png: Vec<u8>) -> Result<String, String> {
+    let language = settings::get(app).ocr.language;
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::Builder::new()
+        .name("liqlip-ocr-shot".into())
+        .spawn(move || {
+            let _apartment = engine::Apartment::enter();
+            let result = match make_engine(&language) {
+                Ok(engine) => engine.recognize(&png),
+                Err(engine::Unavailable::NoLanguages) => Err("failed: no OCR language is installed".to_string()),
+                Err(engine::Unavailable::Failed(e)) => Err(e),
+            };
+            let _ = tx.send(result);
+        })
+        .map_err(|e| format!("failed: {e}"))?;
+    rx.recv_timeout(DIRECT_TIMEOUT).map_err(|_| "failed: text recognition timed out".to_string())?
+}
+
 /// One direct recognition: engine → PNG → text → `ocr_finish(Direct)` → event. A record
 /// deleted meanwhile drops the result (`not_found`); a recognition failure marks `error`.
 fn recognize_direct<F>(store: &Store, id: i64, make: F, sink: &dyn Sink) -> Result<String, String>

@@ -23,6 +23,7 @@ mod maint;
 mod media;
 pub(crate) mod ocr; // W2-A: OCR queue (ARCHITECTURE §5a)
 mod schema;
+pub(crate) mod shots; // W6-A: screenshots, annotation documents, base pictures (ARCHITECTURE §18.5)
 mod snippets;
 #[cfg(test)]
 pub(crate) mod testutil; // pub(crate): the OCR worker tests (W2-A) reuse the harness

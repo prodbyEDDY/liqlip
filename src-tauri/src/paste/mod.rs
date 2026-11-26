@@ -224,3 +224,20 @@ pub(crate) fn paste_text(app: &AppHandle, text: &str, caret_back: u32, keep_open
 pub(crate) fn copy_text(text: &str) -> Result<(), String> {
     writer::write(&writer::encode_text(text, None, None)).map_err(|e| e.to_command_error())
 }
+
+/// A picture onto the clipboard (W6-A, screenshots §18.4): the PNG and a `CF_DIB` in ONE
+/// transaction, marked as our own write (the capture listener does not record it again — the
+/// screenshot module stores the record itself). `pixels` = the same picture as RGBA8 when the
+/// caller has it (the DIB is then built without decoding the PNG); `None` decodes it once.
+/// Blocking (≤ ≈ 0.5 s of `OpenClipboard` retries): call from a worker.
+pub(crate) fn copy_png(png: Vec<u8>, pixels: Option<(u32, u32, &[u8])>) -> Result<(), String> {
+    let entries = match pixels {
+        Some((w, h, rgba)) if w > 0 && h > 0 && rgba.len() as u64 == u64::from(w) * u64::from(h) * 4 => vec![
+            writer::Entry { fmt: writer::Fmt::Registered(writer::FMT_PNG), bytes: png, required: false },
+            writer::Entry { fmt: writer::Fmt::Dib, bytes: writer::dib_from_rgba(w, h, rgba), required: true },
+        ],
+        Some(_) => return Err("invalid: picture size".into()),
+        None => writer::encode_png(png).map_err(|e| format!("invalid: {e}"))?,
+    };
+    writer::write(&entries).map_err(|e| e.to_command_error())
+}

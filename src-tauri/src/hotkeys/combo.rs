@@ -307,15 +307,24 @@ pub fn combo_string(mods: Mods, token: &str) -> String {
 
 // ── Settings → desired bindings ─────────────────────────────────────────────
 
-/// The four actions, in the fixed order used for slots, fields and error reporting.
-pub const FIELDS: [&str; 4] = [
+/// Number of hotkey actions: the four shelf ones + the five screenshot ones (W6-A, §18.11).
+pub const SLOTS: usize = 9;
+
+/// The actions, in the fixed order used for slots, fields and error reporting (= the order of
+/// `HotkeySettings`).
+pub const FIELDS: [&str; SLOTS] = [
     "hotkeys.summon",
     "hotkeys.stackNext",
     "hotkeys.pauseToggle",
     "hotkeys.ignoreNext",
+    "hotkeys.shotRegion",
+    "hotkeys.shotScreen",
+    "hotkeys.shotWindow",
+    "hotkeys.shotRepeat",
+    "hotkeys.shotText",
 ];
 
-pub type Slots<T> = [T; 4];
+pub type Slots<T> = [T; SLOTS];
 
 pub fn strings(h: &HotkeySettings) -> Slots<&str> {
     [
@@ -323,6 +332,11 @@ pub fn strings(h: &HotkeySettings) -> Slots<&str> {
         h.stack_next.as_str(),
         h.pause_toggle.as_str(),
         h.ignore_next.as_str(),
+        h.shot_region.as_str(),
+        h.shot_screen.as_str(),
+        h.shot_window.as_str(),
+        h.shot_repeat.as_str(),
+        h.shot_text.as_str(),
     ]
 }
 
@@ -346,9 +360,9 @@ pub fn desired(prev: &HotkeySettings, next: &HotkeySettings) -> (Slots<Option<Co
     // A previous string that no longer parses (hand-edited file) counts as unbound.
     let prev_c: Slots<Option<Combo>> = prev_s.map(|s| parse_field(s).unwrap_or(None));
     let mut want = prev_c;
-    let mut errs: Slots<Option<SettingsErrorCode>> = [None; 4];
-    let mut changed = [false; 4];
-    for i in 0..4 {
+    let mut errs: Slots<Option<SettingsErrorCode>> = [None; SLOTS];
+    let mut changed = [false; SLOTS];
+    for i in 0..SLOTS {
         match parse_field(next_s[i]) {
             Ok(c) => {
                 changed[i] = c != prev_c[i];
@@ -365,9 +379,9 @@ pub fn desired(prev: &HotkeySettings, next: &HotkeySettings) -> (Slots<Option<Co
     };
     for _ in 0..5 {
         let mut clash = false;
-        for i in 0..4 {
+        for i in 0..SLOTS {
             let Some(c) = want[i] else { continue };
-            let beaten = (0..4).any(|j| j != i && want[j] == Some(c) && rank(j, &errs) < rank(i, &errs));
+            let beaten = (0..SLOTS).any(|j| j != i && want[j] == Some(c) && rank(j, &errs) < rank(i, &errs));
             if !beaten {
                 continue;
             }
@@ -400,15 +414,15 @@ pub fn reconcile(
     unregister: &mut dyn FnMut(usize, Combo),
 ) -> (Slots<Option<Combo>>, Slots<Option<SettingsErrorCode>>) {
     let mut live = live;
-    let mut errs: Slots<Option<SettingsErrorCode>> = [None; 4];
+    let mut errs: Slots<Option<SettingsErrorCode>> = [None; SLOTS];
     for _ in 0..5 {
         // A reverted slot reclaims its previous chord; whoever took it in the meantime
         // goes back to its own previous chord.
-        for i in 0..4 {
+        for i in 0..SLOTS {
             if errs[i].is_none() {
                 continue;
             }
-            for j in 0..4 {
+            for j in 0..SLOTS {
                 if j != i && errs[j].is_none() && want[j].is_some() && want[j] == want[i] {
                     errs[j] = Some(SettingsErrorCode::Taken);
                     want[j] = prev[j];
@@ -416,7 +430,7 @@ pub fn reconcile(
             }
         }
         // Free everything that changes first (a swap needs both chords released).
-        for i in 0..4 {
+        for i in 0..SLOTS {
             if let Some(c) = live[i] {
                 if want[i] != Some(c) {
                     unregister(i, c);
@@ -425,7 +439,7 @@ pub fn reconcile(
             }
         }
         let mut reverted = false;
-        for i in 0..4 {
+        for i in 0..SLOTS {
             let Some(c) = want[i] else { continue };
             if live[i] == Some(c) {
                 continue;
@@ -459,19 +473,49 @@ mod tests {
         parse(s).unwrap_or_else(|| panic!("parse {s}"))
     }
 
+    /// The four shelf slots; the five screenshot slots unbound.
     fn hk(a: &str, b: &str, cc: &str, d: &str) -> HotkeySettings {
         HotkeySettings {
             summon: a.into(),
             stack_next: b.into(),
             pause_toggle: cc.into(),
             ignore_next: d.into(),
-            // W5: the screenshot slots exist in the settings but are not engine slots yet (W6-A).
             shot_region: String::new(),
             shot_screen: String::new(),
             shot_window: String::new(),
             shot_repeat: String::new(),
             shot_text: String::new(),
         }
+    }
+
+    /// The first four slots as given, the screenshot slots `None`.
+    fn s4<T: Copy>(first: [Option<T>; 4]) -> Slots<Option<T>> {
+        std::array::from_fn(|i| first.get(i).copied().flatten())
+    }
+
+    const NO_ERRORS: Slots<Option<SettingsErrorCode>> = [None; SLOTS];
+
+    /// W6-A: the screenshot slots bind like the others, `PrtSc` alone included (an OS hotkey).
+    #[test]
+    fn screenshot_slots_follow_the_settings_order() {
+        assert_eq!(FIELDS.len(), SLOTS);
+        assert_eq!(&FIELDS[4..], ["hotkeys.shotRegion", "hotkeys.shotScreen", "hotkeys.shotWindow", "hotkeys.shotRepeat", "hotkeys.shotText"]);
+        let mut next = hk("Alt + V", "", "", "");
+        next.shot_region = "PrtSc".into();
+        next.shot_screen = "Ctrl + PrtSc".into();
+        next.shot_text = "Ctrl + Shift + T".into();
+        let (want, errs) = desired(&hk("Alt + V", "", "", ""), &next);
+        assert_eq!(errs, NO_ERRORS);
+        assert_eq!(want[4], Some(c("PrtSc")));
+        assert_eq!(want[5], Some(c("Ctrl + PrtSc")));
+        assert_eq!((want[6], want[7]), (None, None));
+        assert_eq!(want[8], Some(c("Ctrl + Shift + T")));
+        assert_eq!(backend(&c("PrtSc")), Backend::Os);
+        // A screenshot chord equal to the shelf's is refused like any duplicate.
+        next.shot_window = "Alt + V".into();
+        let (want, errs) = desired(&hk("Alt + V", "", "", ""), &next);
+        assert_eq!(errs[6], Some(SettingsErrorCode::Invalid));
+        assert_eq!((want[0], want[6]), (Some(c("Alt + V")), None));
     }
 
     #[test]
@@ -582,8 +626,8 @@ mod tests {
         let prev = hk("Alt + V", "Alt + Shift + V", "", "");
         let next = hk("Ctrl + Space", "", "Ctrl + Alt + P", "");
         let (want, errs) = desired(&prev, &next);
-        assert_eq!(errs, [None; 4]);
-        assert_eq!(want, [Some(c("Ctrl + Space")), None, Some(c("Ctrl + Alt + P")), None]);
+        assert_eq!(errs, NO_ERRORS);
+        assert_eq!(want, s4([Some(c("Ctrl + Space")), None, Some(c("Ctrl + Alt + P")), None]));
     }
 
     #[test]
@@ -604,8 +648,8 @@ mod tests {
         let prev = hk("", "", "", "");
         let next = hk("Alt + V", "Alt + V", "", "");
         let (want, errs) = desired(&prev, &next);
-        assert_eq!(errs, [None, Some(SettingsErrorCode::Invalid), None, None]);
-        assert_eq!(want, [Some(c("Alt + V")), None, None, None]);
+        assert_eq!(errs, s4([None, Some(SettingsErrorCode::Invalid), None, None]));
+        assert_eq!(want, s4([Some(c("Alt + V")), None, None, None]));
     }
 
     #[test]
@@ -617,7 +661,7 @@ mod tests {
         let (want, errs) = desired(&prev, &next);
         assert_eq!(errs[0], Some(SettingsErrorCode::Invalid));
         assert_eq!(errs[1], Some(SettingsErrorCode::Invalid));
-        assert_eq!(want, [Some(c("Alt + V")), Some(c("Alt + Shift + V")), None, None]);
+        assert_eq!(want, s4([Some(c("Alt + V")), Some(c("Alt + Shift + V")), None, None]));
     }
 
     #[test]
@@ -625,8 +669,8 @@ mod tests {
         let prev = hk("Alt + V", "Alt + Shift + V", "", "");
         let next = hk("Alt + Shift + V", "Alt + V", "", "");
         let (want, errs) = desired(&prev, &next);
-        assert_eq!(errs, [None; 4]);
-        assert_eq!(want, [Some(c("Alt + Shift + V")), Some(c("Alt + V")), None, None]);
+        assert_eq!(errs, NO_ERRORS);
+        assert_eq!(want, s4([Some(c("Alt + Shift + V")), Some(c("Alt + V")), None, None]));
     }
 
     /// A fake OS: `external` chords belong to other apps; our own registrations are unique
@@ -667,10 +711,10 @@ mod tests {
     #[test]
     fn reconcile_registers_and_unregisters() {
         let mut os = FakeOs { external: HashSet::new(), ours: Vec::new() };
-        let live = [Some(c("Alt + V")), Some(c("Alt + Shift + V")), None, None];
-        let want = [Some(c("Ctrl + Space")), None, Some(c("Ctrl + P")), None];
+        let live = s4([Some(c("Alt + V")), Some(c("Alt + Shift + V")), None, None]);
+        let want = s4([Some(c("Ctrl + Space")), None, Some(c("Ctrl + P")), None]);
         let (out, errs) = os.run(live, live, want);
-        assert_eq!(errs, [None; 4]);
+        assert_eq!(errs, NO_ERRORS);
         assert_eq!(out, want);
         assert_eq!(os.ours.len(), 2);
     }
@@ -678,8 +722,8 @@ mod tests {
     #[test]
     fn reconcile_taken_keeps_previous_binding() {
         let mut os = FakeOs { external: [c("Ctrl + Space")].into_iter().collect(), ours: Vec::new() };
-        let live = [Some(c("Alt + V")), None, None, None];
-        let want = [Some(c("Ctrl + Space")), None, None, None];
+        let live = s4([Some(c("Alt + V")), None, None, None]);
+        let want = s4([Some(c("Ctrl + Space")), None, None, None]);
         let (out, errs) = os.run(live, live, want);
         assert_eq!(errs[0], Some(SettingsErrorCode::Taken));
         assert_eq!(out[0], Some(c("Alt + V")), "previous chord re-registered");
@@ -687,17 +731,17 @@ mod tests {
 
     #[test]
     fn reconcile_swap_works_and_failed_swap_rolls_back_both() {
-        let live = [Some(c("Alt + V")), Some(c("Alt + Shift + V")), None, None];
-        let swap = [live[1], live[0], None, None];
+        let live = s4([Some(c("Alt + V")), Some(c("Alt + Shift + V")), None, None]);
+        let swap = s4([live[1], live[0], None, None]);
         let mut os = FakeOs { external: HashSet::new(), ours: Vec::new() };
         let (out, errs) = os.run(live, live, swap);
-        assert_eq!(errs, [None; 4]);
+        assert_eq!(errs, NO_ERRORS);
         assert_eq!(out, swap);
 
         // summon → new external-taken chord, stackNext → summon's old chord: summon fails
         // and reverts to Alt+V, so stackNext must revert too.
         let mut os = FakeOs { external: [c("Ctrl + Space")].into_iter().collect(), ours: Vec::new() };
-        let want = [Some(c("Ctrl + Space")), Some(c("Alt + V")), None, None];
+        let want = s4([Some(c("Ctrl + Space")), Some(c("Alt + V")), None, None]);
         let (out, errs) = os.run(live, live, want);
         assert_eq!(errs[0], Some(SettingsErrorCode::Taken));
         assert_eq!(errs[1], Some(SettingsErrorCode::Taken));
@@ -707,14 +751,14 @@ mod tests {
     #[test]
     fn reconcile_retries_a_pending_slot() {
         // Startup failure: nothing live, the chord is still wanted. Once free, it binds.
-        let want = [Some(c("Alt + V")), None, None, None];
+        let want = s4([Some(c("Alt + V")), None, None, None]);
         let mut os = FakeOs { external: [c("Alt + V")].into_iter().collect(), ours: Vec::new() };
-        let (out, errs) = os.run([None; 4], want, want);
+        let (out, errs) = os.run([None; SLOTS], want, want);
         assert_eq!(errs[0], Some(SettingsErrorCode::Taken));
         assert_eq!(out[0], None);
         os.external.clear();
         let (out, errs) = os.run(out, want, want);
-        assert_eq!(errs, [None; 4]);
+        assert_eq!(errs, NO_ERRORS);
         assert_eq!(out[0], Some(c("Alt + V")));
     }
 }
