@@ -1,7 +1,9 @@
 <script lang="ts">
   // Stage-1 hints with keys (SPEC §9.2): what a click and a drag do, then F · R · M · Enter · Esc.
   // At the bottom centre of the monitor; moves to the top when the cursor comes near, hides while
-  // an area is being drawn. Never takes the pointer.
+  // an area is being drawn. Never takes the pointer. On a narrow monitor (≤ ~850 px: 1280 × 720
+  // at 150 %) the row wraps onto a second line, centred (W7-R4: it ran past its capsule and the
+  // last hints — "Esc Cancel" — were cut off by the screen edge).
   import Kbd from "$lib/components/Kbd.svelte";
   import { t } from "$lib/i18n/index.svelte";
 
@@ -36,11 +38,15 @@
     left: 50%;
     bottom: 24px;
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
-    gap: 14px;
+    justify-content: center;
+    gap: 6px 14px;
+    width: max-content;
     max-width: calc(100vw - 32px);
     min-height: 40px;
-    padding: 0 8px 0 16px;
+    box-sizing: border-box;
+    padding: 4px 8px 4px 16px;
     border-radius: 999px;
     background: var(--color-raised);
     box-shadow: var(--shadow-pop);

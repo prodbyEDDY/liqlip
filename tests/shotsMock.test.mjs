@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { importTs } from "./helpers/bundle.mjs";
 
-const { mockInvoke, mockListen, frameBody, fakeDesktop, clampRect, currentSettings } = await importTs(
+const { mockInvoke, mockListen, frameBody, fakeDesktop, clampRect, currentSettings, afterCommit } = await importTs(
   "src/lib/ipc/mock/index.ts",
   "src/lib/ipc/mock/bus.ts",
   "src/lib/ipc/frame.ts",
@@ -112,6 +112,27 @@ test("shot_commit without pixels crops the frame; text → OCR text, no record; 
   await assert.rejects(mockInvoke("shot_commit", frameBody({ sessionId: s.id, rect: { x: 0, y: 0, w: 2, h: 1 }, action: "done", doc: null, width: 2, height: 1 }, new Uint8Array(4))), /^invalid: /);
   await assert.rejects(mockInvoke("shot_commit", frameBody({ sessionId: s.id, rect: { x: 0, y: 0, w: 2, h: 1 }, action: "boom", doc: null, width: 0, height: 0 })), /^invalid: /);
   await mockInvoke("shot_cancel", { sessionId: s.id });
+});
+
+test("what follows a commit is Rust's plan (W7-R4): only Done shows the QAO / editor", async () => {
+  // commit::plan + step (6): done → the setting; copy/save/save_as → nothing; pin → the pin
+  for (const setting of ["overlay", "editor", "none"]) {
+    for (const a of ["copy", "save", "save_as"]) assert.equal(afterCommit(a, setting, true), "nothing", `${a} / ${setting}`);
+    assert.equal(afterCommit("pin", setting, true), "pin");
+    assert.equal(afterCommit("pin", setting, false), "nothing", "no record — nothing to pin");
+  }
+  assert.equal(afterCommit("done", "overlay", true), "qao");
+  assert.equal(afterCommit("done", "editor", true), "editor");
+  assert.equal(afterCommit("done", "editor", false), "qao", "no record to edit — the QAO instead");
+  assert.equal(afterCommit("done", "none", true), "nothing");
+  // end to end: Ctrl+C in the overlay copies and closes — no thumbnail
+  const events = [];
+  const off = record(events, "shot:added");
+  const s = await mockInvoke("shot_session", {});
+  await mockInvoke("shot_commit", frameBody({ sessionId: s.id, rect: { x: 0, y: 0, w: 10, h: 10 }, action: "copy", doc: null, width: 0, height: 0 }));
+  await tick();
+  off();
+  assert.equal(events.length, 0);
 });
 
 test("shot_capture: screen commits at once; a trigger during a session is ignored; bad modes", async () => {

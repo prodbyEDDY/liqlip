@@ -41,9 +41,20 @@ export function fadeBy(opacity: number, deltaPx: number): number {
   return Math.round(Math.min(OPACITY_MAX, Math.max(OPACITY_MIN, next)) * 100) / 100;
 }
 
-/** Double click: 100 % ↔ the size the pin opened at. */
-export function toggleActual(scale: number, initial: number): number {
-  return Math.abs(scale - 1) < 0.005 ? clampScale(initial) : 1;
+/** Double click: 100 % ↔ `back` (the scale to return to). */
+export function toggleActual(scale: number, back: number): number {
+  return Math.abs(scale - 1) < 0.005 ? clampScale(back) : 1;
+}
+
+/**
+ * A double click on the pin (SPEC §9.5 "100 % ↔ the previous size"): away from 100 % it goes to
+ * 100 % and remembers where it came from; at 100 % it goes back there. `back` starts as the
+ * opening size. W7-R4: it used to return to the OPENING size only — a pin that opened at 100 %
+ * (most shots: they fit 80 % of the monitor) and was zoomed could never get its zoom back.
+ */
+export function doubleClick(scale: number, back: number): { scale: number; back: number } {
+  const atActual = Math.abs(scale - 1) < 0.005;
+  return atActual ? { scale: toggleActual(scale, back), back } : { scale: 1, back: scale };
 }
 
 /** The scale the window shows now: picture area (window − bleed) in physical px / picture px.

@@ -52,6 +52,18 @@ test("nothing chosen, idle or committing: no commit; a failed commit goes back w
   assert.equal(m.commitFailed(frame), frame, "only a committing state fails");
 });
 
+test("reported stage (W7-R4): the overlay stops following the cursor once a selection starts", () => {
+  const st = m.begin(session());
+  assert.equal(m.reportedStage(st, false), "select", "hovering: follow the cursor to another monitor");
+  assert.equal(m.reportedStage(st, true), "frame", "a press / drag / keyboard area: stay on this monitor");
+  const framed = m.choose(st, R).state;
+  assert.equal(m.reportedStage(framed, false), "frame");
+  const quick = m.startCommit(m.choose(m.begin(session({ quick: true })), R).state, "done");
+  assert.equal(m.reportedStage(quick, false), "frame", "committing from stage 1 doesn't follow either");
+  assert.equal(m.reportedStage(m.commitFailed(quick), false), "select", "a failed quick commit follows again");
+  assert.equal(m.reportedStage(m.IDLE, false), null);
+});
+
 test("finish ignores another session's end", () => {
   const st = m.begin(session());
   assert.equal(m.finish(st, 8), st);

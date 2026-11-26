@@ -12,6 +12,9 @@ export const DOCK_GAP = HANDLE_OFFSET + HANDLE_R + 4;
 export const EDGE = 8;
 /** The panel inside a frame that fills the monitor: this far above the frame's bottom edge. */
 export const INSIDE_INSET = 16;
+/** Without room for the full gap the panel may come this close to the frame: over the outer
+ *  half of the edge handles (their inner half stays grabbable), never over the picture. */
+export const TIGHT_GAP = HANDLE_OFFSET;
 
 export type DockSide = "below" | "above" | "inside";
 
@@ -22,17 +25,25 @@ export interface Docked {
 }
 
 /**
- * Dock the panel to the frame: below it outside; if there is no room — above it outside; if
- * neither fits (the frame fills the monitor) — inside, at its bottom edge. Centred on the frame
- * and pressed against the monitor edges, so it never leaves the screen.
+ * Dock the panel to the frame: below it outside; if there is no room — above it outside; if the
+ * full gap fits on neither side, still outside but closer (`TIGHT_GAP`, pressed against the
+ * monitor edge) — W7-R4: a medium frame on a short monitor (1280 × 720 at 150 %) used to get the
+ * panel inside, over most of the picture (SPEC §9.2: "at a normal area the panel doesn't cover
+ * the frame"); only when even that fails (the frame fills the monitor's height) — inside, at its
+ * bottom edge. Centred on the frame and pressed against the monitor edges, so it never leaves
+ * the screen.
  */
 export function dockPanel(frame: Rect, panel: Size, view: Size): Docked {
   const x = clamp(frame.x + frame.w / 2 - panel.w / 2, EDGE, Math.max(EDGE, view.w - panel.w - EDGE));
-  const below = frame.y + frame.h + DOCK_GAP;
+  const bottom = frame.y + frame.h;
+  const below = bottom + DOCK_GAP;
   if (below + panel.h <= view.h - EDGE) return { x, y: below, side: "below" };
   const above = frame.y - DOCK_GAP - panel.h;
   if (above >= EDGE) return { x, y: above, side: "above" };
-  const inside = clamp(frame.y + frame.h - INSIDE_INSET - panel.h, EDGE, Math.max(EDGE, view.h - panel.h - EDGE));
+  const lowest = view.h - EDGE - panel.h;
+  if (lowest >= bottom + TIGHT_GAP) return { x, y: lowest, side: "below" };
+  if (EDGE + panel.h <= frame.y - TIGHT_GAP) return { x, y: EDGE, side: "above" };
+  const inside = clamp(bottom - INSIDE_INSET - panel.h, EDGE, Math.max(EDGE, view.h - panel.h - EDGE));
   return { x, y: inside, side: "inside" };
 }
 

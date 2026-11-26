@@ -121,6 +121,18 @@ test("hover, a drag, a capture session and a hidden page pause every timer; 0 ne
   assert.equal(never.state.items.length, 1);
 });
 
+test("a capture that starts under the pointer forgets the hover (W7-R4): the stack still expires", () => {
+  // PrtSc while the pointer rests on a card: Rust hides the window, `pointerleave` never comes
+  const h = harness({}, { timeout: 1 });
+  h.qao.add(added(1));
+  h.qao.enter();
+  h.qao.sessionStarted();
+  assert.equal(h.state.hovered, false);
+  h.qao.add(added(2)); // the shot comes back with the window; the pointer is elsewhere
+  h.advance(1100);
+  assert.equal(h.state.items.length, 0, "no stale hover keeps the cards forever");
+});
+
 test("a new shot ends a capture pause even if shot:end never came", () => {
   const h = harness({}, { timeout: 1 });
   h.qao.sessionStarted();

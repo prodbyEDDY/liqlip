@@ -2,6 +2,10 @@
   // Stage-2 frame chrome (ARCHITECTURE §18.7): eight handles OUTSIDE the frame edge (so drawing
   // inside never grabs one — LT defects A/B) and the size chip above it, which also moves the
   // frame. The move band itself is the shade around the frame (`Shade.svelte`, `hitFrame`).
+  // A chip that had to move INSIDE the frame (no room above, or the panel is there) is only a
+  // readout (W7-R4): it lets the pointer through to the editor — a drawing tool always draws
+  // (SPEC §9.0.2), a press on the chip must not move the frame instead — and fades while any
+  // gesture runs, so it never hides what is being drawn.
   import type { Rect } from "$lib/ipc/types";
   import { t } from "$lib/i18n/index.svelte";
   import { HANDLE_CURSOR, handleCenters, visibleHandles, type Handle, type Size } from "./geometry";
@@ -16,10 +20,12 @@
     /** the docked panel (view px) — the chip keeps off it */
     avoid: Rect | null;
     busy: boolean;
+    /** a gesture (the host's or the editor's) is running */
+    gesture: boolean;
     onhandle: (h: Handle, e: PointerEvent) => void;
     onchip: (e: PointerEvent) => void;
   }
-  let { frame, view, size, avoid, busy, onhandle, onchip }: Props = $props();
+  let { frame, view, size, avoid, busy, gesture, onhandle, onchip }: Props = $props();
 
   let chipW = $state(0);
   let chipH = $state(0);
@@ -40,11 +46,13 @@
   <div
     class="chip"
     class:chip--measuring={!chipW}
+    class:chip--inside={chip.inside}
+    class:chip--ghost={chip.inside && gesture}
     style="left:{chip.x}px; top:{chip.y}px; cursor:{busy ? 'wait' : 'move'}"
-    title={`${t("capture.frame.move")} · ${t("capture.frame.keys")}`}
+    title={chip.inside ? undefined : `${t("capture.frame.move")} · ${t("capture.frame.keys")}`}
     bind:clientWidth={chipW}
     bind:clientHeight={chipH}
-    onpointerdown={onchip}
+    onpointerdown={(e) => !chip.inside && onchip(e)}
     aria-hidden="true"
   >
     {size}
@@ -93,9 +101,16 @@
     white-space: nowrap;
     touch-action: none;
     user-select: none;
+    transition: opacity var(--dur-fast) var(--ease-out-soft);
   }
   .chip:hover {
     background: color-mix(in srgb, var(--color-ink) 6.5%, var(--color-raised));
+  }
+  .chip--inside {
+    pointer-events: none;
+  }
+  .chip--ghost {
+    opacity: 0.25;
   }
   .chip--measuring {
     visibility: hidden;

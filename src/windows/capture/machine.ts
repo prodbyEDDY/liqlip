@@ -8,7 +8,7 @@
 // Plus what the host decides on its own: which `shot:session` payload restarts the overlay, the
 // commit header (§18.4) and the Esc ladder's last step (SPEC §9.2: with objects drawn, close
 // only on a second Esc within 3 s). Pure — node-tested (tests/captureMachine.test.mjs).
-import type { AnnotDoc, Rect, ShotAction, ShotCommit, ShotSession, ShotSessionMode } from "$lib/ipc/types";
+import type { AnnotDoc, Rect, ShotAction, ShotCommit, ShotSession, ShotSessionMode, ShotStage } from "$lib/ipc/types";
 
 export type Stage = "idle" | "select" | "frame" | "committing";
 
@@ -75,6 +75,20 @@ export function commitFailed(st: HostState): HostState {
 export function finish(st: HostState, sessionId?: number): HostState {
   if (sessionId !== undefined && st.sessionId !== null && sessionId !== st.sessionId) return st;
   return IDLE;
+}
+
+/**
+ * What the overlay reports with `shot_stage`. Rust moves the overlay to the monitor under the
+ * cursor only while it hears `select` (§18.3 "following the cursor"), and SPEC §9.2 says it follows
+ * "until a selection starts" — so `frame` goes out as soon as one starts in stage 1 (a press that
+ * may become a drag, an area from the keyboard), not only in stage 2. W7-R4: dragging an area past
+ * the monitor edge used to move the overlay to the other monitor mid-drag (the drag was lost). An
+ * abandoned selection (Esc, right click, a failed commit back to stage 1) says `select` again.
+ * `null` — no session.
+ */
+export function reportedStage(st: Pick<HostState, "stage">, selectionStarted: boolean): ShotStage | null {
+  if (st.stage === "idle") return null;
+  return st.stage === "select" && !selectionStarted ? "select" : "frame";
 }
 
 /** The JSON header of the `shot_commit` body (§18.4): no pixels → `width/height = 0`, `doc` null. */

@@ -20,6 +20,7 @@
   // Browser preview on the mock: /capture.html (?mock-shot=text, ?mock-shot-quick=1, ?mock-scale=1.5).
   import { onMount } from "svelte";
   import { isBrowserShortcut } from "$lib/browserKeys";
+  import { refuseDrop } from "$lib/dropGuard";
   import { t } from "$lib/i18n/index.svelte";
   import { ocrStatus, shotCancel, shotCommit, shotSession, shotStage } from "$lib/ipc/commands";
   import { errorMessage } from "$lib/ipc/errors";
@@ -60,7 +61,7 @@
     type Point,
   } from "./geometry";
   import { LOUPE_DEFAULT_ZOOM, zoomBy } from "./loupe";
-  import { begin, choose, CONFIRM_MS, commitFailed, commitHeader, escapeLadder, IDLE, sessionChange, startCommit, type HostState } from "./machine";
+  import { begin, choose, CONFIRM_MS, commitFailed, commitHeader, escapeLadder, IDLE, reportedStage, sessionChange, startCommit, type HostState } from "./machine";
   import FrameChrome from "./FrameChrome.svelte";
   import HintBar from "./HintBar.svelte";
   import Loupe from "./Loupe.svelte";
@@ -185,6 +186,22 @@
     void shotStage(id, stage).catch((e) => console.warn("[capture] shot_stage", stage, e));
   }
 
+  // `shot_stage` (W7-R4): Rust follows the cursor to another monitor only on `select`, so the
+  // stage goes out as soon as a selection starts in stage 1 (a press, an area from the keyboard)
+  // and comes back to `select` when it is abandoned — `reportedStage`. One report per change.
+  let reported: { id: number; stage: ShotStage } | null = null;
+  $effect(() => {
+    const id = host.sessionId;
+    const want = reportedStage(host, gesture !== null || kbAnchor !== null);
+    if (id === null || want === null) {
+      reported = null;
+      return;
+    }
+    if (reported?.id === id && reported.stage === want) return;
+    reported = { id, stage: want };
+    reportStage(id, want);
+  });
+
   function dropBitmap(): void {
     bitmap?.close();
     bitmap = null;
@@ -249,7 +266,6 @@
     session = s;
     editorDoc = emptyDoc(s.monitor.width, s.monitor.height, s.monitor.scale);
     cursor = cursorView ? framePoint(cursorView, viewScale({ w: s.monitor.width, h: s.monitor.height }, view), { w: s.monitor.width, h: s.monitor.height }) : null;
-    if (change === "new") reportStage(s.id, "select");
   }
 
   async function onFrameLoad(e: Event): Promise<void> {
@@ -300,11 +316,9 @@
     gesture = null;
     kbAnchor = null;
     if (!r || host.sessionId === null) return;
-    const was = host.stage;
     const { state, commit: action } = choose(host, r);
     host = state;
     if (action) void commit(action);
-    else if (was === "select" && state.stage === "frame") reportStage(host.sessionId!, "frame");
   }
 
   async function commit(action: ShotAction): Promise<void> {
@@ -464,6 +478,9 @@
 
   function onPointerMove(e: PointerEvent): void {
     if (!session) return;
+    // An editor gesture whose release never reached this window (let go over another monitor)
+    // would keep the panel see-through and click-through: no button held = it is over (W7-R4).
+    if (editorGesture && (e.buttons & 1) === 0) editorGesture = false;
     const g = gesture;
     if (g && g.id === e.pointerId && e.buttons === 0) return finishGesture(e); // released outside the window
     track(e);
@@ -651,6 +668,9 @@
   onpointerup={onPointerUp}
   onpointercancel={onPointerCancel}
   oncontextmenu={(e) => e.preventDefault()}
+  ondragenter={refuseDrop}
+  ondragover={refuseDrop}
+  ondrop={refuseDrop}
 />
 
 {#if session}
@@ -695,7 +715,7 @@
     {/if}
 
     {#if inFrame && frameView && !drawing}
-      <FrameChrome frame={frameView} {view} size={session.dimensions && host.frame ? sizeText(host.frame) : null} avoid={panelRect} {busy} onhandle={onHandle} onchip={onChip} />
+      <FrameChrome frame={frameView} {view} size={session.dimensions && host.frame ? sizeText(host.frame) : null} avoid={panelRect} {busy} gesture={anyGesture} onhandle={onHandle} onchip={onChip} />
       {#snippet tools()}
         {#if editorState}<Toolbar state={editorState} {tips} />{/if}
       {/snippet}
@@ -707,6 +727,7 @@
         props={bitmap ? props : null}
         x={docked.x}
         y={docked.y}
+        {tips}
         ghost={panelGhost}
         passthrough={anyGesture}
         {busy}

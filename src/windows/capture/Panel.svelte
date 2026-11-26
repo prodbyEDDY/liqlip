@@ -14,9 +14,12 @@
   // on top, the properties bar under them — so the panel keeps its size while the properties bar
   // grows ("changes the last object") and never jumps to another dock; one column on a narrow
   // monitor.
+  // Hints (W7-R4): the editor's own `Tip` (name + keycaps, opening away from the frame like the
+  // tool tips), as in the editor window — not the browser's `title` bubble.
   import type { Snippet } from "svelte";
   import Button from "$lib/components/Button.svelte";
   import Ico from "$lib/components/Ico.svelte";
+  import Tip from "$lib/editor/Tip.svelte";
   import { t } from "$lib/i18n/index.svelte";
   import type { IconName } from "$lib/icons";
 
@@ -25,6 +28,8 @@
     props: Snippet | null;
     x: number;
     y: number;
+    /** where the hints open (away from the frame; the host flips them at the monitor edge) */
+    tips: "below" | "above";
     /** see-through: a gesture passes under the panel */
     ghost: boolean;
     /** the pointer passes through (any gesture is running) */
@@ -38,24 +43,23 @@
     height?: number;
     onaction: (a: PanelAction) => void;
   }
-  let { tools, props, x, y, ghost, passthrough, busy, ocrOff, measuring, width = $bindable(0), height = $bindable(0), onaction }: Props = $props();
-
-  const tip = (label: string, keys?: string) => (keys ? `${label} · ${keys}` : label);
+  let { tools, props, x, y, tips, ghost, passthrough, busy, ocrOff, measuring, width = $bindable(0), height = $bindable(0), onaction }: Props = $props();
 
   interface IconAction {
     id: Exclude<PanelAction, "done">;
     icon: IconName;
     label: string;
-    keys?: string;
+    keys?: string[];
     disabled?: boolean;
   }
   const actions = $derived<IconAction[]>([
     { id: "text", icon: "ocr", label: ocrOff ? t("capture.action.textOff") : t("capture.action.text"), disabled: ocrOff },
-    { id: "pin", icon: "pin", label: t("capture.action.pin"), keys: "Ctrl P" },
-    { id: "save_as", icon: "download", label: t("capture.action.saveAs"), keys: "Ctrl Shift S" },
-    { id: "copy", icon: "copy", label: t("common.copy"), keys: "Ctrl C" },
-    { id: "cancel", icon: "x", label: t("common.cancel"), keys: "Esc" },
+    { id: "pin", icon: "pin", label: t("capture.action.pin"), keys: ["Ctrl", "P"] },
+    { id: "save_as", icon: "download", label: t("capture.action.saveAs"), keys: ["Ctrl", "Shift", "S"] },
+    { id: "copy", icon: "copy", label: t("common.copy"), keys: ["Ctrl", "C"] },
+    { id: "cancel", icon: "x", label: t("common.cancel"), keys: ["Esc"] },
   ]);
+  const ariaKeys = (keys?: string[]) => (keys ? ` (${keys.join("+")})` : "");
 </script>
 
 <div
@@ -77,19 +81,22 @@
       <button
         type="button"
         class="act"
-        title={tip(a.label, a.keys)}
-        aria-label={a.label}
+        aria-label={a.label + ariaKeys(a.keys)}
         disabled={busy}
         aria-disabled={a.disabled || undefined}
         onmousedown={(e) => e.preventDefault()}
         onclick={() => !a.disabled && onaction(a.id)}
       >
         <Ico name={a.icon} size={16} />
+        <Tip label={a.label} keys={a.keys} side={tips} />
       </button>
     {/each}
-    <Button variant="primary" size="sm" icon="check" loading={busy} title={tip(t("common.done"), "Enter")} onmousedown={(e: MouseEvent) => e.preventDefault()} onclick={() => onaction("done")}>
-      {t("common.done")}
-    </Button>
+    <span class="done">
+      <Button variant="primary" size="sm" icon="check" loading={busy} aria-label={t("common.done") + ariaKeys(["Enter"])} onmousedown={(e: MouseEvent) => e.preventDefault()} onclick={() => onaction("done")}>
+        {t("common.done")}
+      </Button>
+      <Tip label={t("common.done")} keys={["Enter"]} side={tips} />
+    </span>
   </div>
 </div>
 
@@ -144,8 +151,11 @@
     grid-area: actions;
     justify-self: end;
   }
-  /* a monitor narrower than tools + actions: one column */
-  @media (max-width: 860px) {
+  /* a monitor narrower than tools + actions: one column. The two-row panel is 797 px (EN) /
+     808 px (RU) wide with the widest properties bar (measured, W7-R4) + 2 × 8 px to the monitor
+     edges = 824; 832 keeps a little slack (it was 860, which sent 1280 × 720 at 150 % — an
+     853 px view — to the taller one-column panel for no reason). */
+  @media (max-width: 832px) {
     .panel {
       grid-template-columns: auto;
       grid-template-areas:
@@ -155,6 +165,7 @@
     }
   }
   .act {
+    position: relative; /* anchors its Tip */
     display: inline-flex;
     flex: none;
     align-items: center;
@@ -183,7 +194,9 @@
   .act[aria-disabled="true"] {
     opacity: 0.45;
   }
-  .panel__actions :global(.btn) {
+  .done {
+    position: relative; /* anchors the Tip of Done */
+    display: inline-flex;
     margin-left: 4px;
   }
 </style>
