@@ -14,20 +14,19 @@
 //! and UBR come from `HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion` (`CurrentBuildNumber`,
 //! `UBR`) — not version APIs, which depend on the manifest and do not give the UBR.
 //!
-//! **Hotkey errors** of the five `hotkeys.shot*` slots: the engine's own report for unchanged
-//! settings (`hotkeys::apply_settings(prev = next)` — every wanted chord that is not active),
-//! filtered to those fields. Until W6-A registers the screenshot slots the engine knows four
-//! slots and reports none of them.
+//! **Hotkey errors** of the five `hotkeys.shot*` slots: `hotkeys::current_errors` (W6-A, made for
+//! this — the unparsable / duplicate fields of the saved settings and every wanted chord the OS
+//! has not given us, after one retry), filtered to those fields. Read-only: unlike
+//! `apply_settings(prev = next)` it does not re-sync the keyboard hook from a status query.
 
+use crate::hotkeys;
 use crate::model::{SettingsError, ShotStatus, WindowsSettingsPage};
-use crate::{hotkeys, settings};
 use tauri::AppHandle;
 use tauri_plugin_opener::OpenerExt;
 
-/// `shot_status`.
+/// `shot_status` (an `async` command: `current_errors` waits for the hotkey registrar, ≤ 2 s).
 pub(crate) fn status(app: &AppHandle) -> Result<ShotStatus, String> {
-    let s = settings::get(app);
-    let hotkey_errors = shot_errors(hotkeys::apply_settings(app, &s.hotkeys, &s.hotkeys));
+    let hotkey_errors = shot_errors(hotkeys::current_errors(app));
     Ok(ShotStatus { snipping_key: snipping_key(), hotkey_errors })
 }
 
