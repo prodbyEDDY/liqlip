@@ -40,6 +40,7 @@ Liquid Tools. `Cargo.lock` засеян из лока Liquid Tools (cargo сам
 ```
 liqlip/
   picker.html · settings.html · hud.html          одна точка входа на окно (Vite MPA)
+  capture.html · shots.html · editor.html · pin.html   окна скриншотов (W5, §18)
   src/
     app.css                     токены (перенос из Liquid Tools, монохром-лок)
     lib/
@@ -53,8 +54,10 @@ liqlip/
         commands.ts             типизированные обёртки invoke (одна функция на команду)
         events.ts               типизированные подписки
         runtime.ts · errors.ts  isTauri() · код ошибки → локализованный текст (common.error.*)
+        frame.ts                кадрирование сырого тела коммита скриншота (W5, §18.4)
         mock/                   браузерный адаптер: index (роутер) · bus (события, флаги URL, задержка) ·
-                                seed · clips (store+paste+stack+симулятор захвата) · settings · system
+                                seed · clips (store+paste+stack+симулятор захвата) · settings · system ·
+                                shots (скриншоты, W5)
       motion/ · theme.svelte.ts · appearance.ts · hotkey.ts · hotkeyCapture.ts · scrollFade.ts (затухание краёв
                                 прокрутки, W3-D) · snippets/expand.ts (развёртка плейсхолдеров) ·
                                 browserKeys.ts (клавиши браузера WebView2, которые глотает каждое окно, W4)
@@ -62,6 +65,7 @@ liqlip/
       picker/                   шелф (Picker.svelte + компоненты, cards/, layout.ts, query.ts, transforms.ts …)
       settings/                 окно настроек + онбординг
       hud/                      HUD-тост
+      capture/ · shots/ · editor/ · pin/   окна скриншотов (W5 — заглушки корней; W6-C/D/E, §18)
   src-tauri/
     src/
       lib.rs                    ← ФАЙЛ-УЗЕЛ: run(), плагины, окна, порядок init, регистрация команд, URI-схема
@@ -74,10 +78,11 @@ liqlip/
       hotkeys/                  движок глобальных хоткеев + запись сочетания
       ocr/                      (W2) Windows.Media.Ocr, фоновая очередь
       import/                   (W2) импорт из Liquid Tools, резервные копии
+      screenshot/               (W5–W6) скриншоты: команды-делегаты, сессия, коммит, окна (§18)
       content.rs                общий хэш + правила содержимого (превью, усечение, метрики) — §15
       events.rs                 типизированные эмиттеры всех событий §9.7 (имена + адресация)
       tray.rs · theme.rs · logx.rs · fsx.rs · autostart.rs · i18n_native.rs
-    tauri.conf.json · capabilities/default.json · icons/ (знак Liqlip, W2-D — §16)
+    tauri.conf.json · capabilities/{default,screenshot}.json · icons/ (знак Liqlip, W2-D — §16)
   tests/                        *.test.mjs (node:test) · helpers/bundle.mjs (esbuild → ESM) ·
                                 fixtures/settings.default.json (дефолты: Rust ≡ мок)
   docs/                         эта библиотека
@@ -85,7 +90,7 @@ liqlip/
 
 ## 2. Окна
 
-Все три окна **создаются заранее скрытыми в `setup()`** и только показываются (правило Liquid
+Все четыре окна (с W5 — и оверлей `capture`) **создаются заранее скрытыми в `setup()`** и только показываются (правило Liquid
 Tools: ленивый `.build()` из команды/хоткея дедлочит event loop на Windows).
 
 | Окно | Свойства | Кто показывает |
@@ -93,9 +98,20 @@ Tools: ленивый `.build()` из команды/хоткея дедлочи
 | `picker` | прозрачное, без рамки, always-on-top, skip-taskbar, не в Alt+Tab (`WS_EX_TOOLWINDOW`), `disable_drag_drop_handler`, размер по расположению + прозрачное поле `BLEED` под тень | хоткей, трей, наведение на край |
 | `settings` | обычное окно Windows: системный заголовок, `decorations: true`, мин. 720×520, запоминает размер/позицию (`settings.json` → `window`), **CloseRequested → hide**, а не уничтожение | трей, `Ctrl+,` в шелфе, онбординг при первом запуске |
 | `hud` | прозрачное, без рамки, always-on-top, skip-taskbar, **неактивируемое** (`WS_EX_NOACTIVATE`), click-through, ~320×56 | Rust: `hud::show(kind, text)` у курсора, автоскрытие 1.6 с |
+| `capture` (W5) | оверлей захвата: прозрачное, без рамки, always-on-top, skip-taskbar, focusable, `shadow(false)`, `disable_drag_drop_handler`, `WDA_EXCLUDEFROMCAPTURE`; заранее размер основного монитора | сессия скриншота (W6-A, §18.3) |
 
 У всех окон — `CloseRequested` перехвачен (Alt+F4 не уничтожает заранее созданные окна;
-в Liquid Tools это баг шелфа).
+в Liquid Tools это баг шелфа). Окна скриншотов `shots`, `editor`, `pin-<n>` строятся **по требованию**
+(единственное исключение из правила, §18.2).
+
+**`capture` в W5** (`lib.rs::build_windows`, после `settings`): параметры выше, `inner_size` 800×600 →
+сразу позиция → размер → позиция = основной монитор (`primary_monitor()`, физ. px; частый случай
+«один монитор» — голый `show`). `screenshot::windows::exclude_from_capture` —
+`SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE)` (learn.microsoft.com: окно видно на мониторе,
+но не попадает ни в какой захват; с Windows 10 2004, раньше Windows применяет `WDA_MONITOR`; только
+при композиции DWM; фичи `windows` не добавлялись — `Win32_UI_WindowsAndMessaging` уже есть).
+`CloseRequested` → `prevent_close` + `screenshot::on_capture_close` (отмена сессии, W6-A) + `hide`.
+Ошибка построения окна не прерывает запуск: предупреждение в лог, скриншоты недоступны.
 
 **Как создано в W0** (`lib.rs::build_windows`): `picker` — `transparent`, `decorations(false)`,
 `shadow(false)`, `always_on_top`, `skip_taskbar`, `resizable(false)`, `focusable(true)`,
@@ -116,8 +132,10 @@ Alt+Tab, а tao пересчитывает `GWL_EXSTYLE` из своих фла�
 2. Плагины: `single-instance` (второй запуск → показать шелф), `autostart`, `dialog`, `opener`.
 3. `settings::load` (+ миграция версии) → `manage`.
 4. `store::open` (миграции схемы, WAL) → `manage`. **До создания любого окна** (окна шлют IPC сразу).
-5. `capture::start` (listener-поток) · `paste::init` · `ocr::start` (W2).
-6. Окна `picker`, `hud`, `settings` (скрытые).
+5. `capture::start` (listener-поток) · `paste::init` · `ocr::start` (W2) · W5:
+   `manage(screenshot::ScreenshotState)` + `screenshot::init` (до окон: оверлей может спросить
+   `shot_session` сразу при загрузке).
+6. Окна `picker`, `hud`, `settings`, W5: `capture` (скрытые).
 7. `hotkeys::start` + применение `settings.hotkeys`.
 8. `tray::build` (подписи из `i18n_native` по языку).
 9. `theme::apply`.
@@ -1250,7 +1268,7 @@ TS — `src/lib/ipc/types.ts`; Rust — `src-tauri/src/model.rs` (`#[serde(renam
 ### 9.1. Перечисления
 
 ```ts
-export type Kind = 'text' | 'link' | 'code' | 'color' | 'contact' | 'image' | 'file';
+export type Kind = 'text' | 'link' | 'code' | 'color' | 'contact' | 'image' | 'file' | 'screenshot'; // screenshot — W5 (§18.5)
 export type Format = 'text' | 'html' | 'rtf' | 'png' | 'files';
 export type PasteMode = 'auto' | 'plain' | { format: Format };
 export type Position = 'center' | 'left' | 'right' | 'top' | 'bottom';
@@ -1269,6 +1287,7 @@ export interface ClipMeta {
   ext?: string;                                      // file: расширение первого файла
   truncated?: boolean;                               // текст усечён до 2 МБ
   dir?: string;                                      // file: каталог первого файла (хвост пути; W3, FIX-08)
+  shot?: ShotMeta;                                   // screenshot / правленая image (W5, §9.10)
 }
 
 export interface Clip {
@@ -1314,7 +1333,7 @@ export interface FeedQuery {
 }
 export interface Page { items: Clip[]; nextCursor: string | null }
 export interface Counts { all: number; kinds: Record<Kind, number>; favorites: number; snippets: number;
-  folders: Record<number, number> }
+  folders: Record<number, number> }   // kinds.screenshot — W5 («Counts += screenshot» §18.10)
 ```
 
 ### 9.4. Настройки
@@ -1332,14 +1351,16 @@ export interface Settings {
     mergeSeparator: 'newline' | 'space' | 'tab' | 'none';
     pasteKeys: { exe: string; chord: 'ctrl+v' | 'shift+insert' | 'ctrl+shift+v' }[];
   };
-  hotkeys: { summon: string; stackNext: string; pauseToggle: string; ignoreNext: string }; // "" = не задан
+  hotkeys: { summon: string; stackNext: string; pauseToggle: string; ignoreNext: string;   // "" = не задан
+             shotRegion: string; shotScreen: string; shotWindow: string; shotRepeat: string; shotText: string }; // W5
   storage: { retention: '1d' | '1w' | '1m' | '3m' | '6m' | '1y' | 'forever';
              maxEntries: number; maxSizeMb: number;          // 0 = без ограничения
-             types: Record<Kind, boolean> };
+             types: Record<Kind, boolean> };                 // + screenshot (W5)
   privacy: { respectMarkers: boolean; ignoredApps: string[]; secretPatterns: boolean };
   stack: { newlineAfterPaste: boolean };
   ocr: { enabled: boolean; language: 'auto' | string };
   window: { settingsBounds: { x: number; y: number; w: number; h: number } | null };
+  screenshot: ScreenshotSettings;                            // W5, §9.10
 }
 export interface SettingsResult { settings: Settings; errors: { field: string; code: 'taken' | 'invalid' }[] }
 ```
@@ -1350,7 +1371,9 @@ closeOnCopy true · alwaysPlain false · bumpOnPaste false · rememberSearch 60s
 mergeSeparator newline · pasteKeys [] · hotkeys summon `"Alt + V"`, stackNext `"Alt + Shift + V"`,
 остальные `""` · retention 3m · maxEntries 5000 · maxSizeMb 1024 · все типы true ·
 respectMarkers true · ignoredApps `[keepass.exe, keepassxc.exe, 1password.exe, bitwarden.exe]` ·
-secretPatterns true · newlineAfterPaste false · ocr enabled true, language auto.
+secretPatterns true · newlineAfterPaste false · ocr enabled true, language auto. W5: shotRegion
+`"PrtSc"`, shotScreen `"Ctrl + PrtSc"`, остальные три `""`; `types.screenshot` true; `screenshot` —
+§9.10.
 
 ### 9.5. Прочие типы
 
@@ -1416,6 +1439,26 @@ export interface ImportReport { imported: number; skipped: number; folders: numb
 | `ocr_status` / `ocr_reindex` / `clip_ocr` | → `{ available, languages, pending }` / `()` / `id` → `string` | ocr (W2) |
 | `import_lt_probe` / `import_lt_run` | → `ImportProbe` / `ImportReport` | import (W2) |
 | `backup_export` / `backup_import` | → `string\|null` / `mode: 'replace'\|'merge'` → `ImportReport` (отмена диалога: экспорт → `null`, восстановление → `invalid: cancelled`; §17.6) | import (W2) |
+| `shot_capture` | `mode: ShotMode, delay?: number` → `()` (`region`/`text` — оверлей; `screen`/`window`/`repeat` — сразу коммит; `delay` — обратный отсчёт, с) | screenshot · session (W6-A) |
+| `shot_session` | → `ShotSession \| null` | screenshot · session (W6-A) |
+| `shot_stage` | `sessionId, stage: ShotStage` → `()` | screenshot · session (W6-A) |
+| `shot_commit` | **сырое тело** §18.4 (`[u32 LE N][JSON ShotCommit][RGBA \| ничего]`) → `ShotCommitResult` | screenshot · commit (W6-A) |
+| `shot_cancel` | `sessionId` → `()` | screenshot · session (W6-A) |
+| `shot_edit` | `id` → `()` (открыть окно редактора) | screenshot · editor (W6-B) |
+| `shot_editor_get` | → `ShotEditorPayload \| null` | screenshot · editor (W6-B) |
+| `shot_editor_switch` | `accept: boolean` → `()` | screenshot · editor (W6-B) |
+| `shot_editor_commit` | **сырое тело** (JSON `ShotEditorCommit`) → `Clip` | screenshot · commit (W6-A) + editor (W6-B) |
+| `shot_pin` | `id` → `()` | screenshot · pin (W6-B) |
+| `shot_pin_get` | → `PinPayload \| null` (по метке вызывающего окна) | screenshot · pin (W6-B) |
+| `shot_pin_resize` | `scale: number` → `()` | screenshot · pin (W6-B) |
+| `shot_pin_close` | → `()` | screenshot · pin (W6-B) |
+| `shot_save` | `id` → `string` (путь в папке снимков) | screenshot · files (W6-A) |
+| `shot_save_as` | `id` → `string \| null` (диалог) | screenshot · files (W6-A) |
+| `shot_reveal` | `id` → `()` (Проводник с выделением сохранённого файла) | screenshot · files (W6-A) |
+| `shots_hud_layout` | `height: number` → `()` (логические px стопки QAO) | screenshot · qao (W6-B) |
+| `shots_hud_hide` | → `()` | screenshot · qao (W6-B) |
+| `shot_status` | → `ShotStatus` | screenshot · status (W6-B) |
+| `open_windows_settings` | `page: WindowsSettingsPage` → `()` (`keyboard` = `ms-settings:easeofaccess-keyboard`) | screenshot · status (W6-B) |
 
 Ошибки команд — `Result<T, String>` с машинным кодом в начале строки (`"not_found: …"`,
 `"busy: …"`, `"invalid: …"`, `"failed: …"` — сбой ОС/плагина, добавлен в W0; заглушки —
@@ -1435,10 +1478,14 @@ export interface ImportReport { imported: number; skipped: number; folders: numb
 | `settings:changed` ⚑ | `Settings` | settings → все |
 | `settings:navigate` | `{ section: string }` | picker (`settings_open`) → settings |
 | `hotkeys:captured` | `{ combo: string }` | hotkeys → settings |
-| `hud:show` | `{ kind: 'copied'\|'stack_empty'\|'paused'\|'elevated'\|'resumed'\|'skip_next'; text?: string }` (`resumed`/`skip_next` — W1-D, аддитивно; `text` — подпись чипа сочетания `{keys}`, напр. «Shift+Insert», W2-F; нет — «Ctrl+V») | picker/paste/hotkeys → hud |
+| `hud:show` | `{ kind: 'copied'\|'stack_empty'\|'paused'\|'elevated'\|'resumed'\|'skip_next'\|'countdown'\|'shot_failed'\|'text_copied'\|'text_empty'; text?: string }` (`resumed`/`skip_next` — W1-D, аддитивно; `text` — подпись чипа сочетания `{keys}`, напр. «Shift+Insert», W2-F; нет — «Ctrl+V»; W5: `countdown` — `text` = оставшиеся секунды в том же чипе, `shot_failed` / `text_copied` / `text_empty` — §18.3–18.4) | picker/paste/hotkeys/screenshot → hud |
 | `ocr:progress` | `{ done: number; total: number }` | ocr → settings |
 | `import:progress` | `{ phase: string; done: number; total: number }` | import → settings |
 | `theme://changed` ⚑ | `'light'\|'dark'` | theme → все |
+| `shot:session` | `ShotSession` | screenshot → capture (начало сессии, смена монитора) — W5 |
+| `shot:end` | `ShotEnd { sessionId }` | screenshot → capture, shots — W5 |
+| `shot:added` | `ShotAdded { clip: Clip\|null; savedPath; tempPath; monitor; error: 'save_failed'\|null }` | screenshot → shots — W5 |
+| `shot:editor` | `ShotEditorPayload` | screenshot → editor — W5 |
 
 **Фронт отличает свои изменения от чужих по `origin`:** плашка «Новые записи» — только для
 `origin: 'capture'`.
@@ -1464,6 +1511,14 @@ no-store`: это содержимое буфера, и превью удалё�
 кэшировать не разрешает). Заново картинка запрашивается только новой страницей (перезагрузка окна) —
 это и есть цель `no-store`. Id записей не переиспользуются (`AUTOINCREMENT`), так что удалённую картинку
 в памяти страницы новая запись не «унаследует».
+
+**Скриншоты (W5, §18.3).** Замыкание схемы в `lib.rs` отдаёт пути `screenshot::owns_uri` (`/shot/…`,
+`/base/…`) в `screenshot::serve_uri(app, path) -> Option<(mime, bytes)>` (заглушка W5 — всегда `None`
+→ 404; наполняет W6-A в `screenshot/frame.rs`), остальное — `store::serve_uri`, как было. Ответ тот же:
+`Cache-Control` из `store::cache_control` (для `/shot` и `/base` — `no-store`, тест
+`screenshot::tests::liq_routes_and_their_cache_policy`), ACAO `*`.
+`/shot/<sessionId>/<monitorIndex>.bmp` — кадр монитора сессии; `/base/<clipId>?v=<n>` — исходник
+картинки для редактора.
 
 ### 9.9. Уточнения контракта (W0, 2026-11-26)
 
@@ -1515,6 +1570,69 @@ no-store`: это содержимое буфера, и превью удалё�
   `settings_set` список с дублями по-прежнему отвергает (`invalid`).
 - **Тема.** `theme://changed` несёт разрешённую тему (`'light'|'dark'`); шлётся при смене
   `general.theme` и при смене темы Windows, если выбрано `system`.
+
+### 9.10. Скриншоты (W5-A, 2026-11-26)
+
+Контракт §18.10 внесён в код аддитивно (`model.rs` ≡ `types.ts`, раздел «§9.10 Screenshots»), версия
+настроек остаётся 1. Типы — как в §18.10; здесь — то, что §18.10 не задавал, и где код уточняет его.
+
+- **Именованные типы для inline-форм §18.10:** `ShotMeta` (`ClipMeta.shot`), `ShotSessionMode`
+  (`'region'|'text'`), `ShotStage`, `ShotEditorAction`, `ShotAddedError`, `WindowsSettingsPage`,
+  `ScreenshotSettings` + `ShotFormat` / `ShotAfterCapture` / `ShotCorner`, payload событий `ShotEnd`,
+  `ShotAdded`. `ShotStatus.hotkeyErrors` — `SettingsError[]` (та же форма `{field, code}`).
+- **`Rect`** — `{x, y, w, h}` числами (Rust `f64`): оверлей переводит координаты указателя и может
+  прислать дробные; коммит округляет и зажимает в кадр (W6-A, `clamp_crop`). `WinRect` и
+  `MonitorFrame` — целые физ. px (их отдаёт Rust).
+- **`AnnotDoc` / `AnnotObject`** (§18.6) — только в TS; в Rust поле `doc` — `serde_json::Value`
+  (`Option` там, где `AnnotDoc | null`), Rust документ хранит и передаёт, не разбирая.
+  `tests/contract.test.mjs` держит `AnnotDoc` в списке TS-only.
+- **`Counts += screenshot`** — это `Counts.kinds.screenshot`: `kinds` — `Record<Kind, number>`, ключ
+  появился вместе с `Kind`. Отдельного поля верхнего уровня нет. Так же `storage.types.screenshot`.
+  Пилюля «Картинки» в шелфе уже считает `image + screenshot` (`pills.ts`).
+- **`ScreenshotSettings`** (дефолты §18.10, фикстура `tests/fixtures/settings.default.json`): `quick`
+  false · `magnifier` true · `dimensions` true · `sound` true · `copy` true · `save` true · `folder` ""
+  · `fileName` "Liqlip {date} {time}" · `format` png · `jpgQuality` 90 · `afterCapture` overlay ·
+  `corner` left · `timeout` 10. Проверка (`settings::validate` ≡ мок): `folder` ≤ 260 символов без
+  управляющих; `fileName` непустой, ≤ 120, без `< > : " / \ | ? *` (зарезервированы в именах файлов
+  Windows, learn.microsoft.com «Naming Files, Paths, and Namespaces»); `jpgQuality` 60–100; `timeout`
+  0–3600 (UI предлагает 0/5/10/30/60). Пять `hotkeys.shot*` — длина ≤ 64, без управляющих (как
+  остальные), `revert_hotkey` знает их поля.
+- **Старый `settings.json`** (1.0) грузится без потерь — тест `settings::tests::a_v1_0_file_upgrades_without_loss`
+  на фикстуре `tests/fixtures/settings.v1.0.json`. Новые поля: `#[serde(default)]` (`Settings.screenshot`,
+  контейнерный default у `ScreenshotSettings`, `default = …` у пяти хоткеев). Вложенный объект
+  `storage.types` ленивый загрузчик (`parse_lenient`) накладывает **по ключам** на дефолт
+  (`overlay_nested`): старые тумблеры остаются, `screenshot` получает `true`. Мок (`localStorage`)
+  сливает так же.
+- **Хоткеи** `shot*` хранятся и проверяются, но **не регистрируются** до W6-A (движок знает 4 слота,
+  `hotkeys::combo::FIELDS`); тест-хелпер `combo::tests::hk` заполняет их пустыми. Окно настроек
+  показывает по-прежнему 4 глобальных действия (`HOTKEY_ACTIONS`), `HOTKEY_DEFAULTS` /
+  `HOTKEY_SUGGESTIONS` знают все 9 (W6-F добавляет группу «Скриншоты»).
+- **Аргументы команд (ключи JS):** `shot_capture {mode, delay}` (`delay` можно `null`/не передавать),
+  `shot_stage {sessionId, stage}`, `shot_cancel {sessionId}`, `shot_edit/shot_pin/shot_save/
+  shot_save_as/shot_reveal {id}`, `shot_editor_switch {accept}`, `shot_pin_resize {scale}`,
+  `shots_hud_layout {height}`, `open_windows_settings {page}`. `shot_pin_get/resize/close` получают
+  вызывающее окно (`tauri::WebviewWindow` — аргумент команды, JS его не передаёт).
+- **Сырое тело** (`shot_commit`, `shot_editor_commit`): TS — `frameBody(header, rgba?)`
+  (`src/lib/ipc/frame.ts`) → `invoke(cmd, Uint8Array)` (`@tauri-apps/api` 2.11: `InvokeArgs` принимает
+  `Uint8Array`; v2.tauri.app «Calling Rust» → raw request); заголовки не нужны — всё в теле. Rust —
+  `screenshot/body.rs`: `Request::body()` → `InvokeBody::Raw` (tauri 2.11.2); запасной путь
+  `postMessage` присылает те же байты JSON-массивом чисел — тоже принимается. Любое битое тело —
+  `invalid: …` (короткий префикс, пустой/обрезанный/не тот JSON, пиксели при 0×0, не
+  `width*height*4`, сторона > 32 768, заголовок > 64 МБ); тесты `screenshot::body::tests` ≡
+  `tests/shotFrame.test.mjs`. Делегату приходит заголовок и пиксели срезом тела (`Option<&[u8]>`).
+- **Все команды screenshot — `async`** (не главный поток: синхронная команда Tauri идёт на главном
+  потоке — v2.tauri.app «Calling Rust», Async Commands): построение окна из `shot_edit`/`shot_pin` — по
+  документированному безопасному пути, и ни одна команда не ждёт замок, который держит поток,
+  ждущий главный поток.
+- **Заглушки W5:** каждая команда — делегат в функцию своего подмодуля (`screenshot/{session,commit,
+  files,editor,pin,qao,status}.rs`), каждая возвращает `Err("unimplemented: <команда>")`; `frame::serve`
+  → `None` (404); `session::init`, `windows::init`, `session::on_capture_close`,
+  `editor::after_commit` — пустые. Полный список сигнатур — §18.10 «Заглушки».
+- **`Kind::is_image()` / `isImageKind(kind)`** — «картинка» = `image | screenshot`. W5 перевёл на них
+  ветки вставки/копирования/drag-out/открытия/OCR (`paste/{compose,dragout,open,stack}.rs`,
+  `ocr/mod.rs`), хэш (`content.rs`: семейство `image` — дедуп снимка с той же картинкой), шелф
+  (карточка, Quick Look, меню, `preview.ts`, пилюля «Картинки»), мок. **Не тронуто (W6-A):** `store/*`
+  (в т. ч. SQL `kind = 'image'` в `store/{ocr,media}.rs`), `import/backup.rs`.
 
 ## 10. Фронтенд
 
@@ -1604,6 +1722,14 @@ stroke 1.5, `1em`), реестр `src/lib/icons.ts`, лицензия `public/li
 `settingsDefaults` (мок ≡ `tests/fixtures/settings.default.json` ≡ Rust), `ipcMock` (поведение мока),
 `hotkeyCapture` (перенос). Хелпер `tests/helpers/bundle.mjs` собирает TS-модули esbuild'ом в один ESM.
 
+**W5 (скриншоты, фундамент).** Node: `shotFrame` (кадрирование тела ≡ Rust `body.rs`), `shotsMock`
+(мок скриншотов: сессия и фальшивый рабочий стол, коммит → запись + события, редактор, закрепление,
+файлы, статус); `contract` считает 87 команд и держит `AnnotDoc` TS-only; `ocrMock` — очередь OCR
+охватывает и `screenshot`. Rust: `screenshot::body::tests` (5), `screenshot::tests` (маршруты `liq`),
+`settings::tests::{a_v1_0_file_upgrades_without_loss, screenshot_fields_are_validated}` (фикстура
+`tests/fixtures/settings.v1.0.json`), `model::tests::screenshot_wire_shapes`,
+`paste::compose::tests::screenshot_composes_like_an_image`.
+
 ## 13. Владение файлами и правила для агентов
 
 - **Файлы-узлы координатора:** `src-tauri/src/lib.rs`, `src-tauri/tauri.conf.json`,
@@ -1614,6 +1740,13 @@ stroke 1.5, `1em`), реестр `src/lib/icons.ts`, лицензия `public/li
   `src/lib/ipc/mock/bus.ts`, `src/lib/{appearance,theme.svelte,hotkey,hotkeyCapture,scrollFade,browserKeys}.ts`,
   `src/lib/components/**`, `tests/{contract,settingsDefaults,ipcMock}.test.mjs`,
   `tests/helpers/`, `tests/fixtures/`. Нужна правка — сниппет в отчёте.
+- **Скриншоты (W5–W6):** владение зонами — **§18.1**. С W5 к узлам добавлены
+  `src-tauri/src/screenshot/{mod,body}.rs` (команды-делегаты, состояние, маршруты `liq`, кадрирование
+  тела), `src/lib/ipc/frame.ts`, `src/lib/ipc/mock/shots.ts`, `capabilities/screenshot.json`,
+  `capture.html` · `shots.html` · `editor.html` · `pin.html`, `vite.config.ts`. Подмодули
+  `screenshot/{grab,targets,session,frame,commit,files}.rs` — W6-A, `{windows,qao,editor,pin,status}.rs`
+  — W6-B: каждая зона держит своё состояние в своём файле (`ScreenshotState` хранит `Mutex<зона::State>`),
+  так что `mod.rs` им править не нужно.
 - Контракт: агент может **аддитивно** добавить поле/команду, если без этого задача не решается,
   — в обоих файлах (`model.rs` + `types.ts`) и с явным пунктом в отчёте. Переименовывать и
   удалять — нельзя. Регистрацию новой команды в `lib.rs` агент сдаёт сниппетом.
@@ -1706,6 +1839,9 @@ pub fn hotkeys_captured(app, combo: &str); pub fn hud_show(app, &HudShow);
 pub fn ocr_progress(app, &OcrProgress);    pub fn import_progress(app, &ImportProgress);
 pub fn theme_changed(app, ResolvedTheme);
 pub const PICKER: &str = "picker"; SETTINGS = "settings"; HUD = "hud";   // метки окон
+// W5: pub fn shot_session(app, &ShotSession); shot_end(app, session_id: i64); shot_added(app, &ShotAdded);
+//     shot_editor(app, &ShotEditorPayload); метки CAPTURE = "capture", SHOTS = "shots", EDITOR = "editor",
+//     PIN_PREFIX = "pin-"
 
 // tray.rs
 pub fn refresh(app: &AppHandle);           // перестроить меню/иконку/подсказку (любой поток)
@@ -1851,6 +1987,20 @@ pub fn apply_settings(app: &AppHandle, prev: &HotkeySettings, next: &HotkeySetti
 **ocr (W2-A)** — `pub fn start(app: &AppHandle)` (setup шаг 5, после `store::init`) + команды; аддитивно `pub fn wake(app: &AppHandle)` — разбудить очередь и поставить в неё картинки, ни разу не стоявшие в очереди (для импорта). Внутри хранилища — `store/ocr.rs` (§5a.2). **import (W2-B)** — только
 команды; методы `Store` для импорта и восстановления — `store/bulk.rs` (`pub(crate) mod bulk`,
 §17.7); после импорта и восстановления зовёт `ocr::wake`.
+
+**screenshot (W5 → W6-A/W6-B)** — `src-tauri/src/screenshot/mod.rs` (узел) и заглушки подмодулей
+(полный список — §18.10 «Заглушки»):
+
+```rust
+pub struct ScreenshotState { capture: Mutex<session::SessionState>, qao: Mutex<qao::QaoState>,
+                             editor: Mutex<editor::EditorState>, pins: Mutex<pin::PinState> } // manage() в шаге 5
+pub fn init(app: &AppHandle);                           // шаг 5: session::init + windows::init
+pub fn on_capture_close(app: &AppHandle);               // ← lib.rs CloseRequested окна capture → session::on_capture_close
+pub fn owns_uri(path: &str) -> bool;                    // `/shot/…` | `/base/…`
+pub fn serve_uri(app: &AppHandle, path: &str) -> Option<(String, Vec<u8>)>;   // → frame::serve (404 до W6-A)
+pub(crate) mod windows { pub(crate) fn exclude_from_capture(win: &WebviewWindow) -> Result<(), String>; } // WDA_EXCLUDEFROMCAPTURE
+// model.rs: Kind::is_image(self) -> bool  (image | screenshot)
+```
 
 **Фронт.** Окна общаются с Rust только через `src/lib/ipc/commands.ts` (`call` → `invoke` или мок) и
 `events.ts` (`on*` → `listen` или мок-шина). Тема/язык окна — `initAppearance()` из `appearance.ts`
@@ -2341,7 +2491,10 @@ impl Store {
 
 ## 18. Скриншоты (`screenshot/`, `src/lib/editor/`, окна `capture` · `shots` · `editor` · `pin-*`) — W5–W8
 
-> Замер: 2026-11-26 (план W5, кода ещё нет). Продукт — SPEC §9. Источник переноса и разбор его
+> Замер: 2026-11-26 (W5-A: фундамент — контракт §18.10 в `model.rs` ≡ `types.ts` и §9.10, настройки,
+> модуль `screenshot/` с командами-делегатами и заглушками, окно `capture` в `setup()`, маршруты `liq`,
+> права, точки входа четырёх окон с заглушками, мок `mock/shots.ts`; гейты зелёные; нативно не
+> запускалось; захвата, окон по требованию, редактора ещё нет — это W6). Продукт — SPEC §9. Источник переноса и разбор его
 > дефектов — `docs/prompts/_RESEARCH-W5-SCREENSHOT-SOURCE.md`; эталоны взаимодействия —
 > `docs/prompts/_RESEARCH-W5-ANNOTATION-UX.md` (локальные файлы координатора, абсолютные пути — в
 > промптах). Studio не переносится; всё, что в LT существует только ради studio (кнопка Mockup,
@@ -2358,7 +2511,7 @@ impl Store {
 | Оверлей захвата | `src/windows/capture/**` · `capture.html` · `tests/capture*.test.mjs` | **W6-D** |
 | Миниатюры (QAO) и закреплённые окна | `src/windows/shots/**` · `src/windows/pin/**` · `shots.html` · `pin.html` · `tests/shots*.test.mjs` | **W6-E** |
 | Шелф и настройки | карточка/пилюля/действия/токен в `src/windows/picker/**` · раздел `src/windows/settings/sections/Screenshot.svelte` + группа хоткеев + онбординг | **W6-F** |
-| Узлы (W5-A, затем координатор) | `lib.rs` · `tauri.conf.json` · `capabilities/*` · `model.rs` + `src/lib/ipc/types.ts` · `ipc/{commands,events,runtime}.ts` · `src/lib/ipc/mock/**` · `settings.rs` · `screenshot/mod.rs` (команды-делегаты) · `vite.config.ts` · `i18n/{en,ru}.ts` (каждый агент дописывает свой блок-префикс) · `app.css` | **W5-A** |
+| Узлы (W5-A, затем координатор) | `lib.rs` · `tauri.conf.json` · `capabilities/*` · `model.rs` + `src/lib/ipc/types.ts` · `ipc/{commands,events,runtime,frame}.ts` · `src/lib/ipc/mock/**` · `settings.rs` · `events.rs` · `screenshot/mod.rs` (команды-делегаты, `ScreenshotState`, маршруты) · `screenshot/body.rs` (кадрирование тела) · `vite.config.ts` · `*.html` · `i18n/{en,ru}.ts` (каждый агент дописывает свой блок-префикс) · `app.css` | **W5-A** |
 
 Префиксы i18n: `editor.*` (C) · `capture.*` (D) · `shots.*`, `pin.*` (E) · `settings.shot.*`,
 `picker.shot.*`, `onboarding.shot.*` (F). Нативные строки (трей, диалоги) — `i18n_native.rs` (A);
@@ -2589,7 +2742,7 @@ export interface AnnotDoc {
 - QAO держит стопку на фронте (`stack.ts` LT как основа: до 4, новая снизу); на каждое `shot:added`
   — карточка + звук (WebAudio, синтез щелчка ~60 мс, если `settings.screenshot.sound`); высоту окна
   сообщает `shots_hud_layout({ height })`, пустая стопка → `shots_hud_hide()`. Таймер — по
-  `settings.screenshot.overlayTimeout`, пауза на ховере/драге. Кнопки — §SPEC 9.4 через команды
+  `settings.screenshot.timeout` (0 — не скрывать), пауза на ховере/драге. Кнопки — §SPEC 9.4 через команды
   §18.10 и существующие `clip_copy`, `clips_delete`, `clip_ocr` + `text_copy`, `clip_drag_out`.
 - `shot:session` с этапом `select` → QAO прячется (`shots_hud_hide` с сохранением стопки), после
   коммита/отмены возвращается (Rust показывает окно снова, если стопка не пуста).
@@ -2698,6 +2851,58 @@ screenshot: {
 мок-ленту и шлёт `shot:added`; `shot_editor_get` отдаёт картинку записи из мока; флаги `?mock-shot=text`
 (режим OCR), `?mock-shot-quick=1`. Хосты окон открываются в браузере: `/capture.html`, `/editor.html?clip=<id>`,
 `/shots.html` (кнопка «добавить снимок» в мок-режиме), `/pin.html?clip=<id>`.
+
+**Мок — как сделано (W5-A).** `mock/shots.ts`: `shot_session` в браузере всегда отдаёт сессию (после
+конца прошлой — новую, `shot:session`); кадр — canvas → PNG → `blob:` (тот же origin — canvas не
+tainted; `blob:` в CSP не нужен: в браузере CSP Tauri не действует, в Tauri мок не используется),
+1920×1080 × `?mock-scale` (1–4), пять окон с заголовками и строками, у «Browser» — две панели-ребёнка;
+`windows` = `fakeDesktop(scale).windows` (чистая функция, тест). `shot_commit` разбирает тело тем же
+`parseFrameBody`, проверяет id сессии и действие, зажимает `rect` (`clampRect`), картинка — сведённый
+RGBA или кроп кадра; запись `screenshot` в мок-ленту (`clips:changed {origin:'capture', change:'added'}`)
+с `meta.shot`, затем `shot:end` и — при `afterCapture: overlay` — `shot:added` (`clip: null` +
+`tempPath`, если тип выключен в `storage.types`); `action: 'text'` — текст и HUD `text_copied` без
+записи. `shot_capture`: `screen`/`window`/`repeat` (без прошлой области — как `region`) коммитят сразу,
+`delay` шлёт `hud:show countdown` по секундам; повторный триггер при открытой сессии игнорируется.
+Редактор: `shot_editor_get` — по `?clip=`, иначе последняя `shot_edit`, иначе новейшая картинка;
+`shot_editor_commit {done}` хранит документ и первый исходник (`baseUrl`). Плюс флаги
+`?mock-snipping=1` (`shot_status`: PrtSc у «Ножниц», `hotkeys.shotRegion` — `taken`) и
+`?mock-shot-dialog=cancel`. Сид: до 8 картинок сида (через одну, новые первыми) превращаются в
+`screenshot` со своей картинкой и `meta.shot` — число записей сида не меняется. Флаги описаны в шапке
+`mock/bus.ts`. В node (без DOM) картинки — SVG data URL.
+
+**Заглушки (W5-A → W6).** Команды — в `screenshot/mod.rs` (узел), тело каждой — один делегат. Агент
+наполняет **функцию своего подмодуля**, сигнатуры не меняет (нужно иначе — в отчёт). Все `pub(crate)`,
+`app: &AppHandle`, ошибки — `Err("unimplemented: <команда>")` до реализации:
+
+| Подмодуль | Функции (W5-заглушки) | Агент |
+|---|---|---|
+| `session.rs` | `struct SessionState` (Default; поля — W6-A) · `init(app)` (пусто) · `capture(app, mode: ShotMode, delay: Option<u32>) -> Result<(), String>` · `current(app) -> Result<Option<ShotSession>, String>` · `stage(app, session_id: i64, stage: ShotStage) -> Result<(), String>` · `cancel(app, session_id: i64) -> Result<(), String>` · `on_capture_close(app)` (пусто) | W6-A |
+| `commit.rs` | `commit(app, req: ShotCommit, rgba: Option<&[u8]>) -> Result<ShotCommitResult, String>` · `editor_commit(app, req: ShotEditorCommit, rgba: Option<&[u8]>) -> Result<Clip, String>` (пиксели — срез тела IPC, живёт до конца вызова; на другой поток — `to_vec()`) | W6-A |
+| `files.rs` | `save(app, id: i64) -> Result<String, String>` · `async save_as(app: AppHandle, id: i64) -> Result<Option<String>, String>` · `reveal(app, id: i64) -> Result<(), String>` | W6-A (по §18.1; в диспетчере W6 «сохранение» записано за B — решает координатор) |
+| `frame.rs` | `serve(app, path: &str) -> Option<(String, Vec<u8>)>` (`None` → 404) | W6-A |
+| `grab.rs` · `targets.rs` | пустые (только описание): делегатов команд нет | W6-A |
+| `windows.rs` | `init(app)` (пусто) · `exclude_from_capture(win: &WebviewWindow) -> Result<(), String>` (**реализовано** W5) | W6-B |
+| `qao.rs` | `struct QaoState` · `layout(app, height: f64) -> Result<(), String>` · `hide(app) -> Result<(), String>` | W6-B |
+| `editor.rs` | `struct EditorState` · `open(app, id: i64) -> Result<(), String>` · `payload(app) -> Result<Option<ShotEditorPayload>, String>` · `switch(app, accept: bool) -> Result<(), String>` · `after_commit(app, action: ShotEditorAction)` (пусто; `done` → закрыть окно) | W6-B |
+| `pin.rs` | `struct PinState` · `open(app, id: i64) -> Result<(), String>` · `payload(app, win: &WebviewWindow) -> Result<Option<PinPayload>, String>` · `resize(app, win, scale: f64) -> Result<(), String>` · `close(app, win) -> Result<(), String>` | W6-B |
+| `status.rs` | `status(app) -> Result<ShotStatus, String>` · `open_windows_settings(app, page: WindowsSettingsPage) -> Result<(), String>` | W6-B |
+
+Фронт: `src/windows/{capture,shots,editor,pin}/` — корни-заглушки (`<name>.ts` монтирует `<Name>.svelte`:
+шрифты, `app.css`, `initAppearance()`, глотание клавиш браузера `isBrowserShortcut`; у `capture`/`shots`/`pin`
+прозрачный фон) с одной строкой `<префикс>.soon` — W6-C/D/E заменяют содержимое корня. Обёртки команд —
+`commands.ts` (`shotCapture` … `openWindowsSettings`, для тел — `shotCommit(commit, rgba?)` /
+`shotEditorCommit(commit, rgba?)` через `frameBody`), подписки — `events.ts` (`onShotSession`,
+`onShotEnd`, `onShotAdded`, `onShotEditor`; `onHudShow` с новыми видами). HUD-окно (`src/windows/hud/`,
+владельца в W6 нет) уже показывает `countdown` / `shot_failed` / `text_copied` / `text_empty`
+(ключи `hud.*`, иконки clock / warning / ocr / info).
+
+**Где код уточняет §18.10** (подробно — §9.10): `Counts += screenshot` = `Counts.kinds.screenshot`;
+`ShotStatus.hotkeyErrors` — `SettingsError[]`; `shot_capture` и `shots_hud_layout` — именованные
+аргументы (`{mode, delay}`, `{height}`), а не объект-запрос; `serve_uri` отдаёт `(mime, bytes)`, ответ
+строит `lib.rs`; после `shot_editor_commit` вызывается `editor::after_commit` (W6-B); права — отдельный
+`capabilities/screenshot.json` (`pin-*`: `core:window:allow-start-dragging`; `editor`:
+`core:window:allow-destroy` — `onCloseRequested` в `@tauri-apps/api` 2.11 сам зовёт `destroy()`, если
+обработчик не отменил закрытие); таймер QAO — поле `timeout` (в §18.8 было `overlayTimeout`).
 
 ### 18.11. Хоткеи (W6-A)
 

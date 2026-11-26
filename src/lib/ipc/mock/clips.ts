@@ -28,7 +28,7 @@ import type {
   TextPasteRequest,
   UndoResult,
 } from "../types";
-import { KINDS } from "../types";
+import { KINDS, isImageKind } from "../types";
 import { fail, flags, mockEmit, now, rng } from "./bus";
 import { makeClip, metrics, previewOf, seed, type MockClip, type MockDb, type MockSnippet } from "./seed";
 import { currentSettings } from "./settings";
@@ -104,7 +104,7 @@ function toDetail(m: MockClip): ClipDetail {
   };
 }
 
-const isTextKind = (k: Kind) => k !== "image" && k !== "file";
+const isTextKind = (k: Kind) => !isImageKind(k) && k !== "file";
 
 // ── feed ─────────────────────────────────────────────────────────────────────
 
@@ -545,8 +545,8 @@ function storageStats(): StorageStats {
   const live = db().clips;
   return {
     clips: live.filter(visible).length,
-    dbBytes: 512 * 1024 + live.filter((c) => c.kind !== "image").reduce((s, c) => s + c.size, 0),
-    mediaBytes: live.filter((c) => c.kind === "image").reduce((s, c) => s + c.size, 0),
+    dbBytes: 512 * 1024 + live.filter((c) => !isImageKind(c.kind)).reduce((s, c) => s + c.size, 0),
+    mediaBytes: live.filter((c) => isImageKind(c.kind)).reduce((s, c) => s + c.size, 0),
   };
 }
 
@@ -619,7 +619,7 @@ function clipPaste({ req }: Args): PasteOutcome {
   markUsed(list);
   hideForPaste(r.keepOpen);
   const o = outcome();
-  const images = list.filter((c) => c.kind === "image").length;
+  const images = list.filter((c) => isImageKind(c.kind)).length;
   return images > 0 && images < list.length ? { ...o, reason: o.reason ?? "partial" } : o;
 }
 
@@ -791,9 +791,9 @@ export const clipsHandlers: Record<string, (args: Args) => unknown> = {
   // Browsers gate real clipboard reads behind a permission prompt — the mock answers from its
   // own "clipboard" (see `clipboard` above).
   clipboard_text: clipboardText,
-  clip_open: openLike(["link", "file", "image"]),
-  clip_open_with: openLike(["file", "image"]),
-  clip_reveal: openLike(["file", "image"]),
+  clip_open: openLike(["link", "file", "image", "screenshot"]),
+  clip_open_with: openLike(["file", "image", "screenshot"]),
+  clip_reveal: openLike(["file", "image", "screenshot"]),
   clip_drag_out: ({ ids }): DragOutcome => {
     (ids as number[]).forEach(find);
     return "cancelled";

@@ -47,6 +47,12 @@ export default defineConfig({
         picker: resolve(root, "picker.html"),
         settings: resolve(root, "settings.html"),
         hud: resolve(root, "hud.html"),
+        // Screenshots (W5, ARCHITECTURE §18.2): the overlay (pre-created), then the QAO stack,
+        // the editor and the pinned pictures (built on demand).
+        capture: resolve(root, "capture.html"),
+        shots: resolve(root, "shots.html"),
+        editor: resolve(root, "editor.html"),
+        pin: resolve(root, "pin.html"),
       },
     },
   },

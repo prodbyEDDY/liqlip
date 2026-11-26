@@ -25,7 +25,12 @@
     "summon": "Alt + V",
     "stackNext": "Alt + Shift + V",
     "pauseToggle": "",
-    "ignoreNext": ""
+    "ignoreNext": "",
+    "shotRegion": "PrtSc",
+    "shotScreen": "Ctrl + PrtSc",
+    "shotWindow": "",
+    "shotRepeat": "",
+    "shotText": ""
   },
   "storage": {
     "retention": "3m",
@@ -38,7 +43,8 @@
       "color": true,
       "contact": true,
       "image": true,
-      "file": true
+      "file": true,
+      "screenshot": true
     }
   },
   "privacy": {
@@ -55,5 +61,20 @@
   },
   "window": {
     "settingsBounds": null
+  },
+  "screenshot": {
+    "quick": false,
+    "magnifier": true,
+    "dimensions": true,
+    "sound": true,
+    "copy": true,
+    "save": true,
+    "folder": "",
+    "fileName": "Liqlip {date} {time}",
+    "format": "png",
+    "jpgQuality": 90,
+    "afterCapture": "overlay",
+    "corner": "left",
+    "timeout": 10
   }
 }

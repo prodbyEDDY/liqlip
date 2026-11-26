@@ -8,8 +8,9 @@
 use crate::model::{
     AppMeta, Bounds, ClickAction, GeneralSettings, HotkeySettings, Language, MergeSeparator,
     OcrSettings, PathKind, PerKind, PickerSettings, Position, PrivacySettings, RememberSearch,
-    Retention, Settings, SettingsError, SettingsErrorCode, SettingsResult, StackSettings,
-    StorageSettings, ThemePref, WindowSettings,
+    Retention, ScreenshotSettings, Settings, SettingsError, SettingsErrorCode, SettingsResult,
+    ShotAfterCapture, ShotCorner, ShotFormat, StackSettings, StorageSettings, ThemePref,
+    WindowSettings,
 };
 use crate::{autostart, events, i18n_native, logx, theme};
 use parking_lot::{Mutex, RwLock};
@@ -54,6 +55,11 @@ impl Default for Settings {
                 stack_next: "Alt + Shift + V".into(),
                 pause_toggle: String::new(),
                 ignore_next: String::new(),
+                shot_region: default_shot_region(),
+                shot_screen: default_shot_screen(),
+                shot_window: String::new(),
+                shot_repeat: String::new(),
+                shot_text: String::new(),
             },
             storage: StorageSettings {
                 retention: Retention::Month3,
@@ -74,8 +80,40 @@ impl Default for Settings {
             stack: StackSettings { newline_after_paste: false },
             ocr: OcrSettings { enabled: true, language: "auto".into() },
             window: WindowSettings { settings_bounds: None },
+            screenshot: ScreenshotSettings::default(),
         }
     }
+}
+
+impl Default for ScreenshotSettings {
+    /// ARCHITECTURE §18.10 defaults (W5).
+    fn default() -> Self {
+        ScreenshotSettings {
+            quick: false,
+            magnifier: true,
+            dimensions: true,
+            sound: true,
+            copy: true,
+            save: true,
+            folder: String::new(),
+            file_name: "Liqlip {date} {time}".into(),
+            format: ShotFormat::Png,
+            jpg_quality: 90,
+            after_capture: ShotAfterCapture::Overlay,
+            corner: ShotCorner::Left,
+            timeout: 10,
+        }
+    }
+}
+
+/// `hotkeys.shotRegion` default (W5) — also the `serde(default)` of the field in `model.rs`.
+pub(crate) fn default_shot_region() -> String {
+    "PrtSc".into()
+}
+
+/// `hotkeys.shotScreen` default (W5) — also the `serde(default)` of the field in `model.rs`.
+pub(crate) fn default_shot_screen() -> String {
+    "Ctrl + PrtSc".into()
 }
 
 // ── State ───────────────────────────────────────────────────────────────────
@@ -314,7 +352,7 @@ fn parse_lenient(raw: &[u8]) -> (Settings, bool) {
                 for field in fields.keys() {
                     let Some(fv) = file_sec.get(field) else { continue };
                     let mut cand = acc.clone();
-                    cand[&section][field] = fv.clone();
+                    cand[&section][field] = overlay_nested(&cand[&section][field], fv);
                     if fits(&cand) {
                         acc = cand;
                     } else {
@@ -341,6 +379,24 @@ fn parse_lenient(raw: &[u8]) -> (Settings, bool) {
     let keys_dup = dedup_case_insensitive(&mut parsed.picker.paste_keys, |k| k.exe.as_str());
     let (s, errors) = validate(&defaults, parsed);
     (s, clean && !apps_dup && !keys_dup && errors.is_empty())
+}
+
+/// A nested object (`storage.types`) is overlaid key by key onto its default, so a key added
+/// in a later version (`screenshot`, W5) keeps its default while the user's other values stay;
+/// keys the default does not know are dropped. Anything else is taken as is.
+fn overlay_nested(default: &Value, file: &Value) -> Value {
+    match (default, file) {
+        (Value::Object(def), Value::Object(f)) => {
+            let mut merged = def.clone();
+            for (k, v) in f {
+                if merged.contains_key(k) {
+                    merged.insert(k.clone(), v.clone());
+                }
+            }
+            Value::Object(merged)
+        }
+        _ => file.clone(),
+    }
 }
 
 /// Drop every entry whose key equals an earlier one, ignoring case and surrounding spaces
@@ -398,6 +454,11 @@ pub(crate) fn validate(prev: &Settings, mut next: Settings) -> (Settings, Vec<Se
         ("hotkeys.stackNext", &mut next.hotkeys.stack_next, &prev.hotkeys.stack_next),
         ("hotkeys.pauseToggle", &mut next.hotkeys.pause_toggle, &prev.hotkeys.pause_toggle),
         ("hotkeys.ignoreNext", &mut next.hotkeys.ignore_next, &prev.hotkeys.ignore_next),
+        ("hotkeys.shotRegion", &mut next.hotkeys.shot_region, &prev.hotkeys.shot_region),
+        ("hotkeys.shotScreen", &mut next.hotkeys.shot_screen, &prev.hotkeys.shot_screen),
+        ("hotkeys.shotWindow", &mut next.hotkeys.shot_window, &prev.hotkeys.shot_window),
+        ("hotkeys.shotRepeat", &mut next.hotkeys.shot_repeat, &prev.hotkeys.shot_repeat),
+        ("hotkeys.shotText", &mut next.hotkeys.shot_text, &prev.hotkeys.shot_text),
     ] {
         *value = value.trim().to_string();
         // "" = not set. Parsing the chord itself is the hotkey engine's job (W1-D).
@@ -437,6 +498,8 @@ pub(crate) fn validate(prev: &Settings, mut next: Settings) -> (Settings, Vec<Se
         invalid(&mut errors, "ocr.language");
     }
 
+    validate_screenshot(&prev.screenshot, &mut next.screenshot, &mut errors);
+
     if let Some(b) = next.window.settings_bounds {
         let ok = (100..=100_000).contains(&b.w)
             && (100..=100_000).contains(&b.h)
@@ -451,6 +514,33 @@ pub(crate) fn validate(prev: &Settings, mut next: Settings) -> (Settings, Vec<Se
     (next, errors)
 }
 
+/// Characters Windows does not allow in a file name (learn.microsoft.com, "Naming Files, Paths,
+/// and Namespaces"); the `{date} {time} {app} {n}` placeholders are expanded by W6-A.
+const FILE_NAME_FORBIDDEN: &[char] = &['<', '>', ':', '"', '/', '\\', '|', '?', '*'];
+
+/// `screenshot.*` (W5, §18.10): folder = "" or a path; a file-name template without reserved
+/// characters; JPG quality 60–100; QAO timeout 0–3600 s (the UI offers 0/5/10/30/60).
+fn validate_screenshot(prev: &ScreenshotSettings, next: &mut ScreenshotSettings, errors: &mut Vec<SettingsError>) {
+    next.folder = next.folder.trim().to_string();
+    if next.folder.chars().count() > MAX_PATH_CHARS || next.folder.chars().any(char::is_control) {
+        next.folder = prev.folder.clone();
+        invalid(errors, "screenshot.folder");
+    }
+    next.file_name = next.file_name.trim().to_string();
+    if bad_name(&next.file_name, 120) || next.file_name.contains(FILE_NAME_FORBIDDEN) {
+        next.file_name = prev.file_name.clone();
+        invalid(errors, "screenshot.fileName");
+    }
+    if !(60..=100).contains(&next.jpg_quality) {
+        next.jpg_quality = prev.jpg_quality;
+        invalid(errors, "screenshot.jpgQuality");
+    }
+    if next.timeout > 3600 {
+        next.timeout = prev.timeout;
+        invalid(errors, "screenshot.timeout");
+    }
+}
+
 fn has_case_insensitive_dupes<'a>(items: impl Iterator<Item = &'a str>) -> bool {
     let mut seen = std::collections::HashSet::new();
     items.into_iter().any(|s| !seen.insert(s.to_lowercase()))
@@ -462,6 +552,11 @@ fn revert_hotkey(next: &mut HotkeySettings, prev: &HotkeySettings, field: &str) 
         "hotkeys.stackNext" => next.stack_next = prev.stack_next.clone(),
         "hotkeys.pauseToggle" => next.pause_toggle = prev.pause_toggle.clone(),
         "hotkeys.ignoreNext" => next.ignore_next = prev.ignore_next.clone(),
+        "hotkeys.shotRegion" => next.shot_region = prev.shot_region.clone(),
+        "hotkeys.shotScreen" => next.shot_screen = prev.shot_screen.clone(),
+        "hotkeys.shotWindow" => next.shot_window = prev.shot_window.clone(),
+        "hotkeys.shotRepeat" => next.shot_repeat = prev.shot_repeat.clone(),
+        "hotkeys.shotText" => next.shot_text = prev.shot_text.clone(),
         _ => {}
     }
 }
@@ -583,6 +678,72 @@ mod tests {
         let fixture = include_str!("../../tests/fixtures/settings.default.json");
         let expected: Value = serde_json::from_str(fixture).unwrap();
         assert_eq!(serde_json::to_value(Settings::default()).unwrap(), expected);
+    }
+
+    /// W5: a `settings.json` written by Liqlip 1.0 (no screenshot hotkeys, no `screenshot`
+    /// section, `storage.types` without `screenshot`) loads without losing anything — every
+    /// user value stays, the new fields take their defaults, and the file counts as clean
+    /// (no `.invalid` copy). Strict deserialization (`serde(default)`) agrees, except the
+    /// nested `types` key, which only the lenient loader fills (its default is `true`).
+    #[test]
+    fn a_v1_0_file_upgrades_without_loss() {
+        let raw = include_str!("../../tests/fixtures/settings.v1.0.json");
+        let (s, clean) = parse_lenient(raw.as_bytes());
+        assert!(clean, "nothing in a 1.0 file is invalid");
+        let d = Settings::default();
+        assert_eq!(s.general.language, Language::Ru);
+        assert_eq!(s.picker.position, Position::Left);
+        assert_eq!(s.picker.paste_keys.len(), 1);
+        assert_eq!(s.hotkeys.summon, "Ctrl + Shift + Space");
+        assert_eq!(s.hotkeys.stack_next, "");
+        assert_eq!(s.hotkeys.pause_toggle, "Alt + Shift + P");
+        assert_eq!((s.hotkeys.shot_region.as_str(), s.hotkeys.shot_screen.as_str()), ("PrtSc", "Ctrl + PrtSc"));
+        assert_eq!((s.hotkeys.shot_window.as_str(), s.hotkeys.shot_repeat.as_str(), s.hotkeys.shot_text.as_str()), ("", "", ""));
+        assert_eq!(s.storage.retention, Retention::Year1);
+        assert!(!s.storage.types.code && !s.storage.types.image, "the user's type toggles stay");
+        assert!(s.storage.types.text && s.storage.types.file);
+        assert!(s.storage.types.screenshot, "the new type is saved by default");
+        assert_eq!(s.privacy.ignored_apps, vec!["keepass.exe", "vault.exe"]);
+        assert!(!s.ocr.enabled);
+        assert_eq!(s.window.settings_bounds, Some(Bounds { x: 120, y: 80, w: 1100, h: 760 }));
+        assert_eq!(s.screenshot, d.screenshot);
+
+        let strict: Value = serde_json::from_str(raw).unwrap();
+        let mut with_type = strict.clone();
+        with_type["storage"]["types"]["screenshot"] = Value::Bool(true);
+        let parsed: Settings = serde_json::from_value(with_type).expect("serde(default) fills the new fields");
+        assert_eq!(parsed.hotkeys, s.hotkeys);
+        assert_eq!(parsed.screenshot, d.screenshot);
+        // A partial `screenshot` section keeps what it has (container-level default).
+        let partial: ScreenshotSettings = serde_json::from_value(serde_json::json!({ "format": "jpg", "timeout": 0 })).unwrap();
+        assert_eq!((partial.format, partial.timeout, partial.jpg_quality), (ShotFormat::Jpg, 0, 90));
+    }
+
+    #[test]
+    fn screenshot_fields_are_validated() {
+        let prev = Settings::default();
+        let mut next = prev.clone();
+        next.screenshot.folder = "  D:\\Shots  ".into();
+        next.screenshot.file_name = "Shot {date}: {time}".into(); // ':' is reserved
+        next.screenshot.jpg_quality = 59;
+        next.screenshot.timeout = 30;
+        next.hotkeys.shot_window = "Alt + PrtSc".into();
+        next.hotkeys.shot_text = "x".repeat(65);
+        let (out, errors) = validate(&prev, next);
+        assert_eq!(out.screenshot.folder, "D:\\Shots");
+        assert_eq!(out.screenshot.file_name, "Liqlip {date} {time}");
+        assert_eq!(out.screenshot.jpg_quality, 90);
+        assert_eq!(out.screenshot.timeout, 30);
+        assert_eq!(out.hotkeys.shot_window, "Alt + PrtSc");
+        assert_eq!(out.hotkeys.shot_text, "");
+        let fields: Vec<_> = errors.iter().map(|e| e.field.as_str()).collect();
+        assert_eq!(fields, vec!["hotkeys.shotText", "screenshot.fileName", "screenshot.jpgQuality"]);
+        let mut next = prev.clone();
+        next.screenshot.file_name = "  ".into();
+        next.screenshot.timeout = 3601;
+        let (out, errors) = validate(&prev, next);
+        assert_eq!((out.screenshot.file_name.as_str(), out.screenshot.timeout), ("Liqlip {date} {time}", 10));
+        assert_eq!(errors.len(), 2);
     }
 
     #[test]
@@ -796,5 +957,10 @@ mod tests {
         revert_hotkey(&mut next, &prev, "hotkeys.summon");
         assert_eq!(next.summon, "Alt + V");
         assert_eq!(next.stack_next, "Ctrl + B");
+        next.shot_region = "Ctrl + Shift + 4".into();
+        next.shot_text = "Ctrl + Shift + T".into();
+        revert_hotkey(&mut next, &prev, "hotkeys.shotRegion");
+        assert_eq!(next.shot_region, "PrtSc");
+        assert_eq!(next.shot_text, "Ctrl + Shift + T");
     }
 }

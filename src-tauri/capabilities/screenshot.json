@@ -1,0 +1,16 @@
+{
+  "capabilities": [
+    {
+      "identifier": "screenshot-pin",
+      "description": "A pinned picture (W5, ARCHITECTURE §18.8) moves by dragging itself: startDragging() on mouse down.",
+      "windows": ["pin-*"],
+      "permissions": ["core:window:allow-start-dragging"]
+    },
+    {
+      "identifier": "screenshot-editor",
+      "description": "The editor window (W5, ARCHITECTURE §18.9) shows its own close dialog: onCloseRequested destroys the window when the handler does not prevent it.",
+      "windows": ["editor"],
+      "permissions": ["core:window:allow-destroy"]
+    }
+  ]
+}

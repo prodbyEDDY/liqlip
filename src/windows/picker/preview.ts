@@ -15,6 +15,7 @@ export function entryFormat(c: BadgeClip): string {
       return ext ? ext.toUpperCase() : "FILE";
     }
     case "image":
+    case "screenshot":
       return c.formats.includes("png") || c.formats.length === 0 ? "PNG" : c.formats[0].toUpperCase();
     case "contact":
       return (c.meta.contact ?? (c.preview.includes("@") ? "email" : "phone")) === "email" ? "EMAIL" : "TEL";
@@ -80,6 +81,7 @@ export function autoTitle(c: Pick<Clip, "kind" | "preview" | "meta" | "width" | 
     case "link":
       return hostPath(c.meta.url ?? c.preview) || null;
     case "image":
+    case "screenshot":
       return c.width && c.height ? `${c.width} × ${c.height}` : appName;
     default:
       return appName;

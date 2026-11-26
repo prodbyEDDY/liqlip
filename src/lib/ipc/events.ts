@@ -16,6 +16,10 @@ import type {
   ResolvedTheme,
   Settings,
   SettingsNavigate,
+  ShotAdded,
+  ShotEditorPayload,
+  ShotEnd,
+  ShotSession,
   Stack,
 } from "./types";
 
@@ -36,6 +40,10 @@ export const EVENTS = {
   ocrProgress: "ocr:progress",
   importProgress: "import:progress",
   themeChanged: "theme://changed",
+  shotSession: "shot:session",
+  shotEnd: "shot:end",
+  shotAdded: "shot:added",
+  shotEditor: "shot:editor",
 } as const;
 
 export type EventName = (typeof EVENTS)[keyof typeof EVENTS];
@@ -64,7 +72,7 @@ export const onSettingsChanged = (cb: (p: Settings) => void) => on(EVENTS.settin
 export const onSettingsNavigate = (cb: (p: SettingsNavigate) => void) => on(EVENTS.settingsNavigate, cb);
 /** hotkeys → settings; `combo === ""` = recording cancelled */
 export const onHotkeysCaptured = (cb: (p: HotkeysCaptured) => void) => on(EVENTS.hotkeysCaptured, cb);
-/** picker/paste → hud */
+/** picker/paste/hotkeys/screenshot → hud (W5 kinds: countdown · shot_failed · text_copied · text_empty) */
 export const onHudShow = (cb: (p: HudShow) => void) => on(EVENTS.hudShow, cb);
 /** ocr → settings */
 export const onOcrProgress = (cb: (p: OcrProgress) => void) => on(EVENTS.ocrProgress, cb);
@@ -72,3 +80,14 @@ export const onOcrProgress = (cb: (p: OcrProgress) => void) => on(EVENTS.ocrProg
 export const onImportProgress = (cb: (p: ImportProgress) => void) => on(EVENTS.importProgress, cb);
 /** theme → all windows (the resolved theme) */
 export const onThemeChanged = (cb: (p: ResolvedTheme) => void) => on(EVENTS.themeChanged, cb);
+
+// Screenshots (W5, ARCHITECTURE §18.10)
+
+/** screenshot → capture: a session started or moved to another monitor */
+export const onShotSession = (cb: (p: ShotSession) => void) => on(EVENTS.shotSession, cb);
+/** screenshot → capture, shots: the session ended (committed or cancelled) */
+export const onShotEnd = (cb: (p: ShotEnd) => void) => on(EVENTS.shotEnd, cb);
+/** screenshot → shots: a shot was taken (`clip: null` when screenshots are not kept) */
+export const onShotAdded = (cb: (p: ShotAdded) => void) => on(EVENTS.shotAdded, cb);
+/** screenshot → editor: show another record in the open editor */
+export const onShotEditor = (cb: (p: ShotEditorPayload) => void) => on(EVENTS.shotEditor, cb);

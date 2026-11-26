@@ -4,7 +4,10 @@
 // Argument objects use the camelCase keys Tauri maps onto the snake_case Rust parameters.
 // Rejections are strings "<code>: <detail>" (code: not_found | busy | invalid | failed |
 // unimplemented) — see `./errors.ts`.
+// Two commands take a RAW body instead of named arguments (`shot_commit`,
+// `shot_editor_commit`, ARCHITECTURE §18.4): their wrappers pass `frameBody(header, rgba)`.
 import { invoke } from "@tauri-apps/api/core";
+import { frameBody, type Pixels } from "./frame";
 import { isTauri } from "./runtime";
 import type {
   AppInfo,
@@ -25,12 +28,21 @@ import type {
   MonitorInfo,
   OcrStatus,
   Page,
+  PinPayload,
   PasteOutcome,
   PasteRequest,
   PathKind,
   RunningApp,
   Settings,
   SettingsResult,
+  ShotCommit,
+  ShotCommitResult,
+  ShotEditorCommit,
+  ShotEditorPayload,
+  ShotMode,
+  ShotSession,
+  ShotStage,
+  ShotStatus,
   Snippet,
   SnippetInput,
   Stack,
@@ -38,9 +50,14 @@ import type {
   TargetInfo,
   TextPasteRequest,
   UndoResult,
+  WindowsSettingsPage,
 } from "./types";
 
-export type CommandArgs = Record<string, unknown>;
+export { frameBody, type Pixels } from "./frame";
+
+/** Named arguments, or a raw body (`Uint8Array`, sent as is — Tauri hands the command
+ *  `InvokeBody::Raw`; no headers are needed, everything is inside the body). */
+export type CommandArgs = Record<string, unknown> | Uint8Array;
 
 /** Invoke a command in Tauri, or the mock in a browser. Command names are kept in sync
  *  with `src-tauri/src/lib.rs` and the mock router by `tests/contract.test.mjs`. */
@@ -329,3 +346,88 @@ export const backupExport = (): Promise<string | null> =>
 /** `backup_import` — Restore a backup (replace or merge). */
 export const backupImport = (mode: BackupMode): Promise<ImportReport> =>
   call<ImportReport>("backup_import", { mode });
+
+// ── screenshot (W5-A contract §18.10; W6-A capture/commit/files, W6-B windows/status) ──
+
+/** `shot_capture` — Start a capture: `region` / `text` open the overlay, `screen` / `window` /
+ *  `repeat` commit at once; `delay` (s) shows a countdown first. */
+export const shotCapture = (mode: ShotMode, delay: number | null = null): Promise<void> =>
+  call<void>("shot_capture", { mode, delay });
+
+/** `shot_session` — The open capture session (`null` — none); the overlay asks on load. */
+export const shotSession = (): Promise<ShotSession | null> =>
+  call<ShotSession | null>("shot_session");
+
+/** `shot_stage` — The overlay's stage (`select` lets the session follow the cursor). */
+export const shotStage = (sessionId: number, stage: ShotStage): Promise<void> =>
+  call<void>("shot_stage", { sessionId, stage });
+
+/** `shot_commit` — Finish a session (raw body §18.4). `rgba` = the flattened crop when there
+ *  are annotations (`commit.width/height` = its size); omit it (width = height = 0) and Rust
+ *  crops the frozen frame itself. */
+export const shotCommit = (commit: ShotCommit, rgba: Pixels | null = null): Promise<ShotCommitResult> =>
+  call<ShotCommitResult>("shot_commit", frameBody(commit, rgba));
+
+/** `shot_cancel` — Close the overlay without a shot. */
+export const shotCancel = (sessionId: number): Promise<void> =>
+  call<void>("shot_cancel", { sessionId });
+
+/** `shot_edit` — Open the editor window on a screenshot / image record. */
+export const shotEdit = (id: number): Promise<void> =>
+  call<void>("shot_edit", { id });
+
+/** `shot_editor_get` — What the editor window shows (`null` — nothing). */
+export const shotEditorGet = (): Promise<ShotEditorPayload | null> =>
+  call<ShotEditorPayload | null>("shot_editor_get");
+
+/** `shot_editor_switch` — Answer a pending switch to another record (`accept` = drop the changes). */
+export const shotEditorSwitch = (accept: boolean): Promise<void> =>
+  call<void>("shot_editor_switch", { accept });
+
+/** `shot_editor_commit` — Copy / pin / save as / Done from the editor (raw body, same framing). */
+export const shotEditorCommit = (commit: ShotEditorCommit, rgba: Pixels | null = null): Promise<Clip> =>
+  call<Clip>("shot_editor_commit", frameBody(commit, rgba));
+
+/** `shot_pin` — Pin a record on the screen (up to 6). */
+export const shotPin = (id: number): Promise<void> =>
+  call<void>("shot_pin", { id });
+
+/** `shot_pin_get` — The record of the calling `pin-<n>` window. */
+export const shotPinGet = (): Promise<PinPayload | null> =>
+  call<PinPayload | null>("shot_pin_get");
+
+/** `shot_pin_resize` — Scale the calling pin window around the cursor. */
+export const shotPinResize = (scale: number): Promise<void> =>
+  call<void>("shot_pin_resize", { scale });
+
+/** `shot_pin_close` — Close the calling pin window. */
+export const shotPinClose = (): Promise<void> =>
+  call<void>("shot_pin_close");
+
+/** `shot_save` — Save to the screenshot folder; returns the path. */
+export const shotSave = (id: number): Promise<string> =>
+  call<string>("shot_save", { id });
+
+/** `shot_save_as` — "Save as…" dialog; returns the path (`null` = cancelled). */
+export const shotSaveAs = (id: number): Promise<string | null> =>
+  call<string | null>("shot_save_as", { id });
+
+/** `shot_reveal` — Explorer with the saved file selected. */
+export const shotReveal = (id: number): Promise<void> =>
+  call<void>("shot_reveal", { id });
+
+/** `shots_hud_layout` — The QAO stack's height in logical px (the window follows). */
+export const shotsHudLayout = (height: number): Promise<void> =>
+  call<void>("shots_hud_layout", { height });
+
+/** `shots_hud_hide` — The QAO stack is empty: hide its window. */
+export const shotsHudHide = (): Promise<void> =>
+  call<void>("shots_hud_hide");
+
+/** `shot_status` — PrtSc vs the Snipping Tool + screenshot hotkey errors. */
+export const shotStatus = (): Promise<ShotStatus> =>
+  call<ShotStatus>("shot_status");
+
+/** `open_windows_settings` — Open a Windows Settings page (`keyboard` — the PrtSc switch). */
+export const openWindowsSettings = (page: WindowsSettingsPage): Promise<void> =>
+  call<void>("open_windows_settings", { page });

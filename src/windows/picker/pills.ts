@@ -26,7 +26,7 @@ export const BUILTIN_PILLS: readonly BuiltinPill[] = ["all", "text", "link", "im
 const KIND_PILLS: Partial<Record<BuiltinPill, Kind[]>> = {
   text: ["text", "contact"],
   link: ["link"],
-  image: ["image"],
+  image: ["image", "screenshot"], // §18.5: screenshots are pictures too (W6-F adds their own pill)
   file: ["file"],
   code: ["code"],
   color: ["color"],

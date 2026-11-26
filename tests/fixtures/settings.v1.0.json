@@ -1,0 +1,59 @@
+{
+  "version": 1,
+  "general": {
+    "language": "ru",
+    "theme": "dark",
+    "autostart": false,
+    "onboardingDone": true
+  },
+  "picker": {
+    "position": "left",
+    "centerRow": false,
+    "monitor": "primary",
+    "hoverOpen": true,
+    "hints": false,
+    "favoritesFirst": true,
+    "clickAction": "copy",
+    "closeOnCopy": false,
+    "alwaysPlain": true,
+    "bumpOnPaste": true,
+    "rememberSearch": "always",
+    "mergeSeparator": "tab",
+    "pasteKeys": [{ "exe": "putty.exe", "chord": "shift+insert" }]
+  },
+  "hotkeys": {
+    "summon": "Ctrl + Shift + Space",
+    "stackNext": "",
+    "pauseToggle": "Alt + Shift + P",
+    "ignoreNext": ""
+  },
+  "storage": {
+    "retention": "1y",
+    "maxEntries": 20000,
+    "maxSizeMb": 0,
+    "types": {
+      "text": true,
+      "link": true,
+      "code": false,
+      "color": true,
+      "contact": true,
+      "image": false,
+      "file": true
+    }
+  },
+  "privacy": {
+    "respectMarkers": true,
+    "ignoredApps": ["keepass.exe", "vault.exe"],
+    "secretPatterns": false
+  },
+  "stack": {
+    "newlineAfterPaste": true
+  },
+  "ocr": {
+    "enabled": false,
+    "language": "ru-RU"
+  },
+  "window": {
+    "settingsBounds": { "x": 120, "y": 80, "w": 1100, "h": 760 }
+  }
+}

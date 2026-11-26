@@ -2,7 +2,7 @@
 // their groups, shortcuts and submenus — and the menu's search and shortcut matching. Pure
 // (no Svelte, no IPC): `ActionsMenu.svelte` renders the nodes and runs their `cmd`.
 // Node-tested (tests/pickerOverlays).
-import type { Clip, Format, Kind, MergeSeparator } from "$lib/ipc/types";
+import { isImageKind, type Clip, type Format, type Kind, type MergeSeparator } from "$lib/ipc/types";
 import type { IconName } from "$lib/icons";
 import type { TranslationKey } from "$lib/i18n/en";
 import { TRANSFORM_GROUPS, type TransformId } from "../transforms";
@@ -102,8 +102,8 @@ export interface MenuInput {
 export const TEXT_KINDS: readonly Kind[] = ["text", "code", "link", "contact", "color"];
 export const SEPARATORS: readonly MergeSeparator[] = ["newline", "space", "tab", "none"];
 export const RECENT_MINUTES: readonly number[] = [5, 15, 30, 60, 1440];
-const OPENABLE: readonly Kind[] = ["link", "file", "image"];
-const REVEALABLE: readonly Kind[] = ["file", "image"];
+const OPENABLE: readonly Kind[] = ["link", "file", "image", "screenshot"];
+const REVEALABLE: readonly Kind[] = ["file", "image", "screenshot"];
 
 const FORMAT_ICON: Record<Format, IconName> = { text: "text", html: "code", rtf: "document", png: "image", files: "file" };
 const FORMAT_ORDER: readonly Format[] = ["html", "rtf", "text", "png", "files"];
@@ -258,7 +258,7 @@ function singleMenu(c: MenuClip, input: MenuInput): MenuNode[] {
   return groups(
     [
       { id: "paste", cmd: "paste", label: "picker.menu.paste", icon: "paste", keys: "↵" },
-      c.kind !== "image" && { id: "pastePlain", cmd: "pastePlain", label: "picker.menu.pastePlain", icon: "text", keys: "⇧ ↵", chord: C.shiftEnter },
+      !isImageKind(c.kind) && { id: "pastePlain", cmd: "pastePlain", label: "picker.menu.pastePlain", icon: "text", keys: "⇧ ↵", chord: C.shiftEnter },
       rich && formatMenu("pasteAs", c.formats),
       { id: "pasteKeepOpen", cmd: "pasteKeepOpen", label: "picker.menu.pasteKeepOpen", icon: "paste", keys: "Alt ↵", chord: C.altEnter },
     ],
@@ -281,7 +281,7 @@ function singleMenu(c: MenuClip, input: MenuInput): MenuNode[] {
     ],
     [
       text && transformMenu(),
-      c.kind === "image" && {
+      isImageKind(c.kind) && {
         id: "ocr",
         cmd: "ocr",
         label: "picker.menu.ocr",
@@ -313,7 +313,7 @@ function singleMenu(c: MenuClip, input: MenuInput): MenuNode[] {
 function multiMenu(clips: readonly MenuClip[], input: MenuInput): MenuNode[] {
   const allFav = clips.every((c) => c.favorite);
   const sepKey = (s: MergeSeparator) => `picker.menu.sep.${s}` as TranslationKey;
-  const mergeable = clips.some((c) => c.kind !== "image");
+  const mergeable = clips.some((c) => !isImageKind(c.kind));
   return groups(
     [
       { id: "pasteAll", cmd: "pasteAll", arg: input.separator, label: "picker.menu.pasteAll", icon: "paste", keys: "↵", hint: sepKey(input.separator) },

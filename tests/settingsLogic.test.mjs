@@ -86,7 +86,9 @@ test("hotkey checks: duplicates, typing keys need Ctrl/Alt/Win, modifiers alone"
 test("hotkey defaults for 'Reset' equal the Rust defaults (fixture)", async () => {
   const fixture = JSON.parse(await readFile(new URL("./fixtures/settings.default.json", import.meta.url), "utf8"));
   assert.deepEqual({ ...L.HOTKEY_DEFAULTS }, fixture.hotkeys);
-  assert.deepEqual([...L.HOTKEY_ACTIONS].sort(), Object.keys(fixture.hotkeys).sort());
+  // W5: the five `shot*` slots get their own group in the section (W6-F), not the global list.
+  const global = Object.keys(fixture.hotkeys).filter((k) => !k.startsWith("shot"));
+  assert.deepEqual([...L.HOTKEY_ACTIONS].sort(), global.sort());
 });
 
 test("field errors map to i18n keys", () => {

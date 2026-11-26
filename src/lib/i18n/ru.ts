@@ -35,6 +35,7 @@ export const ru: Record<TranslationKey, string> = {
   "common.kind.contact": "Контакт",
   "common.kind.image": "Картинка",
   "common.kind.file": "Файл",
+  "common.kind.screenshot": "Скриншот",
 
   "common.size.bytes": "{n} Б",
   "common.size.kb": "{n} КБ",
@@ -614,6 +615,8 @@ export const ru: Record<TranslationKey, string> = {
   "settings.storage.type.contact.desc": "Адреса почты и номера телефонов.",
   "settings.storage.type.image": "Картинки",
   "settings.storage.type.image.desc": "Снимки экрана и скопированные изображения.",
+  "settings.storage.type.screenshot": "Скриншоты",
+  "settings.storage.type.screenshot.desc": "Снимки экрана, сделанные в Liqlip.",
   "settings.storage.type.file": "Файлы",
   "settings.storage.type.file.desc": "Файлы и папки, скопированные в Проводнике.",
   "settings.storage.usage": "Занято места",
@@ -846,5 +849,21 @@ export const ru: Record<TranslationKey, string> = {
   "hud.paused": "Запись на паузе",
   "hud.resumed": "Запись возобновлена",
   "hud.skipNext": "Следующее копирование не сохранится",
+  "hud.countdown": "Снимок через {keys}",
+  "hud.shotFailed": "Не удалось снять экран",
+  "hud.textCopied": "Текст скопирован — нажмите {keys}",
+  "hud.textEmpty": "Текст не найден",
   "hud.pasteKeys": "Ctrl+V",
+
+  // --- editor.* (W6-C; W5-A stub) ---
+  "editor.soon": "Редактор снимков скоро появится.",
+
+  // --- capture.* (W6-D; W5-A stub) ---
+  "capture.soon": "Захват экрана скоро появится.",
+
+  // --- shots.* (W6-E; W5-A stub) ---
+  "shots.soon": "Здесь появятся последние снимки.",
+
+  // --- pin.* (W6-E; W5-A stub) ---
+  "pin.soon": "Закрепление картинок скоро появится.",
 };

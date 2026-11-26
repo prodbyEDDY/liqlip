@@ -169,6 +169,12 @@ export const HOTKEY_DEFAULTS: Readonly<HotkeySettings> = {
   stackNext: "Alt + Shift + V",
   pauseToggle: "",
   ignoreNext: "",
+  // W5 (ARCHITECTURE §18.10): screenshot slots — shown and validated by W6-F.
+  shotRegion: "PrtSc",
+  shotScreen: "Ctrl + PrtSc",
+  shotWindow: "",
+  shotRepeat: "",
+  shotText: "",
 };
 
 const MODIFIERS = new Set(["Ctrl", "Alt", "Shift", "Super"]);
@@ -217,6 +223,12 @@ const HOTKEY_SUGGESTIONS: Readonly<Record<HotkeyAction, readonly string[]>> = {
   stackNext: ["Ctrl + Alt + Shift + V", "Alt + Shift + B", "Ctrl + Alt + B"],
   pauseToggle: [],
   ignoreNext: [],
+  // W5: screenshot slots — suggestions are W6-F's call (e.g. when the Snipping Tool holds PrtSc).
+  shotRegion: [],
+  shotScreen: [],
+  shotWindow: [],
+  shotRepeat: [],
+  shotText: [],
 };
 
 export function hotkeySuggestions(action: HotkeyAction, current: HotkeySettings, rejected: readonly string[] = [], max = 2): string[] {

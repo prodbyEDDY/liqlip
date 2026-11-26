@@ -39,7 +39,9 @@ const DOMAIN: &[u8] = b"liqlip:1\0";
 fn family(kind: Kind) -> &'static [u8] {
     match kind {
         Kind::Text | Kind::Link | Kind::Code | Kind::Color | Kind::Contact => b"text",
-        Kind::Image => b"image",
+        // A screenshot hashes like an image (ARCHITECTURE §18.5): the same pixels are the
+        // same content, so dedup can raise an existing record instead of storing a copy.
+        Kind::Image | Kind::Screenshot => b"image",
         Kind::File => b"file",
     }
 }

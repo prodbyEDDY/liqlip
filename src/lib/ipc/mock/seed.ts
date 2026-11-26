@@ -1,7 +1,8 @@
 // Deterministic seed for the browser mock (owner: W1-E; W0 baseline): ~300 records of all
-// seven kinds (EN/RU texts of different lengths, code, links with hosts, colors, emails /
-// phones, generated SVG "images", files with many extensions), 4 folders, 6 snippets and
-// a handful of source apps with placeholder icons.
+// eight kinds (EN/RU texts of different lengths, code, links with hosts, colors, emails /
+// phones, generated SVG "images", files with many extensions; W5: up to 8 of the images become
+// screenshots with `meta.shot`), 4 folders, 6 snippets and a handful of source apps with
+// placeholder icons.
 import type { ClipMeta, Format, Kind, OcrState } from "../types";
 import { rng } from "./bus";
 
@@ -220,6 +221,56 @@ function imageSvg(r: () => number, w: number, h: number): string {
   );
 }
 
+/** Placeholder screenshot (W5): a desktop with a few windows — title bar, text lines. User
+ *  content, so it may carry colour (the monochrome lock is for the chrome). */
+function screenshotSvg(r: () => number, w: number, h: number): string {
+  const hue = Math.floor(r() * 360);
+  const windows = Array.from({ length: 2 + Math.floor(r() * 3) }, (_, i) => {
+    const ww = Math.floor(w * (0.35 + r() * 0.3));
+    const wh = Math.floor(h * (0.3 + r() * 0.35));
+    const x = Math.floor(r() * (w - ww));
+    const y = Math.floor(r() * (h - wh));
+    const bar = Math.max(6, Math.round(h * 0.035));
+    const lines = Array.from({ length: 3 }, (_, j) => {
+      const ly = y + bar + Math.round(wh * (0.18 + j * 0.16));
+      return `<rect x="${x + 10}" y="${ly}" width="${Math.floor(ww * (0.4 + r() * 0.45))}" height="${Math.max(2, Math.round(bar / 3))}" rx="1" fill="#c9ccd1"/>`;
+    }).join("");
+    return (
+      `<rect x="${x}" y="${y}" width="${ww}" height="${wh}" rx="6" fill="${i % 2 ? "#ffffff" : "#f3f4f6"}"/>` +
+      `<rect x="${x}" y="${y}" width="${ww}" height="${bar}" rx="6" fill="#e2e4e8"/>${lines}`
+    );
+  }).join("");
+  return svg(`<rect width="${w}" height="${h}" fill="hsl(${hue} 30% 32%)"/>${windows}`, w, h);
+}
+
+const SHOT_SIZES: [number, number][] = [
+  [1920, 1080],
+  [2560, 1440],
+  [1184, 736],
+  [842, 516],
+  [1440, 900],
+];
+
+/** Up to this many seeded images are turned into screenshots (W5). */
+const SEEDED_SHOTS = 8;
+
+/** Turn a seeded image into a screenshot record: its own picture and size, `meta.shot`. */
+function makeScreenshot(c: MockClip, r: () => number, n: number): void {
+  const [w, h] = SHOT_SIZES[n % SHOT_SIZES.length];
+  const url = screenshotSvg(r, Math.round(w / 8), Math.round(h / 8));
+  const stamp = new Date(c.copiedAt);
+  const p = (x: number) => String(x).padStart(2, "0");
+  const name = `Liqlip ${stamp.getFullYear()}-${p(stamp.getMonth() + 1)}-${p(stamp.getDate())} ${p(stamp.getHours())}.${p(stamp.getMinutes())}.${p(stamp.getSeconds())}`;
+  c.kind = "screenshot";
+  c.formats = ["png"];
+  c.width = w;
+  c.height = h;
+  c.thumbUrl = url;
+  c.imageUrl = url;
+  c.size = Math.floor(60_000 + r() * 900_000);
+  c.meta = { shot: { savedPath: n % 2 === 0 ? `C:\\Users\\me\\Pictures\\Liqlip\\${name}.png` : null, edited: n % 3 === 1 } };
+}
+
 const IMAGE_SIZES: [number, number][] = [
   [1920, 1080],
   [1080, 1920],
@@ -362,6 +413,9 @@ export function makeClip(id: number, kind: Kind, r: () => number, copiedAt: numb
       }
       break;
     }
+    case "screenshot":
+      makeScreenshot(base, r, id);
+      break;
     case "file": {
       const paths = pick(FILE_SETS);
       const text = paths.join("\n");
@@ -431,6 +485,15 @@ export function seed(opts: { size: number; empty: boolean }): MockDb {
     if (folders.length && r() < 0.12) c.folderId = folders[Math.floor(r() * folders.length)].id;
     if (r() < 0.04 && c.kind !== "image") c.title = ["Важное", "Template", "For later", "Ключ API тестовый"][Math.floor(r() * 4)];
     clips.push(c);
+  }
+  // W5: every other seeded image (newest first) becomes a screenshot, up to SEEDED_SHOTS. A
+  // separate generator, so the records above stay exactly what they were before W5.
+  const rs = rng(20261126);
+  let images = 0;
+  let shots = 0;
+  for (const c of clips) {
+    if (shots >= SEEDED_SHOTS) break;
+    if (c.kind === "image" && images++ % 2 === 0) makeScreenshot(c, rs, shots++);
   }
   return { clips, apps, folders, snippets, nextId: n + 1 };
 }

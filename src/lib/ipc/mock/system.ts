@@ -10,7 +10,7 @@
 // global hotkey. Layout = `settings.picker.position/centerRow`, overridable per tab with
 // `?mock-position=center|left|right|top|bottom` and `?mock-row=1` (centre "one row").
 //
-// OCR (W2-A): a mock queue over the seeded images (see the OCR block below);
+// OCR (W2-A): a mock queue over the seeded images and screenshots (see the OCR block below);
 // `?mock-ocr=nolang` plays a PC without OCR language packs.
 import type {
   AppMeta,
@@ -32,6 +32,7 @@ import type {
   SettingsNavigate,
   TargetInfo,
 } from "../types";
+import { isImageKind } from "../types";
 import { fail, flags, mockEmit, mockListen, now } from "./bus";
 import { db, type Args } from "./clips";
 import { currentSettings } from "./settings";
@@ -261,7 +262,7 @@ const ocrNoLang = urlParam("mock-ocr") === "nolang";
 let ocrReindex: { done: number; total: number } | null = null;
 let ocrTimer: ReturnType<typeof setTimeout> | undefined;
 
-const liveImages = () => db().clips.filter((c) => c.kind === "image" && c.deletedAt === null);
+const liveImages = () => db().clips.filter((c) => isImageKind(c.kind) && c.deletedAt === null);
 const ocrPending = () => liveImages().filter((c) => c.ocr === "pending").length;
 const ocrSample = (id: number) => OCR_SAMPLES[id % OCR_SAMPLES.length];
 
@@ -349,7 +350,7 @@ async function clipOcr({ id }: Args): Promise<string> {
   const find = () => db().clips.find((x) => x.id === id && x.deletedAt === null);
   const c = find();
   if (!c) throw fail("not_found", `clip ${String(id)}`);
-  if (c.kind !== "image") throw fail("invalid", `clip ${String(id)} is not an image`);
+  if (!isImageKind(c.kind)) throw fail("invalid", `clip ${String(id)} is not an image`);
   if (c.ocr === "done" && c.ocrText !== null) return c.ocrText;
   if (!currentSettings().ocr.enabled) throw fail("invalid", "text recognition is turned off");
   if (ocrNoLang) throw fail("failed", "no OCR language is installed");

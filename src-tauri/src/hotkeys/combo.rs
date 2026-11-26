@@ -465,6 +465,12 @@ mod tests {
             stack_next: b.into(),
             pause_toggle: cc.into(),
             ignore_next: d.into(),
+            // W5: the screenshot slots exist in the settings but are not engine slots yet (W6-A).
+            shot_region: String::new(),
+            shot_screen: String::new(),
+            shot_window: String::new(),
+            shot_repeat: String::new(),
+            shot_text: String::new(),
         }
     }
 

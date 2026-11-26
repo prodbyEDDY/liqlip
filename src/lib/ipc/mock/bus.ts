@@ -13,6 +13,13 @@
 //   ?mock-position=center|left|right|top|bottom   shelf position the picker mock lays out (W1-E, system.ts)
 //   ?mock-row=1          centre position as a single row (W1-E, system.ts)
 //   ?mock-ocr=nolang     no OCR language packs (system.ts, W2-A)
+//   Screenshots (shots.ts, W5-A; window pages /capture.html · /editor.html?clip=<id> ·
+//   /shots.html · /pin.html?clip=<id>):
+//   ?mock-shot=text      the overlay session is "copy text from the screen" (OCR)
+//   ?mock-shot-quick=1   "take the shot on release": the session skips the frame stage
+//   ?mock-scale=1.5      monitor scale of the fake desktop (frame = 1920×1080 × scale, 1–4)
+//   ?mock-snipping=1     Windows gives PrtSc to the Snipping Tool (shot_status; PrtSc "taken")
+//   ?mock-shot-dialog=cancel   shot_save_as is cancelled (null)
 
 export type Unlisten = () => void;
 

@@ -6,7 +6,9 @@ import type { HudKind, HudShow } from "$lib/ipc/types";
  *  1.66 s (`picker/hud.rs::HIDE_AFTER`), after the ~180 ms exit has finished. */
 export const VISIBLE_MS = 1400;
 
-export const HUD_KINDS: readonly HudKind[] = ["copied", "elevated", "stack_empty", "paused", "resumed", "skip_next"];
+/** `countdown` · `shot_failed` · `text_copied` · `text_empty` — W5 (screenshots, ARCHITECTURE §18.10):
+ *  the countdown's `text` is the seconds left (shown in the {keys} chip). */
+export const HUD_KINDS: readonly HudKind[] = ["copied", "elevated", "stack_empty", "paused", "resumed", "skip_next", "countdown", "shot_failed", "text_copied", "text_empty"];
 
 /** i18n key per kind (`hud.*`). */
 export const KIND_KEY = {
@@ -16,6 +18,10 @@ export const KIND_KEY = {
   paused: "hud.paused",
   resumed: "hud.resumed",
   skip_next: "hud.skipNext",
+  countdown: "hud.countdown",
+  shot_failed: "hud.shotFailed",
+  text_copied: "hud.textCopied",
+  text_empty: "hud.textEmpty",
 } as const satisfies Record<HudKind, string>;
 
 /** Icon per kind (`src/lib/icons.ts`). */
@@ -26,6 +32,10 @@ export const KIND_ICON = {
   paused: "pause",
   resumed: "play",
   skip_next: "skip",
+  countdown: "clock",
+  shot_failed: "warning",
+  text_copied: "ocr",
+  text_empty: "info",
 } as const satisfies Record<HudKind, string>;
 
 export type Segment = { kind: "text"; text: string } | { kind: "keys" };

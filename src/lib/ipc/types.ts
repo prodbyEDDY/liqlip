@@ -8,14 +8,19 @@
 
 // §9.1 Enumerations
 
-export type Kind = "text" | "link" | "code" | "color" | "contact" | "image" | "file";
+/** `screenshot` — W5 (additive, ARCHITECTURE §18.5): behaves like `image` everywhere a record is
+ *  pasted, copied, dragged out, recognised or previewed. */
+export type Kind = "text" | "link" | "code" | "color" | "contact" | "image" | "file" | "screenshot";
 export type Format = "text" | "html" | "rtf" | "png" | "files";
 export type PasteMode = "auto" | "plain" | { format: Format };
 export type Position = "center" | "left" | "right" | "top" | "bottom";
 export type ChangeOrigin = "capture" | "user" | "import" | "retention";
 
-/** All seven kinds, in pill/settings order. */
-export const KINDS: readonly Kind[] = ["text", "link", "code", "color", "contact", "image", "file"];
+/** All eight kinds, in pill/settings order (screenshots right after images, SPEC §9.6). */
+export const KINDS: readonly Kind[] = ["text", "link", "code", "color", "contact", "image", "screenshot", "file"];
+
+/** A picture record: `image` or `screenshot` (mirror of Rust `Kind::is_image`, §18.5). */
+export const isImageKind = (k: Kind): boolean => k === "image" || k === "screenshot";
 
 // §9.2 Records
 
@@ -46,6 +51,16 @@ export interface ClipMeta {
   truncated?: boolean;
   /** file: parent directory of the first file — the path tail on the card (FIX-08, W3) */
   dir?: string;
+  /** screenshot / edited image (W5, §18.10): the last saved file and whether it was annotated */
+  shot?: ShotMeta;
+}
+
+/** `ClipMeta.shot` (W5, ARCHITECTURE §18.10). */
+export interface ShotMeta {
+  /** last file written to the screenshot folder (`null` — never saved) */
+  savedPath: string | null;
+  /** the picture carries annotations (an `AnnotDoc` with objects is stored) */
+  edited: boolean;
 }
 
 export type OcrState = "none" | "pending" | "done" | "error";
@@ -205,6 +220,16 @@ export interface HotkeySettings {
   stackNext: string;
   pauseToggle: string;
   ignoreNext: string;
+  /** W5 (§18.10): capture a region — default "PrtSc" */
+  shotRegion: string;
+  /** capture the monitor under the cursor — default "Ctrl + PrtSc" */
+  shotScreen: string;
+  /** capture the active window — default "" */
+  shotWindow: string;
+  /** repeat the last region — default "" */
+  shotRepeat: string;
+  /** copy text from the screen (OCR) — default "" */
+  shotText: string;
 }
 
 export interface StorageSettings {
@@ -236,6 +261,40 @@ export interface WindowSettings {
   settingsBounds: Bounds | null;
 }
 
+export type ShotFormat = "png" | "jpg";
+export type ShotAfterCapture = "overlay" | "editor" | "none";
+export type ShotCorner = "left" | "right";
+
+/** `settings.screenshot` (W5, ARCHITECTURE §18.10; SPEC §9.7). */
+export interface ScreenshotSettings {
+  /** take the shot as soon as the region is released (skip the frame stage) — false */
+  quick: boolean;
+  /** magnifier at the cursor — true */
+  magnifier: boolean;
+  /** live W × H while selecting — true */
+  dimensions: boolean;
+  /** shutter click — true */
+  sound: boolean;
+  /** "Done" copies to the clipboard — true */
+  copy: boolean;
+  /** "Done" saves to the folder — true */
+  save: boolean;
+  /** "" = %USERPROFILE%\Pictures\Liqlip (FOLDERID_Pictures) */
+  folder: string;
+  /** file name template: {date} {time} {app} {n} — "Liqlip {date} {time}" */
+  fileName: string;
+  /** file format in the folder (history and clipboard are always PNG) — png */
+  format: ShotFormat;
+  /** 60–100 — 90 */
+  jpgQuality: number;
+  /** what follows a shot: the thumbnail stack (QAO), the editor window or nothing — overlay */
+  afterCapture: ShotAfterCapture;
+  /** QAO corner of the work area — left */
+  corner: ShotCorner;
+  /** QAO auto-hide, seconds; 0 = never — 10 */
+  timeout: number;
+}
+
 export interface Settings {
   version: 1;
   general: GeneralSettings;
@@ -246,6 +305,8 @@ export interface Settings {
   stack: StackSettings;
   ocr: OcrSettings;
   window: WindowSettings;
+  /** W5 (additive; older settings.json files get the defaults) */
+  screenshot: ScreenshotSettings;
 }
 
 export interface SettingsError {
@@ -423,8 +484,9 @@ export interface HotkeysCaptured {
   combo: string;
 }
 
-/** `resumed` / `skip_next` — W1-D, additive: feedback for the pause / skip hotkeys. */
-export type HudKind = "copied" | "stack_empty" | "paused" | "elevated" | "resumed" | "skip_next";
+/** `resumed` / `skip_next` — W1-D, additive: feedback for the pause / skip hotkeys.
+ *  `countdown` (text = seconds left) / `shot_failed` / `text_copied` / `text_empty` — W5, additive (§18.10). */
+export type HudKind = "copied" | "stack_empty" | "paused" | "elevated" | "resumed" | "skip_next" | "countdown" | "shot_failed" | "text_copied" | "text_empty";
 
 export interface HudShow {
   kind: HudKind;
@@ -443,3 +505,167 @@ export interface ImportProgress {
 }
 
 export type ResolvedTheme = "light" | "dark";
+
+// §9.10 Screenshots (W5, ARCHITECTURE §18.10). Geometry is in PHYSICAL pixels; `AnnotDoc`
+// coordinates are pixels of the source picture. Rust keeps `AnnotDoc` opaque
+// (`serde_json::Value`): it stores and passes the document, never interprets it.
+
+export type ShotMode = "region" | "screen" | "window" | "repeat" | "text";
+export type ShotAction = "done" | "copy" | "save" | "save_as" | "pin" | "text";
+/** The modes that open the capture overlay. */
+export type ShotSessionMode = "region" | "text";
+/** What the overlay reports while a session is open (`shot_stage`). */
+export type ShotStage = "select" | "frame";
+export type ShotEditorAction = "done" | "copy" | "save_as" | "pin";
+export type ShotAddedError = "save_failed";
+/** `open_windows_settings` pages (`ms-settings:` URIs). */
+export type WindowsSettingsPage = "keyboard";
+
+/** A rectangle: physical px of a monitor frame (`ShotCommit.rect`, `lastRegion`) or source px (`AnnotDoc`). */
+export interface Rect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/** One monitor of a session: physical px of the virtual screen + its frozen frame. */
+export interface MonitorFrame {
+  index: number;
+  /** device name (as `MonitorInfo.id`) */
+  id: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  scale: number;
+  /** `http://liq.localhost/shot/<sessionId>/<index>.bmp` */
+  frameUrl: string;
+}
+
+/** A window under the overlay (z-order: first = topmost), physical px of the monitor frame. */
+export interface WinRect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  children: WinRect[];
+}
+
+export interface ShotSession {
+  id: number;
+  mode: ShotSessionMode;
+  monitor: MonitorFrame;
+  windows: WinRect[];
+  /** last region on this monitor (`R` in the overlay) */
+  lastRegion: Rect | null;
+  quick: boolean;
+  magnifier: boolean;
+  dimensions: boolean;
+}
+
+/** JSON part of the `shot_commit` body (§18.4): `[u32 LE N][N bytes JSON][RGBA width*height*4 | 0 bytes]`. */
+export interface ShotCommit {
+  sessionId: number;
+  rect: Rect;
+  action: ShotAction;
+  doc: AnnotDoc | null;
+  /** RGBA of the body (0 — no pixels: Rust crops the frame itself) */
+  width: number;
+  height: number;
+}
+
+export interface ShotCommitResult {
+  clipId: number | null;
+  savedPath: string | null;
+  /** `action: 'text'` — the recognised text */
+  text: string | null;
+}
+
+export interface ShotEditorPayload {
+  clipId: number;
+  name: string;
+  /** `http://liq.localhost/base/<clipId>?v=<n>` — the picture without annotations */
+  baseUrl: string;
+  width: number;
+  height: number;
+  doc: AnnotDoc | null;
+  dirtyGuard: boolean;
+}
+
+/** JSON part of the `shot_editor_commit` body (same framing as `ShotCommit`). */
+export interface ShotEditorCommit {
+  clipId: number;
+  action: ShotEditorAction;
+  doc: AnnotDoc;
+  width: number;
+  height: number;
+}
+
+export interface PinPayload {
+  clipId: number;
+  /** `http://liq.localhost/media/<clipId>?v=<n>` */
+  imageUrl: string;
+  width: number;
+  height: number;
+}
+
+export interface ShotStatus {
+  /** Windows sends PrtSc to the Snipping Tool (`PrintScreenKeyForSnippingEnabled`) */
+  snippingKey: boolean;
+  /** registration errors of the five screenshot hotkeys (`hotkeys.shot*`) */
+  hotkeyErrors: SettingsError[];
+}
+
+// Event payloads (§18.10)
+
+/** `shot:end` */
+export interface ShotEnd {
+  sessionId: number;
+}
+
+/** `shot:added` — `clip: null` when screenshots are not kept in history (`tempPath` then). */
+export interface ShotAdded {
+  clip: Clip | null;
+  savedPath: string | null;
+  tempPath: string | null;
+  /** device name of the monitor the shot was taken on (QAO corner) */
+  monitor: string;
+  error: ShotAddedError | null;
+}
+
+// Annotation document v1 (ARCHITECTURE §18.6) — stored in `shot_docs.doc`; TS-only shape
+// (`tests/contract.test.mjs` skips it: Rust holds it as `serde_json::Value`).
+
+export type Pt = [number, number];
+/** Thickness step: px = TABLE[size] * doc.unit, TABLE = [2, 3, 5, 8, 12]. */
+export type Size = 1 | 2 | 3 | 4 | 5;
+interface Obj {
+  id: string;
+  /** #rrggbb */
+  color: string;
+}
+/** `counter.n = null` — automatic (previous + 1); `image.src` — `data:image/png;base64,…`. */
+export type AnnotObject =
+  | (Obj & { kind: "arrow"; a: Pt; b: Pt; bend: number; style: "straight" | "curved" | "double"; size: Size })
+  | (Obj & { kind: "line"; a: Pt; b: Pt; size: Size })
+  | (Obj & { kind: "rect" | "ellipse"; r: Rect; fill: boolean; size: Size })
+  | (Obj & { kind: "pen" | "marker"; points: Pt[]; size: Size })
+  | (Obj & { kind: "text"; at: Pt; width: number | null; text: string; fontSize: number; style: "plain" | "badge" })
+  | (Obj & { kind: "counter"; at: Pt; n: number | null; size: Size })
+  | (Obj & { kind: "redact"; r: Rect; mode: "solid" | "pixelate" | "blur"; size: Size })
+  | (Omit<Obj, "color"> & { kind: "spotlight"; r: Rect; shape: "rect" | "ellipse" })
+  | (Omit<Obj, "color"> & { kind: "image"; r: Rect; src: string });
+
+export interface AnnotDoc {
+  v: 1;
+  /** size of the source picture */
+  w: number;
+  h: number;
+  /** source px per logical UI px when created (monitor scale; 1 — a picture from the clipboard) */
+  unit: number;
+  /** non-destructive crop (editor window) */
+  crop: Rect | null;
+  /** order inside a layer = z-order */
+  objects: AnnotObject[];
+}

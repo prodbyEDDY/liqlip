@@ -108,7 +108,7 @@ static PASTING: Mutex<()> = Mutex::new(());
 /// Card-like preview of a record for the stack popover (content rules from `content.rs`).
 pub fn preview_of(p: &PastePayload) -> String {
     match p.kind {
-        Kind::Image => String::new(),
+        Kind::Image | Kind::Screenshot => String::new(),
         Kind::File => {
             let paths = file_paths(p);
             let first = paths.first().map(|s| s.rsplit(['\\', '/']).next().unwrap_or(s).to_string()).unwrap_or_default();

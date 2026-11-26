@@ -1,0 +1,215 @@
+//! Screenshots (v1.1, ARCHITECTURE §18). Hub (W5-A, then the coordinator): the `#[tauri::command]`
+//! layer of §18.10, the managed [`ScreenshotState`], the `liq` routes and the `capture`
+//! window's close hook. Every command only parses its arguments and delegates to the module
+//! that owns the work — agents fill those modules, not this file (§18.1):
+//!
+//! | Module | Owner | What |
+//! |---|---|---|
+//! | `grab` · `targets` · `session` · `frame` · `commit` · `files` | W6-A | freeze, window tree, sessions, frames over `liq`, commit, files |
+//! | `windows` · `qao` · `editor` · `pin` · `status` | W6-B | on-demand windows, QAO, editor and pin windows, PrtSc / hotkey status |
+//! | `body` | hub | raw-body framing of the two commits (§18.4) |
+//!
+//! All commands are `async`: they never run on the main thread (a sync command does — Tauri
+//! `ipc` docs), so a command that builds a window (`shot_edit`, `shot_pin`) or waits for a lock
+//! held by a thread that waits for the main thread cannot deadlock the event loop.
+
+mod body;
+mod commit;
+mod editor;
+mod files;
+mod frame;
+mod grab;
+mod pin;
+mod qao;
+mod session;
+mod status;
+mod targets;
+pub(crate) mod windows;
+
+use crate::model::{
+    Clip, PinPayload, ShotCommit, ShotCommitResult, ShotEditorCommit, ShotEditorPayload, ShotMode,
+    ShotSession, ShotStage, ShotStatus, WindowsSettingsPage,
+};
+use parking_lot::Mutex;
+use tauri::{AppHandle, WebviewWindow};
+
+/// Managed state (`app.manage` in `setup()` step 5, BEFORE any window exists — a webview may
+/// invoke a command as soon as it loads). One lock per zone; each zone defines its own type.
+#[derive(Default)]
+#[allow(dead_code)] // the zones read their state from W6 on
+pub struct ScreenshotState {
+    /// Session, per-monitor frames, last region (W6-A, `session.rs`).
+    pub(crate) capture: Mutex<session::SessionState>,
+    /// The QAO window side (W6-B, `qao.rs`).
+    pub(crate) qao: Mutex<qao::QaoState>,
+    /// The editor window side (W6-B, `editor.rs`).
+    pub(crate) editor: Mutex<editor::EditorState>,
+    /// Open pin windows (W6-B, `pin.rs`).
+    pub(crate) pins: Mutex<pin::PinState>,
+}
+
+/// `setup()` step 5, after `app.manage(ScreenshotState::default())`: start-up work of both
+/// zones (no-ops until W6).
+pub fn init(app: &AppHandle) {
+    session::init(app);
+    windows::init(app);
+}
+
+/// The pre-created `capture` window got `CloseRequested` (Alt+F4): cancel the open session.
+/// `lib.rs` prevents the close and hides the window.
+pub fn on_capture_close(app: &AppHandle) {
+    session::on_capture_close(app);
+}
+
+/// `liq` paths served by this module (§18.3): `/shot/<sessionId>/<monitorIndex>.bmp` (frames)
+/// and `/base/<clipId>` (the editor's picture without annotations). Everything else is the
+/// store's (§9.8).
+pub fn owns_uri(path: &str) -> bool {
+    path.starts_with("/shot/") || path.starts_with("/base/")
+}
+
+/// `(mime, bytes)` of an [`owns_uri`] path; `None` → 404. `lib.rs` builds the response with
+/// `store::cache_control` (`no-store` for these paths) and ACAO `*`.
+pub fn serve_uri(app: &AppHandle, path: &str) -> Option<(String, Vec<u8>)> {
+    frame::serve(app, path)
+}
+
+// ── Commands (§18.10; JS keys camelCase) ────────────────────────────────────
+
+/// Start a capture: `region` / `text` open the overlay, `screen` / `window` / `repeat` commit
+/// at once; `delay` (s) counts down first.
+#[tauri::command]
+pub async fn shot_capture(app: AppHandle, mode: ShotMode, delay: Option<u32>) -> Result<(), String> {
+    session::capture(&app, mode, delay)
+}
+
+/// The open session (the overlay asks on load, it may have missed `shot:session`).
+#[tauri::command]
+pub async fn shot_session(app: AppHandle) -> Result<Option<ShotSession>, String> {
+    session::current(&app)
+}
+
+#[tauri::command]
+pub async fn shot_stage(app: AppHandle, session_id: i64, stage: ShotStage) -> Result<(), String> {
+    session::stage(&app, session_id, stage)
+}
+
+/// Raw body (§18.4): `[u32 LE N][JSON ShotCommit][RGBA | nothing]` — `frameBody` in
+/// `src/lib/ipc/frame.ts`.
+#[tauri::command]
+pub async fn shot_commit(app: AppHandle, request: tauri::ipc::Request<'_>) -> Result<ShotCommitResult, String> {
+    let bytes = body::bytes(request.body())?;
+    let (req, rgba) = body::parse::<ShotCommit>(&bytes)?;
+    commit::commit(&app, req, rgba)
+}
+
+#[tauri::command]
+pub async fn shot_cancel(app: AppHandle, session_id: i64) -> Result<(), String> {
+    session::cancel(&app, session_id)
+}
+
+/// Open the editor window on a record.
+#[tauri::command]
+pub async fn shot_edit(app: AppHandle, id: i64) -> Result<(), String> {
+    editor::open(&app, id)
+}
+
+#[tauri::command]
+pub async fn shot_editor_get(app: AppHandle) -> Result<Option<ShotEditorPayload>, String> {
+    editor::payload(&app)
+}
+
+#[tauri::command]
+pub async fn shot_editor_switch(app: AppHandle, accept: bool) -> Result<(), String> {
+    editor::switch(&app, accept)
+}
+
+/// Raw body, same framing as `shot_commit` with a `ShotEditorCommit` header → the record.
+#[tauri::command]
+pub async fn shot_editor_commit(app: AppHandle, request: tauri::ipc::Request<'_>) -> Result<Clip, String> {
+    let bytes = body::bytes(request.body())?;
+    let (req, rgba) = body::parse::<ShotEditorCommit>(&bytes)?;
+    let action = req.action;
+    let clip = commit::editor_commit(&app, req, rgba)?;
+    editor::after_commit(&app, action);
+    Ok(clip)
+}
+
+/// Pin a record on the screen.
+#[tauri::command]
+pub async fn shot_pin(app: AppHandle, id: i64) -> Result<(), String> {
+    pin::open(&app, id)
+}
+
+/// The record of the calling `pin-<n>` window.
+#[tauri::command]
+pub async fn shot_pin_get(app: AppHandle, window: WebviewWindow) -> Result<Option<PinPayload>, String> {
+    pin::payload(&app, &window)
+}
+
+#[tauri::command]
+pub async fn shot_pin_resize(app: AppHandle, window: WebviewWindow, scale: f64) -> Result<(), String> {
+    pin::resize(&app, &window, scale)
+}
+
+#[tauri::command]
+pub async fn shot_pin_close(app: AppHandle, window: WebviewWindow) -> Result<(), String> {
+    pin::close(&app, &window)
+}
+
+/// Save to the screenshot folder → the path.
+#[tauri::command]
+pub async fn shot_save(app: AppHandle, id: i64) -> Result<String, String> {
+    files::save(&app, id)
+}
+
+/// "Save as…" dialog → the path, `null` = cancelled.
+#[tauri::command]
+pub async fn shot_save_as(app: AppHandle, id: i64) -> Result<Option<String>, String> {
+    files::save_as(app, id).await
+}
+
+/// Explorer with the saved file selected.
+#[tauri::command]
+pub async fn shot_reveal(app: AppHandle, id: i64) -> Result<(), String> {
+    files::reveal(&app, id)
+}
+
+/// The QAO stack's height in logical px.
+#[tauri::command]
+pub async fn shots_hud_layout(app: AppHandle, height: f64) -> Result<(), String> {
+    qao::layout(&app, height)
+}
+
+#[tauri::command]
+pub async fn shots_hud_hide(app: AppHandle) -> Result<(), String> {
+    qao::hide(&app)
+}
+
+#[tauri::command]
+pub async fn shot_status(app: AppHandle) -> Result<ShotStatus, String> {
+    status::status(&app)
+}
+
+/// `ms-settings:` page (`keyboard` = `ms-settings:easeofaccess-keyboard`).
+#[tauri::command]
+pub async fn open_windows_settings(app: AppHandle, page: WindowsSettingsPage) -> Result<(), String> {
+    status::open_windows_settings(&app, page)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn liq_routes_and_their_cache_policy() {
+        assert!(owns_uri("/shot/12/0.bmp"));
+        assert!(owns_uri("/base/42"));
+        for store_path in ["/thumb/1", "/media/1", "/icon/3", "/shots/1", "/basement", "/"] {
+            assert!(!owns_uri(store_path), "{store_path} stays the store's");
+        }
+        // Frames and base pictures are screen / clipboard content: never in the WebView2 disk cache.
+        assert_eq!(crate::store::cache_control("/shot/12/0.bmp"), "no-store");
+        assert_eq!(crate::store::cache_control("/base/42"), "no-store");
+    }
+}

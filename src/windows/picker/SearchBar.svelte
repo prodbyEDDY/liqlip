@@ -25,6 +25,7 @@
     contact: "at",
     image: "image",
     file: "file",
+    screenshot: "image", // W5: behaves like an image (W6-F may give it its own glyph)
   };
 
   let input = $state<HTMLInputElement | null>(null);

@@ -59,8 +59,8 @@ export interface ActionOptions {
   separator?: string;
 }
 
-const OPENABLE: readonly Kind[] = ["link", "file", "image"];
-const REVEALABLE: readonly Kind[] = ["file", "image"];
+const OPENABLE: readonly Kind[] = ["link", "file", "image", "screenshot"];
+const REVEALABLE: readonly Kind[] = ["file", "image", "screenshot"];
 
 let pasting = false;
 

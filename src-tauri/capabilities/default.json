@@ -1,8 +1,8 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Liqlip windows: the shelf, the HUD and the settings window. Geometry and visibility are driven from Rust; the JS side only gets what the UI may need.",
-  "windows": ["picker", "settings", "hud"],
+  "description": "Liqlip windows: the shelf, the HUD, the settings window and the screenshot windows (capture overlay, QAO stack, editor, pinned pictures). Geometry and visibility are driven from Rust; the JS side only gets what the UI may need.",
+  "windows": ["picker", "settings", "hud", "capture", "shots", "editor", "pin-*"],
   "permissions": [
     "core:default",
     "core:window:allow-show",

@@ -12,7 +12,8 @@
 
 use crate::model::{
     CaptureStatus, ClipsChanged, HotkeysCaptured, HudShow, ImportProgress, OcrProgress,
-    PickerClose, PickerLayout, PickerOpen, ResolvedTheme, Settings, SettingsNavigate, Stack,
+    PickerClose, PickerLayout, PickerOpen, ResolvedTheme, Settings, SettingsNavigate, ShotAdded,
+    ShotEditorPayload, ShotEnd, ShotSession, Stack,
 };
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, EventTarget};
@@ -21,6 +22,13 @@ use tauri::{AppHandle, Emitter, EventTarget};
 pub const PICKER: &str = "picker";
 pub const SETTINGS: &str = "settings";
 pub const HUD: &str = "hud";
+/// Capture overlay (W5): pre-created hidden in `setup()` like the three above.
+pub const CAPTURE: &str = "capture";
+/// Screenshot windows built on demand (W6-B, ARCHITECTURE §18.2): the QAO stack, the editor,
+/// and the pinned pictures `pin-<n>` (labels share this prefix; capabilities match `pin-*`).
+pub const SHOTS: &str = "shots";
+pub const EDITOR: &str = "editor";
+pub const PIN_PREFIX: &str = "pin-";
 
 pub const CLIPS_CHANGED: &str = "clips:changed";
 pub const PICKER_OPEN: &str = "picker:open";
@@ -35,6 +43,10 @@ pub const HUD_SHOW: &str = "hud:show";
 pub const OCR_PROGRESS: &str = "ocr:progress";
 pub const IMPORT_PROGRESS: &str = "import:progress";
 pub const THEME_CHANGED: &str = "theme://changed";
+pub const SHOT_SESSION: &str = "shot:session";
+pub const SHOT_END: &str = "shot:end";
+pub const SHOT_ADDED: &str = "shot:added";
+pub const SHOT_EDITOR: &str = "shot:editor";
 
 fn log_err(event: &str, r: tauri::Result<()>) {
     if let Err(e) = r {
@@ -126,4 +138,26 @@ pub fn import_progress(app: &AppHandle, payload: &ImportProgress) {
 /// theme → all ⚑
 pub fn theme_changed(app: &AppHandle, theme: ResolvedTheme) {
     all(app, THEME_CHANGED, theme);
+}
+
+// ── Screenshots (W5, ARCHITECTURE §18.10) ───────────────────────────────────
+
+/// screenshot → capture: a session started, or moved to another monitor.
+pub fn shot_session(app: &AppHandle, payload: &ShotSession) {
+    to(app, CAPTURE, SHOT_SESSION, payload);
+}
+
+/// screenshot → capture, shots: the session ended (committed or cancelled).
+pub fn shot_end(app: &AppHandle, session_id: i64) {
+    to_many(app, &[CAPTURE, SHOTS], SHOT_END, ShotEnd { session_id });
+}
+
+/// screenshot → shots: a shot was taken (the QAO adds a card).
+pub fn shot_added(app: &AppHandle, payload: &ShotAdded) {
+    to(app, SHOTS, SHOT_ADDED, payload);
+}
+
+/// screenshot → editor: show another record in the open editor window.
+pub fn shot_editor(app: &AppHandle, payload: &ShotEditorPayload) {
+    to(app, EDITOR, SHOT_EDITOR, payload);
 }

@@ -9,10 +9,10 @@ const { mockInvoke, mockListen } = await importTs("src/lib/ipc/mock/index.ts", "
 const q = (over = {}) => ({ text: "", exclude: [], filter: {}, cursor: null, limit: 40, ...over });
 const tick = () => new Promise((r) => setTimeout(r, 5));
 
-test("seed covers all seven kinds and pages with an opaque cursor", async () => {
+test("seed covers all eight kinds and pages with an opaque cursor", async () => {
   const counts = await mockInvoke("clips_counts", {});
   assert.equal(counts.all, 300);
-  for (const k of ["text", "link", "code", "color", "contact", "image", "file"]) {
+  for (const k of ["text", "link", "code", "color", "contact", "image", "file", "screenshot"]) {
     assert.ok(counts.kinds[k] > 0, `kind ${k} seeded`);
   }
   const seen = new Set();

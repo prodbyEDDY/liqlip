@@ -11,7 +11,8 @@ const q = (over = {}) => ({ text: "", exclude: [], filter: {}, cursor: null, lim
 const tick = (ms = 5) => new Promise((r) => setTimeout(r, ms));
 
 async function images() {
-  return (await mockInvoke("clips_list", { q: q({ filter: { kinds: ["image"] } }) })).items;
+  // Screenshots are pictures too (W5, §18.5): the OCR queue covers both kinds.
+  return (await mockInvoke("clips_list", { q: q({ filter: { kinds: ["image", "screenshot"] } }) })).items;
 }
 
 async function setOcr(over) {

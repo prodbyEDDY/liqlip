@@ -34,6 +34,7 @@ export const en = {
   "common.kind.contact": "Contact",
   "common.kind.image": "Image",
   "common.kind.file": "File",
+  "common.kind.screenshot": "Screenshot",
 
   "common.size.bytes": "{n} B",
   "common.size.kb": "{n} KB",
@@ -613,6 +614,8 @@ export const en = {
   "settings.storage.type.contact.desc": "Email addresses and phone numbers.",
   "settings.storage.type.image": "Images",
   "settings.storage.type.image.desc": "Screenshots and copied pictures.",
+  "settings.storage.type.screenshot": "Screenshots",
+  "settings.storage.type.screenshot.desc": "Screen captures taken with Liqlip.",
   "settings.storage.type.file": "Files",
   "settings.storage.type.file.desc": "Files and folders copied in File Explorer.",
   "settings.storage.usage": "Space used",
@@ -846,7 +849,23 @@ export const en = {
   "hud.paused": "Recording paused",
   "hud.resumed": "Recording resumed",
   "hud.skipNext": "The next copy won't be saved",
+  "hud.countdown": "Screenshot in {keys}",
+  "hud.shotFailed": "Couldn't capture the screen",
+  "hud.textCopied": "Text copied — press {keys}",
+  "hud.textEmpty": "No text found",
   "hud.pasteKeys": "Ctrl+V",
+
+  // --- editor.* (W6-C; W5-A stub) ---
+  "editor.soon": "The screenshot editor is coming soon.",
+
+  // --- capture.* (W6-D; W5-A stub) ---
+  "capture.soon": "Screen capture is coming soon.",
+
+  // --- shots.* (W6-E; W5-A stub) ---
+  "shots.soon": "Your latest screenshots will appear here.",
+
+  // --- pin.* (W6-E; W5-A stub) ---
+  "pin.soon": "Pinned pictures are coming soon.",
 } as const;
 
 export type TranslationKey = keyof typeof en;

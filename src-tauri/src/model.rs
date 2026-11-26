@@ -22,11 +22,14 @@ pub enum Kind {
     Contact,
     Image,
     File,
+    /// W5 (additive, ARCHITECTURE §18.5): a screen capture. Everywhere a record is pasted,
+    /// copied, dragged out, recognised or previewed it behaves like `Image`.
+    Screenshot,
 }
 
 #[allow(dead_code)] // W1: used by store/capture
 impl Kind {
-    pub const ALL: [Kind; 7] = [
+    pub const ALL: [Kind; 8] = [
         Kind::Text,
         Kind::Link,
         Kind::Code,
@@ -34,6 +37,7 @@ impl Kind {
         Kind::Contact,
         Kind::Image,
         Kind::File,
+        Kind::Screenshot,
     ];
 
     /// The wire / SQL spelling (`clips.kind`).
@@ -46,11 +50,18 @@ impl Kind {
             Kind::Contact => "contact",
             Kind::Image => "image",
             Kind::File => "file",
+            Kind::Screenshot => "screenshot",
         }
     }
 
     pub fn parse(s: &str) -> Option<Kind> {
         Kind::ALL.into_iter().find(|k| k.as_str() == s)
+    }
+
+    /// A picture record: `Image` or `Screenshot` (W5). Paste, copy, drag-out, open, OCR and
+    /// previews treat both the same (ARCHITECTURE §18.5).
+    pub fn is_image(self) -> bool {
+        matches!(self, Kind::Image | Kind::Screenshot)
     }
 }
 
@@ -108,7 +119,11 @@ pub enum ChangeOrigin {
     Retention,
 }
 
-/// `Record<Kind, T>` — one value per kind, always all seven keys on the wire.
+/// `Record<Kind, T>` — one value per kind, always all eight keys on the wire.
+///
+/// A key added after v1.0 (`screenshot`, W5) is missing from older `settings.json` files:
+/// the lenient loader (`settings::parse_lenient`) overlays a nested object key by key onto
+/// the defaults, so the old toggles are kept and the new key takes its default (`true`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct PerKind<T> {
     pub text: T,
@@ -118,6 +133,7 @@ pub struct PerKind<T> {
     pub contact: T,
     pub image: T,
     pub file: T,
+    pub screenshot: T,
 }
 
 #[allow(dead_code)] // W1: used by store/capture
@@ -131,6 +147,7 @@ impl<T> PerKind<T> {
             Kind::Contact => &self.contact,
             Kind::Image => &self.image,
             Kind::File => &self.file,
+            Kind::Screenshot => &self.screenshot,
         }
     }
 
@@ -143,6 +160,7 @@ impl<T> PerKind<T> {
             Kind::Contact => &mut self.contact,
             Kind::Image => &mut self.image,
             Kind::File => &mut self.file,
+            Kind::Screenshot => &mut self.screenshot,
         }
     }
 }
@@ -156,7 +174,8 @@ impl<T: Clone> PerKind<T> {
             color: v.clone(),
             contact: v.clone(),
             image: v.clone(),
-            file: v,
+            file: v.clone(),
+            screenshot: v,
         }
     }
 }
@@ -208,6 +227,19 @@ pub struct ClipMeta {
     /// file: parent directory of the first file, for the path tail on the card (FIX-08, W3)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dir: Option<String>,
+    /// screenshot / edited image (W5, §18.10): the last saved file and whether it is annotated
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shot: Option<ShotMeta>,
+}
+
+/// `ClipMeta.shot` (W5, ARCHITECTURE §18.10).
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShotMeta {
+    /// last file written to the screenshot folder (`None` — never saved)
+    pub saved_path: Option<String>,
+    /// the picture carries annotations (an `AnnotDoc` with objects is stored)
+    pub edited: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -471,6 +503,10 @@ pub struct PickerSettings {
 }
 
 /// `""` = not set. Notation as in Liquid Tools: `"Alt + V"`.
+///
+/// The five `shot_*` slots are W5 (additive, §18.10/§18.11): stored and validated, but NOT
+/// registered until W6-A extends the hotkey engine (`hotkeys::combo::FIELDS`). A file without
+/// them gets their defaults (`serde(default)` here; the lenient loader does the same).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HotkeySettings {
@@ -478,6 +514,21 @@ pub struct HotkeySettings {
     pub stack_next: String,
     pub pause_toggle: String,
     pub ignore_next: String,
+    /// capture a region — `"PrtSc"`
+    #[serde(default = "crate::settings::default_shot_region")]
+    pub shot_region: String,
+    /// capture the monitor under the cursor — `"Ctrl + PrtSc"`
+    #[serde(default = "crate::settings::default_shot_screen")]
+    pub shot_screen: String,
+    /// capture the active window — `""`
+    #[serde(default)]
+    pub shot_window: String,
+    /// repeat the last region — `""`
+    #[serde(default)]
+    pub shot_repeat: String,
+    /// copy text from the screen (OCR) — `""`
+    #[serde(default)]
+    pub shot_text: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -519,6 +570,61 @@ pub struct WindowSettings {
     pub settings_bounds: Option<Bounds>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ShotFormat {
+    Png,
+    Jpg,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ShotAfterCapture {
+    Overlay,
+    Editor,
+    None,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ShotCorner {
+    Left,
+    Right,
+}
+
+/// `settings.screenshot` (W5, §18.10; SPEC §9.7). Defaults — `settings.rs`; a missing section
+/// or field takes them (`serde(default)`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ScreenshotSettings {
+    /// take the shot as soon as the region is released — false
+    pub quick: bool,
+    /// magnifier at the cursor — true
+    pub magnifier: bool,
+    /// live W × H while selecting — true
+    pub dimensions: bool,
+    /// shutter click — true
+    pub sound: bool,
+    /// "Done" copies to the clipboard — true
+    pub copy: bool,
+    /// "Done" saves to the folder — true
+    pub save: bool,
+    /// `""` = `%USERPROFILE%\Pictures\Liqlip` (FOLDERID_Pictures)
+    pub folder: String,
+    /// file name template: `{date} {time} {app} {n}` — `"Liqlip {date} {time}"`
+    pub file_name: String,
+    /// file format in the folder (history and clipboard are always PNG) — png
+    pub format: ShotFormat,
+    /// 60–100 — 90
+    pub jpg_quality: u32,
+    /// overlay (QAO) | editor | none — overlay
+    pub after_capture: ShotAfterCapture,
+    /// QAO corner — left
+    pub corner: ShotCorner,
+    /// QAO auto-hide, seconds; 0 = never — 10
+    pub timeout: u32,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Settings {
@@ -532,6 +638,9 @@ pub struct Settings {
     pub stack: StackSettings,
     pub ocr: OcrSettings,
     pub window: WindowSettings,
+    /// W5 (additive; a settings.json without it gets the defaults)
+    #[serde(default)]
+    pub screenshot: ScreenshotSettings,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -844,6 +953,14 @@ pub enum HudKind {
     Resumed,
     /// W1-D (additive): "skip next copy" armed by the hotkey.
     SkipNext,
+    /// W5 (additive): delayed capture, `text` = seconds left ("3").
+    Countdown,
+    /// W5 (additive): the screen could not be captured (GDI error).
+    ShotFailed,
+    /// W5 (additive): text recognised from a region is on the clipboard.
+    TextCopied,
+    /// W5 (additive): no text found in the region.
+    TextEmpty,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -876,6 +993,210 @@ pub struct ImportProgress {
 pub enum ResolvedTheme {
     Light,
     Dark,
+}
+
+// ── §9.10 Screenshots (W5, ARCHITECTURE §18.10) ─────────────────────────────
+// Geometry is in PHYSICAL pixels. The annotation document (`AnnotDoc`, §18.6) is opaque to
+// Rust: it is stored and passed as `serde_json::Value`, never interpreted (its TS shape lives
+// in `types.ts` only).
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ShotMode {
+    Region,
+    Screen,
+    Window,
+    Repeat,
+    Text,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ShotAction {
+    Done,
+    Copy,
+    Save,
+    SaveAs,
+    Pin,
+    Text,
+}
+
+/// The modes that open the capture overlay (`ShotSession.mode`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ShotSessionMode {
+    Region,
+    Text,
+}
+
+/// What the overlay reports while a session is open (`shot_stage`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ShotStage {
+    Select,
+    Frame,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ShotEditorAction {
+    Done,
+    Copy,
+    SaveAs,
+    Pin,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ShotAddedError {
+    SaveFailed,
+}
+
+/// `open_windows_settings` pages (`ms-settings:` URIs).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum WindowsSettingsPage {
+    Keyboard,
+}
+
+/// Physical px of a monitor frame (`ShotCommit.rect`, `ShotSession.lastRegion`). Numbers, not
+/// integers, on the wire: the overlay maps pointer positions and may send fractions — the
+/// commit rounds and clamps to the frame (W6-A, `clamp_crop`).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Rect {
+    pub x: f64,
+    pub y: f64,
+    pub w: f64,
+    pub h: f64,
+}
+
+/// One monitor of a session: physical px of the virtual screen + its frozen frame.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MonitorFrame {
+    pub index: u32,
+    /// device name (as `MonitorInfo.id`)
+    pub id: String,
+    pub x: i32,
+    pub y: i32,
+    pub width: i32,
+    pub height: i32,
+    pub scale: f64,
+    /// `http://liq.localhost/shot/<sessionId>/<index>.bmp`
+    pub frame_url: String,
+}
+
+/// A window under the overlay (first = topmost), physical px of the monitor frame.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WinRect {
+    pub x: i32,
+    pub y: i32,
+    pub w: i32,
+    pub h: i32,
+    pub children: Vec<WinRect>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShotSession {
+    pub id: i64,
+    pub mode: ShotSessionMode,
+    pub monitor: MonitorFrame,
+    pub windows: Vec<WinRect>,
+    /// last region on this monitor (`R` in the overlay)
+    pub last_region: Option<Rect>,
+    pub quick: bool,
+    pub magnifier: bool,
+    pub dimensions: bool,
+}
+
+/// JSON part of the `shot_commit` body (§18.4): `[u32 LE N][N bytes JSON][RGBA | nothing]`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShotCommit {
+    pub session_id: i64,
+    pub rect: Rect,
+    pub action: ShotAction,
+    /// `AnnotDoc | null`, opaque
+    pub doc: Option<serde_json::Value>,
+    /// RGBA of the body (0 — no pixels: Rust crops the frame itself)
+    pub width: u32,
+    pub height: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShotCommitResult {
+    pub clip_id: Option<i64>,
+    pub saved_path: Option<String>,
+    /// `action: 'text'` — the recognised text
+    pub text: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShotEditorPayload {
+    pub clip_id: i64,
+    pub name: String,
+    /// `http://liq.localhost/base/<clipId>?v=<n>` — the picture without annotations
+    pub base_url: String,
+    pub width: i64,
+    pub height: i64,
+    /// `AnnotDoc | null`, opaque
+    pub doc: Option<serde_json::Value>,
+    pub dirty_guard: bool,
+}
+
+/// JSON part of the `shot_editor_commit` body (same framing as [`ShotCommit`]).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShotEditorCommit {
+    pub clip_id: i64,
+    pub action: ShotEditorAction,
+    /// `AnnotDoc`, opaque
+    pub doc: serde_json::Value,
+    pub width: u32,
+    pub height: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PinPayload {
+    pub clip_id: i64,
+    /// `http://liq.localhost/media/<clipId>?v=<n>`
+    pub image_url: String,
+    pub width: i64,
+    pub height: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShotStatus {
+    /// Windows sends PrtSc to the Snipping Tool (`PrintScreenKeyForSnippingEnabled`)
+    pub snipping_key: bool,
+    /// registration errors of the five screenshot hotkeys (`hotkeys.shot*`)
+    pub hotkey_errors: Vec<SettingsError>,
+}
+
+/// `shot:end`
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShotEnd {
+    pub session_id: i64,
+}
+
+/// `shot:added` — `clip: None` when screenshots are not kept in history (`temp_path` then).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShotAdded {
+    pub clip: Option<Clip>,
+    pub saved_path: Option<String>,
+    pub temp_path: Option<String>,
+    /// device name of the monitor the shot was taken on (QAO corner)
+    pub monitor: String,
+    pub error: Option<ShotAddedError>,
 }
 
 #[cfg(test)]
@@ -990,5 +1311,58 @@ mod tests {
     #[test]
     fn picker_close_is_empty_object() {
         round_trip(&PickerClose {}, json!({}));
+    }
+
+    /// W5 (§18.10): the screenshot contract on the wire.
+    #[test]
+    fn screenshot_wire_shapes() {
+        round_trip(&Kind::Screenshot, json!("screenshot"));
+        assert!(Kind::Screenshot.is_image() && Kind::Image.is_image() && !Kind::File.is_image());
+        assert_eq!(serde_json::to_value(PerKind::splat(0)).unwrap().as_object().unwrap().len(), Kind::ALL.len());
+        round_trip(&ShotAction::SaveAs, json!("save_as"));
+        round_trip(&ShotEditorAction::SaveAs, json!("save_as"));
+        round_trip(&ShotAddedError::SaveFailed, json!("save_failed"));
+        round_trip(&HudKind::ShotFailed, json!("shot_failed"));
+        round_trip(&HudKind::Countdown, json!("countdown"));
+        round_trip(&WindowsSettingsPage::Keyboard, json!("keyboard"));
+        round_trip(&ShotAfterCapture::None, json!("none"));
+        round_trip(
+            &ClipMeta { shot: Some(ShotMeta { saved_path: None, edited: true }), ..Default::default() },
+            json!({ "shot": { "savedPath": null, "edited": true } }),
+        );
+        let session = ShotSession {
+            id: 1,
+            mode: ShotSessionMode::Text,
+            monitor: MonitorFrame {
+                index: 0,
+                id: "\\\\.\\DISPLAY1".into(),
+                x: -1920,
+                y: 0,
+                width: 1920,
+                height: 1080,
+                scale: 1.25,
+                frame_url: "http://liq.localhost/shot/1/0.bmp".into(),
+            },
+            windows: vec![WinRect { x: 0, y: 0, w: 10, h: 10, children: vec![WinRect { x: 1, y: 1, w: 2, h: 2, children: vec![] }] }],
+            last_region: None,
+            quick: false,
+            magnifier: true,
+            dimensions: true,
+        };
+        let v = serde_json::to_value(&session).unwrap();
+        assert_eq!(v["monitor"]["frameUrl"], json!("http://liq.localhost/shot/1/0.bmp"));
+        assert_eq!(v["lastRegion"], json!(null));
+        assert_eq!(v["windows"][0]["children"][0]["w"], json!(2));
+        assert_eq!(serde_json::from_value::<ShotSession>(v).unwrap(), session);
+        round_trip(
+            &ShotAdded { clip: None, saved_path: None, temp_path: Some("C:\\t.png".into()), monitor: "M".into(), error: Some(ShotAddedError::SaveFailed) },
+            json!({ "clip": null, "savedPath": null, "tempPath": "C:\\t.png", "monitor": "M", "error": "save_failed" }),
+        );
+        round_trip(&ShotEnd { session_id: 4 }, json!({ "sessionId": 4 }));
+        // The annotation document stays opaque: whatever the editor wrote comes back as is.
+        let doc = json!({ "v": 1, "w": 4, "h": 2, "unit": 2, "crop": null, "objects": [{ "id": "x", "kind": "counter", "n": null, "future": true }] });
+        let commit: ShotEditorCommit =
+            serde_json::from_value(json!({ "clipId": 5, "action": "done", "doc": doc, "width": 4, "height": 2 })).unwrap();
+        assert_eq!(commit.doc, doc);
     }
 }

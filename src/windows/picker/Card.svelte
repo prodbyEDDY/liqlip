@@ -4,7 +4,7 @@
   // target), double click = Enter, Ctrl/Shift+click = multi-select, right click = actions,
   // press + move = drag (onto Favorites / a folder / the stack, or out of the shelf).
   import { getLocale, t, type TranslationKey } from "$lib/i18n/index.svelte";
-  import type { Clip, Snippet } from "$lib/ipc/types";
+  import { isImageKind, type Clip, type Snippet } from "$lib/ipc/types";
   import CardShell from "./CardShell.svelte";
   import CardActions from "./CardActions.svelte";
   import TextCard from "./cards/TextCard.svelte";
@@ -46,7 +46,7 @@
     if (clip.copyCount > 1) parts.push(t("picker.card.copiedTimes", { n: clip.copyCount }));
     return parts.join(" · ");
   });
-  const label = $derived(`${kindLabel}: ${title}${clip && clip.preview && clip.kind !== "image" ? ` — ${clip.preview.slice(0, 80)}` : ""}`);
+  const label = $derived(`${kindLabel}: ${title}${clip && clip.preview && !isImageKind(clip.kind) ? ` — ${clip.preview.slice(0, 80)}` : ""}`);
 
   const current = $derived(selection.current === id);
   const checked = $derived(selection.ids.has(id));
@@ -157,7 +157,7 @@
   {#if snippet}
     <TextCard text={snippet.body} terms={shelf.terms} />
   {:else if clip}
-    {#if clip.kind === "image"}
+    {#if isImageKind(clip.kind)}
       <ImageCard src={clip.thumbUrl} width={clip.width} height={clip.height} />
     {:else if clip.kind === "link"}
       <LinkCard host={linkHost(clip)} url={clip.meta.url ?? clip.preview} terms={shelf.terms} />

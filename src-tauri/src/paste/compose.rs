@@ -75,7 +75,7 @@ pub fn normalize_separator(sep: &str) -> String {
 }
 
 fn is_texty(kind: Kind) -> bool {
-    !matches!(kind, Kind::Image | Kind::File)
+    !(kind.is_image() || kind == Kind::File)
 }
 
 /// Paths of a file record (the structured list, else the `\n`-joined text).
@@ -97,7 +97,7 @@ pub fn file_paths(p: &PastePayload) -> Vec<String> {
 /// Plain-text form of a record (`None` for images).
 fn text_of(p: &PastePayload) -> Option<String> {
     match p.kind {
-        Kind::Image => None,
+        Kind::Image | Kind::Screenshot => None,
         Kind::File => Some(paths_text(&file_paths(p))),
         _ => Some(p.text.clone().unwrap_or_default()),
     }
@@ -116,7 +116,7 @@ fn single(p: &PastePayload, mode: PasteMode, always_plain: bool) -> Result<Conte
     };
     match mode {
         PasteMode::Auto => match p.kind {
-            Kind::Image => image(),
+            Kind::Image | Kind::Screenshot => image(),
             Kind::File => files(),
             _ if always_plain => Ok(Content::Text { text: text(), html: None, rtf: None }),
             _ => Ok(Content::Text { text: text(), html: p.html.clone(), rtf: p.rtf.clone() }),
@@ -165,7 +165,7 @@ pub fn compose(payloads: &[PastePayload], mode: PasteMode, sep: &str, always_pla
             if let PasteMode::Format(f @ (Format::Html | Format::Rtf | Format::Png)) = mode {
                 return Err(ComposeError::MultiFormat(f));
             }
-            let (images, others): (Vec<&PastePayload>, Vec<&PastePayload>) = payloads.iter().partition(|p| p.kind == Kind::Image);
+            let (images, others): (Vec<&PastePayload>, Vec<&PastePayload>) = payloads.iter().partition(|p| p.kind.is_image());
             if mode == PasteMode::Format(Format::Files) {
                 let files: Vec<&PastePayload> = payloads.iter().filter(|p| p.kind == Kind::File).collect();
                 let paths = union_paths(&files);
@@ -277,6 +277,18 @@ pub(crate) mod tests {
             content(compose(&[files(3, &["C:\\a", "C:\\b"])], PasteMode::Auto, "", false)),
             Content::Files { paths: vec!["C:\\a".into(), "C:\\b".into()] }
         );
+    }
+
+    /// W5 (ARCHITECTURE §18.5): a screenshot record pastes exactly like an image — Auto, Plain
+    /// and in a joined paste (skipped from the text, the image wins alone).
+    #[test]
+    fn screenshot_composes_like_an_image() {
+        let shot = PastePayload { kind: Kind::Screenshot, ..image(4) };
+        let png = Content::Image { png_path: "C:\\data\\media\\4.png".into() };
+        assert_eq!(content(compose(std::slice::from_ref(&shot), PasteMode::Auto, "", false)), png);
+        assert_eq!(content(compose(std::slice::from_ref(&shot), PasteMode::Plain, "", true)), png);
+        assert!(!is_texty(Kind::Screenshot));
+        assert_eq!(text_of(&shot), None);
     }
 
     #[test]

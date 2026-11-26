@@ -37,6 +37,7 @@
     contact: "at",
     image: "image",
     file: "file",
+    screenshot: "image", // W5: behaves like an image (W6-F may give it its own glyph)
   };
   const SEP_GLYPH: Record<MergeSeparator, string> = { newline: "↵", space: "␣", tab: "⇥", none: "∅" };
   const SEP_ICON: Record<MergeSeparator, IconName> = { newline: "text", space: "minus", tab: "arrowRight", none: "x" };

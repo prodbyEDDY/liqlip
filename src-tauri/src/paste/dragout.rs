@@ -45,7 +45,7 @@ pub fn drag_content(payloads: &[PastePayload], media: impl Fn(&std::path::Path) 
     for p in payloads {
         match p.kind {
             Kind::File => paths.extend(file_paths(p)),
-            Kind::Image => {
+            Kind::Image | Kind::Screenshot => {
                 if let Some(png) = &p.png_path {
                     paths.push(media(png).to_string_lossy().into_owned());
                 }
@@ -56,10 +56,10 @@ pub fn drag_content(payloads: &[PastePayload], media: impl Fn(&std::path::Path) 
     let mut seen = std::collections::HashSet::new();
     paths.retain(|x| seen.insert(x.to_lowercase()));
     if !paths.is_empty() {
-        let image = payloads.len() == 1 && payloads[0].kind == Kind::Image;
+        let image = payloads.len() == 1 && payloads[0].kind.is_image();
         return Ok(DragContent::Paths { paths, image });
     }
-    let texts: Vec<&str> = payloads.iter().filter(|p| !matches!(p.kind, Kind::File | Kind::Image)).filter_map(|p| p.text.as_deref()).collect();
+    let texts: Vec<&str> = payloads.iter().filter(|p| !(p.kind == Kind::File || p.kind.is_image())).filter_map(|p| p.text.as_deref()).collect();
     if texts.is_empty() {
         return Err("invalid: nothing to drag".into());
     }

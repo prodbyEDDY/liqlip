@@ -94,7 +94,7 @@ pub fn open_target(p: &PastePayload) -> Result<OpenTarget, String> {
     match p.kind {
         Kind::Link => normalize_link(p.text.as_deref().unwrap_or("")).ok_or_else(|| "invalid: not an openable link".to_string()),
         Kind::File => file_paths(p).into_iter().next().map(|s| OpenTarget::Path(PathBuf::from(s))).ok_or_else(|| "not_found: no file".to_string()),
-        Kind::Image => p.png_path.clone().map(OpenTarget::Path).ok_or_else(|| "not_found: image file".to_string()),
+        Kind::Image | Kind::Screenshot => p.png_path.clone().map(OpenTarget::Path).ok_or_else(|| "not_found: image file".to_string()),
         _ => Err(format!("invalid: cannot open a {} record", p.kind.as_str())),
     }
 }
@@ -103,7 +103,7 @@ pub fn open_target(p: &PastePayload) -> Result<OpenTarget, String> {
 pub fn local_files(app: &AppHandle, p: &PastePayload) -> Result<Vec<PathBuf>, String> {
     let paths: Vec<PathBuf> = match p.kind {
         Kind::File => file_paths(p).into_iter().map(PathBuf::from).collect(),
-        Kind::Image => p.png_path.iter().map(|x| resolve_media(app, x)).collect(),
+        Kind::Image | Kind::Screenshot => p.png_path.iter().map(|x| resolve_media(app, x)).collect(),
         _ => return Err(format!("invalid: a {} record has no file", p.kind.as_str())),
     };
     let existing: Vec<PathBuf> = paths.into_iter().filter(|x| x.exists()).collect();
@@ -117,7 +117,7 @@ pub fn open(app: &AppHandle, p: &PastePayload) -> Result<(), String> {
     match open_target(p)? {
         OpenTarget::Url(url) => app.opener().open_url(url, None::<&str>).map_err(|e| format!("failed: {e}")),
         OpenTarget::Path(path) => {
-            let path = if p.kind == Kind::Image { resolve_media(app, &path) } else { path };
+            let path = if p.kind.is_image() { resolve_media(app, &path) } else { path };
             if !path.exists() {
                 return Err("not_found: the file no longer exists".into());
             }

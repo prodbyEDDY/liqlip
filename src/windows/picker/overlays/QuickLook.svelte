@@ -23,7 +23,7 @@
   import { errorCode, errorMessage } from "$lib/ipc/errors";
   import { getLocale, t, type TranslationKey } from "$lib/i18n/index.svelte";
   import type { IconName } from "$lib/icons";
-  import type { ClipDetail, Format, Kind, Snippet } from "$lib/ipc/types";
+  import { isImageKind, type ClipDetail, type Format, type Kind, type Snippet } from "$lib/ipc/types";
   import { parseSnippet } from "$lib/snippets/expand";
   import { overlays, type LayerProps } from "../overlays.svelte";
   import { feed } from "../feed.svelte";
@@ -53,6 +53,7 @@
     contact: "at",
     image: "image",
     file: "file",
+    screenshot: "image", // W5: behaves like an image (W6-F may give it its own glyph)
   };
 
   // ── which record ──
@@ -419,7 +420,7 @@
         if (id !== null && !snippetMode) void runAction("reveal", [id]);
         return true;
       }
-      if (plain && detail?.kind === "image") {
+      if (plain && detail && isImageKind(detail.kind)) {
         if (e.code === "Equal" || e.code === "NumpadAdd" || e.key === "+") {
           stage?.zoomIn();
           return true;
@@ -483,7 +484,7 @@
     if (d.formats.length > 1) {
       rows.push({ label: t("picker.ql.formats"), value: d.formats.map((f: Format) => t(`picker.menu.format.${f}` as TranslationKey)).join(", ") });
     }
-    if (d.kind === "image") {
+    if (isImageKind(d.kind)) {
       const px = d.width && d.height ? t("picker.ql.pixels", { w: d.width, h: d.height }) : null;
       rows.push({ label: t("picker.ql.size"), value: [px, sizeText(d.size)].filter(Boolean).join(" · ") || "—" });
     } else if (d.kind === "file") {
@@ -571,7 +572,7 @@
         {#if !editing && (canEdit || snippet)}
           <Button variant="ghost" size="sm" icon="edit" title={t("picker.ql.edit")} aria-label={t("picker.ql.edit")} onmousedown={(e: MouseEvent) => e.preventDefault()} onclick={startEdit} />
         {/if}
-        {#if !editing && detail && (detail.kind === "link" || detail.kind === "file" || detail.kind === "image")}
+        {#if !editing && detail && (detail.kind === "link" || detail.kind === "file" || isImageKind(detail.kind))}
           <Button variant="ghost" size="sm" icon="external" title={t("picker.ql.open")} aria-label={t("picker.ql.open")} onmousedown={(e: MouseEvent) => e.preventDefault()} onclick={() => id !== null && void runAction("open", [id])} />
         {/if}
       {/snippet}
@@ -624,7 +625,7 @@
           {:else if detail.formats.some((f) => f === "html" || f === "rtf")}
             <p class="note" id="{uid}-fmt"><Ico name="info" size={14} />{t("picker.ql.editFormats")}</p>
           {/if}
-        {:else if detail.kind === "image"}
+        {:else if isImageKind(detail.kind)}
           <ImageStage bind:this={stage} src={detail.imageUrl ?? detail.thumbUrl ?? ""} alt={title} width={detail.width} height={detail.height} />
           <div class="ocr" class:ocr--open={qlPrefs.ocrOpen}>
             <button type="button" class="ocr__toggle" aria-expanded={qlPrefs.ocrOpen} aria-controls="{uid}-ocr" onmousedown={(e) => e.preventDefault()} onclick={() => (qlPrefs.ocrOpen = !qlPrefs.ocrOpen)}>

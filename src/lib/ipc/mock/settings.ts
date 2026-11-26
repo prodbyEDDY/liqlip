@@ -33,12 +33,22 @@ export const MOCK_DEFAULTS: Settings = {
     mergeSeparator: "newline",
     pasteKeys: [],
   },
-  hotkeys: { summon: "Alt + V", stackNext: "Alt + Shift + V", pauseToggle: "", ignoreNext: "" },
+  hotkeys: {
+    summon: "Alt + V",
+    stackNext: "Alt + Shift + V",
+    pauseToggle: "",
+    ignoreNext: "",
+    shotRegion: "PrtSc",
+    shotScreen: "Ctrl + PrtSc",
+    shotWindow: "",
+    shotRepeat: "",
+    shotText: "",
+  },
   storage: {
     retention: "3m",
     maxEntries: 5000,
     maxSizeMb: 1024,
-    types: { text: true, link: true, code: true, color: true, contact: true, image: true, file: true },
+    types: { text: true, link: true, code: true, color: true, contact: true, image: true, file: true, screenshot: true },
   },
   privacy: {
     respectMarkers: true,
@@ -48,7 +58,28 @@ export const MOCK_DEFAULTS: Settings = {
   stack: { newlineAfterPaste: false },
   ocr: { enabled: true, language: "auto" },
   window: { settingsBounds: null },
+  screenshot: {
+    quick: false,
+    magnifier: true,
+    dimensions: true,
+    sound: true,
+    copy: true,
+    save: true,
+    folder: "",
+    fileName: "Liqlip {date} {time}",
+    format: "png",
+    jpgQuality: 90,
+    afterCapture: "overlay",
+    corner: "left",
+    timeout: 10,
+  },
 };
+
+/** The hotkey fields in the Rust order (`settings.rs::validate`); the five `shot*` are W5. */
+const HOTKEY_FIELDS = ["summon", "stackNext", "pauseToggle", "ignoreNext", "shotRegion", "shotScreen", "shotWindow", "shotRepeat", "shotText"] as const;
+
+/** Characters Windows does not allow in a file name (Rust `FILE_NAME_FORBIDDEN`). */
+const FILE_NAME_FORBIDDEN = /[<>:"/\\|?*]/;
 
 /** Chords the mock pretends another app holds (RegisterHotKey would refuse them). The
  *  first four are reserved by Windows; the last two can be pressed in a browser to try the
@@ -73,11 +104,22 @@ function load(): Settings {
     const raw = typeof localStorage !== "undefined" ? localStorage.getItem(STORAGE_KEY) : null;
     if (raw) {
       const parsed = JSON.parse(raw) as Partial<Settings>;
-      // Shallow-per-section merge onto the defaults (lenient, like the Rust loader).
+      // Per-section merge onto the defaults (lenient, like the Rust loader); a nested object
+      // (`storage.types`) merges key by key, so a key added later (`screenshot`, W5) keeps its default.
       const merged = structuredClone(MOCK_DEFAULTS) as unknown as Record<string, unknown>;
-      for (const [k, v] of Object.entries(parsed)) {
+      const isObj = (x: unknown): x is Record<string, unknown> => !!x && typeof x === "object" && !Array.isArray(x);
+      for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
         const base = merged[k];
-        merged[k] = base && typeof base === "object" && v && typeof v === "object" && !Array.isArray(v) ? { ...base, ...v } : (v ?? base);
+        if (isObj(base) && isObj(v)) {
+          const sec: Record<string, unknown> = { ...base, ...v };
+          for (const [f, fv] of Object.entries(base)) {
+            const vf = v[f];
+            if (isObj(fv) && isObj(vf)) sec[f] = { ...fv, ...vf };
+          }
+          merged[k] = sec;
+        } else {
+          merged[k] = v ?? base;
+        }
       }
       merged.version = 1;
       return merged as unknown as Settings;
@@ -131,7 +173,7 @@ export function validate(prev: Settings, input: Settings): { next: Settings; err
     bad("picker.pasteKeys");
   }
   const hk = next.hotkeys;
-  for (const k of ["summon", "stackNext", "pauseToggle", "ignoreNext"] as const) {
+  for (const k of HOTKEY_FIELDS) {
     hk[k] = hk[k].trim();
     if ([...hk[k]].length > 64) {
       hk[k] = prev.hotkeys[k];
@@ -145,8 +187,10 @@ export function validate(prev: Settings, input: Settings): { next: Settings; err
       bad(`hotkeys.${k}`, "taken");
     }
   }
+  // Conflicts across all nine slots: the engine reports them once W6-A registers the five
+  // screenshot slots (ARCHITECTURE §18.11) — the mock already does, so the UI can be built.
   const used = new Map<string, string>();
-  for (const k of ["summon", "stackNext", "pauseToggle", "ignoreNext"] as const) {
+  for (const k of HOTKEY_FIELDS) {
     if (!hk[k]) continue;
     const other = used.get(hk[k]);
     if (other !== undefined && hk[k] !== prev.hotkeys[k]) {
@@ -177,6 +221,25 @@ export function validate(prev: Settings, input: Settings): { next: Settings; err
   if (!/^[A-Za-z0-9-]{1,35}$/.test(next.ocr.language)) {
     next.ocr.language = prev.ocr.language;
     bad("ocr.language");
+  }
+  const sh = next.screenshot;
+  sh.folder = sh.folder.trim();
+  if ([...sh.folder].length > 260 || /[\u0000-\u001f]/.test(sh.folder)) {
+    sh.folder = prev.screenshot.folder;
+    bad("screenshot.folder");
+  }
+  sh.fileName = sh.fileName.trim();
+  if (badName(sh.fileName, 120) || FILE_NAME_FORBIDDEN.test(sh.fileName)) {
+    sh.fileName = prev.screenshot.fileName;
+    bad("screenshot.fileName");
+  }
+  if (!(Number.isInteger(sh.jpgQuality) && sh.jpgQuality >= 60 && sh.jpgQuality <= 100)) {
+    sh.jpgQuality = prev.screenshot.jpgQuality;
+    bad("screenshot.jpgQuality");
+  }
+  if (!(Number.isInteger(sh.timeout) && sh.timeout >= 0 && sh.timeout <= 3600)) {
+    sh.timeout = prev.screenshot.timeout;
+    bad("screenshot.timeout");
   }
   const b = next.window.settingsBounds;
   if (b && !(b.w >= 100 && b.w <= 100_000 && b.h >= 100 && b.h <= 100_000 && Math.abs(b.x) <= 100_000 && Math.abs(b.y) <= 100_000)) {

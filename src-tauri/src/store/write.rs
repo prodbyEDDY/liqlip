@@ -258,6 +258,7 @@ fn merge_meta(old: ClipMeta, new: &ClipMeta) -> ClipMeta {
         ext: new.ext.clone().or(old.ext),
         truncated: new.truncated.or(old.truncated),
         dir: new.dir.clone().or(old.dir),
+        shot: new.shot.clone().or(old.shot), // W5
     }
 }
 

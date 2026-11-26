@@ -15,7 +15,7 @@ pub mod commands;
 mod engine;
 mod worker;
 
-use crate::model::{ChangeOrigin, ClipsChange, ClipsChanged, Kind, OcrProgress, OcrState};
+use crate::model::{ChangeOrigin, ClipsChange, ClipsChanged, OcrProgress, OcrState};
 use crate::store::ocr::OcrWrite;
 use crate::store::Store;
 use crate::{events, logx, settings};
@@ -192,7 +192,7 @@ pub(crate) fn reindex(app: &AppHandle) -> Result<(), String> {
 pub(crate) fn clip_text(app: &AppHandle, id: i64) -> Result<String, String> {
     let store = store_of(app)?;
     let rec = store.ocr_record(id)?;
-    if rec.kind != Kind::Image {
+    if !rec.kind.is_image() {
         return Err(format!("invalid: clip {id} is not an image"));
     }
     if rec.state == OcrState::Done {

@@ -38,7 +38,8 @@ test("every §9.6 command is documented, registered, wrapped and mocked", async 
 
   const { MOCK_COMMANDS } = await importTs("src/lib/ipc/mock/index.ts");
 
-  assert.equal(documented.length, 67, "ARCHITECTURE §9.6 lists 67 commands");
+  // 67 (v1.0) + 20 screenshot commands (W5, §18.10)
+  assert.equal(documented.length, 87, "ARCHITECTURE §9.6 lists 87 commands");
   assert.deepEqual(sorted(registered), sorted(documented), "lib.rs generate_handler! ≡ §9.6");
   assert.deepEqual(sorted(wrapped), sorted(documented), "commands.ts ≡ §9.6");
   assert.deepEqual(sorted(MOCK_COMMANDS), sorted(documented), "mock router ≡ §9.6");
@@ -155,7 +156,10 @@ test("model.rs structs ≡ types.ts interfaces (field names and optionality)", a
       `${name}: [field, optional] pairs differ between model.rs and types.ts`,
     );
   }
-  for (const name of ts.keys()) assert.ok(rs.has(name), `model.rs lacks struct ${name}`);
+  // `AnnotDoc` (§18.6) is TS-only: Rust keeps the annotation document opaque (serde_json::Value).
+  const tsOnly = new Set(["AnnotDoc"]);
+  for (const name of ts.keys()) assert.ok(rs.has(name) || tsOnly.has(name), `model.rs lacks struct ${name}`);
+  for (const name of tsOnly) assert.ok(!rs.has(name), `${name} is opaque in Rust — drop it from tsOnly`);
   assert.ok(compared >= 45, `compared only ${compared} structs`);
 });
 
