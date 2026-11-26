@@ -386,9 +386,13 @@ export function createQao(state: QaoState, api: QaoApi) {
       if (state.hovered) state.hovered = false;
     },
 
-    /** `shot:session` (the selection stage): Rust hides the window; timers wait until `shot:end`. */
+    /** `shot:session` (the selection stage): Rust hides the window; timers wait until `shot:end`.
+     *  The hover is forgotten (W7-R4): a window hidden under the pointer never gets
+     *  `pointerleave`, and a stale hover would keep the stack forever after the shot; if the
+     *  pointer is still there when the stack comes back, its next move re-arms the hover. */
     sessionStarted(): void {
       state.capturing = true;
+      state.hovered = false;
     },
     sessionEnded(): void {
       state.capturing = false;

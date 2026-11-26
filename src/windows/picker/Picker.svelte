@@ -4,6 +4,7 @@
   // selection, keyboard, overlays); see docs/picker.md.
   import { onMount } from "svelte";
   import Ico from "$lib/components/Ico.svelte";
+  import { refuseDrop } from "$lib/dropGuard";
   import { getLocale, t } from "$lib/i18n/index.svelte";
   import { isTauri } from "$lib/ipc/runtime";
   import SearchBar from "./SearchBar.svelte";
@@ -59,7 +60,15 @@
   });
 </script>
 
-<svelte:window onkeydown={keyboard.onKeydown} onkeyup={keyboard.onKeyup} onblur={keyboard.releaseCtrl} />
+<!-- nothing drops on the shelf: a card dragged out and released back over it is a cancelled drag (W7-R4) -->
+<svelte:window
+  onkeydown={keyboard.onKeydown}
+  onkeyup={keyboard.onKeyup}
+  onblur={keyboard.releaseCtrl}
+  ondragenter={refuseDrop}
+  ondragover={refuseDrop}
+  ondrop={refuseDrop}
+/>
 
 <!-- Closed (and before the first `picker:open`): nothing is rendered — the armed hover window
      is visible, transparent and click-through, so any pixel would show at the screen edge. -->

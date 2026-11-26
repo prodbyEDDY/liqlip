@@ -41,6 +41,25 @@ test("panel: inside for a tall frame with no room above or below", () => {
   assert.equal(p.y, frame.y + frame.h - d.INSIDE_INSET - panel.h);
 });
 
+test("panel: no room for the full gap — still outside, closer, never over the picture (W7-R4)", () => {
+  // 1280 × 720 at 150 %: view 853 × 480, the one-column panel 538 × 144, a medium frame
+  const v = { w: 853, h: 480 };
+  const tall = { w: 538, h: 144 };
+  const frame = { x: 132, y: 115, w: 535, h: 196 };
+  const p = d.dockPanel(frame, tall, v);
+  assert.equal(p.side, "below");
+  assert.equal(p.y, v.h - d.EDGE - tall.h);
+  assert.ok(p.y >= frame.y + frame.h + d.TIGHT_GAP, "leaves the inner half of the bottom handles free");
+  // the same frame near the bottom of the monitor: above, pressed to the top edge
+  const low = { x: 132, y: 170, w: 535, h: 230 };
+  const q = d.dockPanel(low, tall, v);
+  assert.equal(q.side, "above");
+  assert.equal(q.y, d.EDGE);
+  assert.ok(q.y + tall.h <= low.y - d.TIGHT_GAP);
+  // neither: inside (as before)
+  assert.equal(d.dockPanel({ x: 132, y: 100, w: 535, h: 300 }, tall, v).side, "inside");
+});
+
 test("panel: pressed against the left and right monitor edges", () => {
   const left = d.dockPanel({ x: 0, y: 100, w: 100, h: 100 }, panel, view);
   assert.equal(left.x, d.EDGE);

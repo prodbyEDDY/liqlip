@@ -4,7 +4,7 @@
 // crosshair one cell thick and the centre pixel outlined. Unlike LT the lens keeps its size
 // (~150 view px) and the wheel changes the magnification (SPEC §9.2: "колесо — увеличение").
 // The chrome is monochrome (white/black) — the colour inside the lens is the user's screen.
-// Pure maths here — node-tested (tests/captureLoupe.test.mjs); `Loupe.svelte` draws.
+// Pure maths here — node-tested (tests/captureGeometry.test.mjs); `Loupe.svelte` draws.
 import type { Rect } from "$lib/ipc/types";
 import type { Point } from "./geometry";
 

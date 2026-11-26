@@ -4,7 +4,7 @@
   // for the shadow — and destroys it on close. Here: `shot_pin_get()` → the picture; drag the
   // window (`startDragging()` on press, like Tauri's own drag region: a double click arrives as
   // the second press with `detail === 2`); wheel → `shot_pin_resize({ scale })` (absolute,
-  // pinMath.ts); Ctrl+wheel → opacity 20–100 % (CSS); double click → 100 % ↔ the opening size;
+  // pinMath.ts); Ctrl+wheel → opacity 20–100 % (CSS); double click → 100 % ↔ the previous size;
   // Esc / × (on hover) → `shot_pin_close()`; right click → a menu in the shelf's menu style.
   // `clips:changed` naming this record (INT-5: Rust sends it to every `pin-*`) → `shot_pin_get()`
   // again: an edited picture reloads (new `?v=`), a new size keeps the scale, a deleted record
@@ -14,6 +14,7 @@
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { isBrowserShortcut } from "$lib/browserKeys";
   import Ico from "$lib/components/Ico.svelte";
+  import { refuseDrop } from "$lib/dropGuard";
   import type { IconName } from "$lib/icons";
   import { t, type TranslationKey } from "$lib/i18n/index.svelte";
   import { clipCopy, shotEdit, shotPinClose, shotPinGet, shotPinResize, shotSaveAs } from "$lib/ipc/commands";
@@ -26,12 +27,12 @@
     MENU_SIZE,
     PIN_BLEED,
     cornerRadius,
+    doubleClick,
     fadeBy,
     fitScale,
     menuMode,
     placeMenu,
     scaleOfWindow,
-    toggleActual,
     wheelPixels,
     zoomBy,
     type MenuMode,
@@ -49,9 +50,10 @@
   let vh = $state(typeof window !== "undefined" ? window.innerHeight : 0);
   let dpr = $state(typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1);
 
-  /** Current scale (physical px per picture px) and the one the pin opened at. */
+  /** Current scale (physical px per picture px) and where a double click at 100 % returns to
+   *  (the opening size, then the last zoom a double click left — `doubleClick`). */
   let scale = $state(1);
-  let initial = 1;
+  let back = 1;
   let opacity = $state(1);
 
   /** The picture box, logical px: the window minus the bleed (Tauri), or the scaled picture
@@ -71,8 +73,8 @@
         payload = p;
         status = p ? "ready" : "empty";
         if (!p) return;
-        initial = tauri ? scaleOfWindow(window.innerWidth, window.devicePixelRatio || 1, p.width) : fitScale(window.innerWidth, window.innerHeight, window.devicePixelRatio || 1, p.width, p.height);
-        scale = initial;
+        back = tauri ? scaleOfWindow(window.innerWidth, window.devicePixelRatio || 1, p.width) : fitScale(window.innerWidth, window.innerHeight, window.devicePixelRatio || 1, p.width, p.height);
+        scale = back;
       })
       .catch((e) => {
         console.error("[pin] shot_pin_get", e);
@@ -228,7 +230,10 @@
       return;
     }
     if (e.detail === 2) {
-      setScale(toggleActual(scale, initial));
+      const next = doubleClick(scale, back);
+      back = next.back;
+      if (next.scale === scale) flash(t("pin.zoom", { value: Math.round(scale * 100) })); // already there: say so
+      else setScale(next.scale);
       return;
     }
     if (e.detail === 1 && tauri) {
@@ -296,7 +301,14 @@
   }
 </script>
 
-<svelte:window onkeydown={onKeydown} onresize={onResize} onblur={() => (menu = null)} />
+<svelte:window
+  onkeydown={onKeydown}
+  onresize={onResize}
+  onblur={() => (menu = null)}
+  ondragenter={refuseDrop}
+  ondragover={refuseDrop}
+  ondrop={refuseDrop}
+/>
 
 {#if !closed}
   <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->

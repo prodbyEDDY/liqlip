@@ -40,6 +40,20 @@ test("double click: 100 % ↔ the opening size", () => {
   assert.equal(p.toggleActual(1, 1), 1, "a pin that opened at 100 % stays");
 });
 
+test("double click remembers the zoom it left (W7-R4): 150 % → 100 % → 150 %", () => {
+  // opened at 100 %, zoomed to 150 %
+  let s = p.doubleClick(1.5, 1);
+  assert.deepEqual(s, { scale: 1, back: 1.5 });
+  s = p.doubleClick(s.scale, s.back);
+  assert.deepEqual(s, { scale: 1.5, back: 1.5 });
+  // opened shrunk (a big shot) and never zoomed: 42 % ↔ 100 %
+  s = p.doubleClick(0.42, 0.42);
+  assert.deepEqual(s, { scale: 1, back: 0.42 });
+  assert.equal(p.doubleClick(s.scale, s.back).scale, 0.42);
+  // at 100 % with nothing to go back to: stays at 100 %
+  assert.deepEqual(p.doubleClick(1, 1), { scale: 1, back: 1 });
+});
+
 test("the scale a pin window shows (window − bleed, physical px per picture px)", () => {
   const b = 2 * p.PIN_BLEED;
   assert.equal(p.scaleOfWindow(1280 + b, 1.5, 1920), 1, "1280 logical × 1.5 = 1920 physical");

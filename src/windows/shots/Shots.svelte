@@ -13,6 +13,7 @@
   import { cubicOut } from "svelte/easing";
   import { fly } from "svelte/transition";
   import { isBrowserShortcut } from "$lib/browserKeys";
+  import { refuseDrop } from "$lib/dropGuard";
   import { t } from "$lib/i18n/index.svelte";
   import {
     clipCopy,
@@ -104,7 +105,9 @@
   function devShape(p: ShotAdded): ShotAdded {
     const kind = devNext;
     devNext = null;
-    if (kind === "failed") return { ...p, savedPath: null, error: "save_failed" };
+    // a failed save leaves no saved path on the record either (Rust never sets it), so the card
+    // offers Save, not Show in folder
+    if (kind === "failed") return { ...p, clip: p.clip && { ...p.clip, meta: { ...p.clip.meta, shot: p.clip.meta.shot && { ...p.clip.meta.shot, savedPath: null } } }, savedPath: null, error: "save_failed" };
     if (kind === "temp") return { ...p, clip: null, savedPath: null, tempPath: `C:\\Users\\me\\AppData\\Local\\Temp\\Liqlip\\shots\\mock-${++devSeq}.png` };
     return p;
   }
@@ -156,7 +159,8 @@
   const side = $derived(qs.corner === "right" ? 1 : -1);
 </script>
 
-<svelte:window onkeydown={onKeydown} />
+<!-- nothing drops here: a card released back over the stack is a cancelled drag, not "dropped" (W7-R4) -->
+<svelte:window onkeydown={onKeydown} ondragenter={refuseDrop} ondragover={refuseDrop} ondrop={refuseDrop} />
 
 <main class="stage" class:stage--right={qs.corner === "right"} style:--bleed="{BLEED}px" style:--gap="{GAP}px">
   {#if qs.items.length}

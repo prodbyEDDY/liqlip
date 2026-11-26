@@ -17,7 +17,8 @@
 //
 // URL flags (also listed in bus.ts): ?mock-shot=text (OCR session) · ?mock-shot-quick=1 (skip
 // the frame stage) · ?mock-scale=1.5 (monitor scale) · ?mock-snipping=1 (Windows gives PrtSc
-// to the Snipping Tool) · ?mock-shot-dialog=cancel (Save as… is cancelled).
+// to the Snipping Tool) · ?mock-shot-dialog=cancel (Save as… is cancelled) · ?mock-shot-fail=commit
+// (W7-R4: every `shot_commit` rejects "failed:" after parsing the body — the overlay's error path).
 //
 // INT-5: `shots_pending` answers `[]` (the mock emits `shot:added` only to live listeners);
 // `shot_temp_copy` / `shot_temp_save_as` accept the bare file names the mock hands out in
@@ -310,6 +311,18 @@ function hud(p: HudShow): void {
 /** Recognised text of a region (`action: 'text'`). */
 const OCR_REGION_TEXT = "Liqlip — a keyboard-first clipboard manager";
 
+/** What follows a commit on screen — Rust's `commit::plan` + step (6) (§18.4; W7-R4: the mock
+ *  showed the QAO after every action): only `done` follows "After capture"; `copy` / `save` /
+ *  `save_as` show nothing; `pin` pins the record; with no record the editor falls back to the
+ *  QAO and a pin to nothing. */
+export function afterCommit(action: Exclude<ShotAction, "text">, setting: "overlay" | "editor" | "none", hasRecord: boolean): "qao" | "editor" | "pin" | "nothing" {
+  const after = action === "done" ? setting : action === "pin" ? "pin" : "none";
+  if (after === "overlay") return "qao";
+  if (after === "editor") return hasRecord ? "editor" : "qao";
+  if (after === "pin") return hasRecord ? "pin" : "nothing";
+  return "nothing";
+}
+
 /** What Rust's commit does (§18.4), on the mock feed. */
 async function finishShot(region: Rect, rgba: Uint8Array | null, size: { w: number; h: number }, action: ShotAction, doc: AnnotDoc | null): Promise<ShotCommitResult> {
   const f = shotFlags();
@@ -326,8 +339,9 @@ async function finishShot(region: Rect, rgba: Uint8Array | null, size: { w: numb
   const [w, h] = rgba ? [size.w, size.h] : [r.w, r.h];
   const st = currentSettings();
   const name = fileName();
-  const save = action === "save" || action === "save_as" || (action === "done" && st.screenshot.save);
-  const path = save ? savedPath(name) : null;
+  const save = action === "save" || (action === "done" && st.screenshot.save);
+  // `save_as` is Rust's dialog (`files::save_new_as`): a cancelled dialog saves nothing
+  const path = save ? savedPath(name) : action === "save_as" && !f.dialogCancel ? `C:\\Users\\me\\Documents\\${name}.${st.screenshot.format}` : null;
   let clip: Clip | null = null;
   if (st.storage.types.screenshot) {
     const d = db();
@@ -340,9 +354,8 @@ async function finishShot(region: Rect, rgba: Uint8Array | null, size: { w: numb
     emitChanged("added", [c.id], "capture");
   }
   endSession();
-  if (action === "pin") console.info("[mock] shot pinned", clip?.id ?? null);
-  const after = st.screenshot.afterCapture;
-  if (after === "overlay") {
+  const after = afterCommit(action, st.screenshot.afterCapture, clip !== null);
+  if (after === "qao") {
     mockEmit<ShotAdded>("shot:added", {
       clip,
       savedPath: path,
@@ -353,6 +366,8 @@ async function finishShot(region: Rect, rgba: Uint8Array | null, size: { w: numb
   } else if (after === "editor" && clip) {
     lastEdited = clip.id;
     console.info("[mock] open the editor on", clip.id);
+  } else if (after === "pin" && clip) {
+    console.info("[mock] shot pinned", clip.id);
   }
   return { clipId: clip?.id ?? null, savedPath: path, text: null };
 }
@@ -391,6 +406,7 @@ async function commit(args: Args): Promise<ShotCommitResult> {
   if (!session || head.sessionId !== session.id) throw fail("not_found", `session ${String(head.sessionId)}`);
   if (!ACTIONS.includes(head.action)) throw fail("invalid", `action ${String(head.action)}`);
   if (session.mode === "text" && head.action !== "text") throw fail("invalid", "a text session commits `text`");
+  if (param("mock-shot-fail") === "commit") throw fail("failed", "the commit failed (mock-shot-fail)");
   return finishShot(head.rect, rgba, { w: head.width, h: head.height }, head.action, head.doc ?? null);
 }
 
