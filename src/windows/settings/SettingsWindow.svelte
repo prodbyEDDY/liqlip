@@ -9,11 +9,12 @@
   import { isBrowserShortcut } from "$lib/browserKeys";
   import Button from "$lib/components/Button.svelte";
   import EmptyState from "$lib/components/EmptyState.svelte";
-  import { applyLanguage, t, type TranslationKey } from "$lib/i18n/index.svelte";
+  import { tick } from "svelte";
+  import { applyLanguage, t } from "$lib/i18n/index.svelte";
   import { onSettingsNavigate } from "$lib/ipc/events";
   import { applyThemePref } from "$lib/theme.svelte";
   import { resolveSection, stepIndex } from "./logic";
-  import { ONBOARDING, SECTION_KEYS, SECTIONS, type SectionKey } from "./sections";
+  import { ONBOARDING, SECTION_KEYS, SECTIONS, sectionDescKey, sectionTitleKey, type SectionKey } from "./sections";
   import { settings } from "./settings.svelte";
   import { dialogs } from "./ui.svelte";
   import DialogHost from "./ui/DialogHost.svelte";
@@ -27,6 +28,7 @@
   import Storage from "./sections/Storage.svelte";
   import Privacy from "./sections/Privacy.svelte";
   import Snippets from "./sections/Snippets.svelte";
+  import Screenshot from "./sections/Screenshot.svelte";
   import Ocr from "./sections/Ocr.svelte";
   import Import from "./sections/Import.svelte";
   import About from "./sections/About.svelte";
@@ -43,7 +45,7 @@
   );
 
   const items = $derived<NavItem[]>(
-    SECTIONS.map((s) => ({ key: s.key, icon: s.icon, label: t(`settings.section.${s.key}` as TranslationKey) })),
+    SECTIONS.map((s) => ({ key: s.key, icon: s.icon, label: t(sectionTitleKey(s.key)) })),
   );
 
   // Optimistic theme/language: the window repaints on the edit, and rolls back with it.
@@ -111,6 +113,21 @@
     section = SECTION_KEYS[stepIndex(i, back ? -1 : 1, SECTION_KEYS.length)];
   }
 
+  /** Open a section and, optionally, bring one of its shortcuts into view — and start
+   *  recording it (`record`: "Assign another shortcut" of the Snipping Tool warning, W6-F). */
+  async function goTo(next: SectionKey, hotkey?: string, record = false) {
+    section = next;
+    if (!hotkey) return;
+    // After the new section mounted and the "scroll to top on section change" effect ran.
+    await tick();
+    await new Promise((r) => requestAnimationFrame(() => r(null)));
+    const el = contentEl?.querySelector<HTMLButtonElement>(`[data-hotkey="${CSS.escape(hotkey)}"]`);
+    if (!el) return;
+    el.scrollIntoView({ block: "center" });
+    el.focus();
+    if (record) el.click();
+  }
+
   function finishOnboarding() {
     onboardingClosed = true;
     forceOnboarding = false;
@@ -130,8 +147,8 @@
     <main class="content" bind:this={contentEl} aria-labelledby="section-title">
       <div class="content__inner">
         <header class="head">
-          <h1 class="head__title" id="section-title">{t(`settings.section.${section}` as TranslationKey)}</h1>
-          <p class="head__desc">{t(`settings.section.${section}.desc` as TranslationKey)}</p>
+          <h1 class="head__title" id="section-title">{t(sectionTitleKey(section))}</h1>
+          <p class="head__desc">{t(sectionDescKey(section))}</p>
         </header>
         {#if settings.status === "loading"}
           <SkeletonRows rows={3} />
@@ -157,6 +174,8 @@
                 <Privacy />
               {:else if section === "snippets"}
                 <Snippets />
+              {:else if section === "screenshot"}
+                <Screenshot {goTo} />
               {:else if section === "ocr"}
                 <Ocr />
               {:else if section === "import"}

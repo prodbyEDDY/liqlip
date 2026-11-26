@@ -216,3 +216,98 @@ test("hotkey suggestions skip chords in use, the rejected one and the current va
   assert.deepEqual(L.hotkeySuggestions("pauseToggle", hk), [], "unset-by-default actions get none");
   for (const a of L.HOTKEY_ACTIONS) for (const c of L.hotkeySuggestions(a, hk, [], 9)) assert.equal(L.hotkeyIssue(c, a, hk), null, c);
 });
+
+// ── W6-F: screenshots (SPEC §9.1, §9.7; ARCHITECTURE §18.10) ─────────────────
+
+const HK9 = { summon: "Alt + V", stackNext: "Alt + Shift + V", pauseToggle: "", ignoreNext: "", shotRegion: "PrtSc", shotScreen: "Ctrl + PrtSc", shotWindow: "", shotRepeat: "", shotText: "" };
+
+test("screenshot hotkeys: their own group, labels from the screenshot block, duplicates across all nine", async () => {
+  const fixture = JSON.parse(await readFile(new URL("./fixtures/settings.default.json", import.meta.url), "utf8"));
+  assert.deepEqual([...L.SHOT_HOTKEY_ACTIONS], Object.keys(fixture.hotkeys).filter((k) => k.startsWith("shot")), "slot order");
+  assert.deepEqual([...L.ALL_HOTKEY_ACTIONS].sort(), Object.keys(fixture.hotkeys).sort());
+  assert.equal(L.hotkeyLabelKey("shotRegion"), "settings.shot.hotkey.shotRegion");
+  assert.equal(L.hotkeyDescKey("shotText"), "settings.shot.hotkey.shotText.desc");
+  assert.equal(L.hotkeyLabelKey("summon"), "settings.hotkeys.summon");
+  const en = await readFile(new URL("../src/lib/i18n/en.ts", import.meta.url), "utf8");
+  for (const a of L.ALL_HOTKEY_ACTIONS) {
+    assert.ok(en.includes(`"${L.hotkeyLabelKey(a)}":`), a);
+    assert.ok(en.includes(`"${L.hotkeyDescKey(a)}":`), `${a}.desc`);
+  }
+  assert.deepEqual(L.hotkeyIssue("PrtSc", "shotScreen", HK9), { kind: "duplicate", other: "shotRegion" });
+  assert.deepEqual(L.hotkeyIssue("Alt + V", "shotText", HK9), { kind: "duplicate", other: "summon" }, "global and screenshot slots share one pool");
+  assert.deepEqual(L.hotkeyIssue("Ctrl + PrtSc", "pauseToggle", HK9), { kind: "duplicate", other: "shotScreen" });
+  assert.equal(L.hotkeyIssue("PrtSc", "shotRegion", HK9), null, "bare PrtSc is a valid standalone key");
+  assert.equal(L.hotkeyIssue("Shift + PrtSc", "shotWindow", HK9), null);
+  assert.deepEqual(L.hotkeyIssue("S", "shotText", HK9), { kind: "needsModifier" });
+});
+
+test("screenshot hotkeys: errors in plain words, free PrtSc variants when taken", () => {
+  assert.equal(L.fieldErrorKey("hotkeys.shotRegion", "taken"), "settings.shot.error.hotkeyTaken");
+  assert.equal(L.fieldErrorKey("hotkeys.shotText", "invalid"), "settings.error.hotkeyInvalid");
+  assert.equal(L.fieldErrorKey("screenshot.fileName", "invalid"), "settings.shot.error.fileName");
+  assert.equal(L.fieldErrorKey("screenshot.folder", "invalid"), "settings.shot.error.folder");
+  assert.equal(L.fieldErrorKey("screenshot.jpgQuality", "invalid"), "settings.error.invalid");
+  assert.deepEqual(L.hotkeySuggestions("shotRegion", HK9), ["Shift + PrtSc", "Ctrl + Shift + PrtSc"]);
+  assert.deepEqual(L.hotkeySuggestions("shotScreen", { ...HK9, shotRegion: "Ctrl + Shift + PrtSc" }), ["Shift + PrtSc", "Alt + Shift + F"], "a chord another slot uses is not offered");
+  assert.deepEqual(L.hotkeySuggestions("shotWindow", HK9), []);
+  for (const a of L.SHOT_HOTKEY_ACTIONS) for (const c of L.hotkeySuggestions(a, HK9, [], 9)) assert.equal(L.hotkeyIssue(c, a, HK9), null, c);
+});
+
+test("every key fieldErrorKey returns for screenshot fields exists in en.ts", async () => {
+  const en = await readFile(new URL("../src/lib/i18n/en.ts", import.meta.url), "utf8");
+  for (const f of ["hotkeys.shotRegion", "screenshot.fileName", "screenshot.folder"]) {
+    for (const c of ["taken", "invalid"]) assert.ok(en.includes(`"${L.fieldErrorKey(f, c)}":`), `${f} ${c}`);
+  }
+});
+
+test("file name template: validation mirrors settings::validate", () => {
+  assert.equal(L.shotNameIssue("Liqlip {date} {time}"), null);
+  assert.equal(L.shotNameIssue("  Shot {n}  "), null, "trimmed like Rust");
+  assert.equal(L.shotNameIssue(""), "empty");
+  assert.equal(L.shotNameIssue("   "), "empty");
+  assert.equal(L.shotNameIssue("x".repeat(120)), null);
+  assert.equal(L.shotNameIssue("x".repeat(121)), "tooLong");
+  assert.equal(L.shotNameIssue(` ${"я".repeat(120)} `), null, "counts characters after trimming");
+  for (const c of ["<", ">", ":", '"', "/", "\\", "|", "?", "*"]) assert.equal(L.shotNameIssue(`Shot ${c} {date}`), "reserved", c);
+  assert.equal(L.shotNameIssue("Shot\n{date}"), "control");
+  assert.equal(L.shotNameIssue("Shot\u0085"), "control", "C1 controls too (char::is_control)");
+});
+
+test("file name template: live preview (Windows-style date and time, no ':')", () => {
+  const at = new Date(2026, 10, 6, 9, 5, 7);
+  assert.equal(L.shotFileName("Liqlip {date} {time}", at, "Chrome", 1), "Liqlip 2026-11-06 090507");
+  assert.equal(L.shotFileName("{app} — {n}", at, "Telegram", 12), "Telegram — 12");
+  assert.equal(L.shotFileName("{date}{date} {foo}", at, "x", 1), "2026-11-062026-11-06 {foo}", "unknown placeholders stay as typed");
+  assert.equal(L.shotFileName("  Shot  ", at, "x", 1), "Shot");
+  assert.ok(!L.shotFileName("{date} {time}", at, "x", 1).includes(":"));
+});
+
+test("JPG quality and thumbnail timeout ranges", () => {
+  for (const q of [60, 90, 100]) assert.equal(L.jpgQualityValid(q), true, String(q));
+  for (const q of [59, 101, 90.5, Number.NaN]) assert.equal(L.jpgQualityValid(q), false, String(q));
+  assert.ok(L.JPG_QUALITY_PRESETS.every(L.jpgQualityValid));
+  assert.ok(L.JPG_QUALITY_PRESETS.includes(90), "the default is a preset");
+  assert.ok(L.SHOT_TIMEOUT_PRESETS.every(L.shotTimeoutValid) && L.SHOT_TIMEOUT_PRESETS.includes(10) && L.SHOT_TIMEOUT_PRESETS.includes(0));
+  assert.equal(L.shotTimeoutValid(3601), false);
+  assert.equal(L.shotTimeoutValid(-1), false);
+});
+
+test("Snipping Tool warning only while a screenshot slot is bare PrtSc", () => {
+  assert.equal(L.snippingConflict(true, HK9), true);
+  assert.equal(L.snippingConflict(false, HK9), false);
+  assert.equal(L.snippingConflict(true, { ...HK9, shotRegion: "Shift + PrtSc" }), false, "Ctrl + PrtSc still reaches Liqlip");
+  assert.equal(L.snippingConflict(true, { ...HK9, shotRegion: "", shotText: "PrtSc" }), true);
+  assert.equal(L.snippingConflict(true, null), false);
+});
+
+test("resetting the editor's tool defaults forgets only their key", () => {
+  const store = new Map([[L.EDITOR_TOOLS_KEY, "{}"], ["liqlip.other", "1"]]);
+  const storage = { getItem: (k) => store.get(k) ?? null, removeItem: (k) => store.delete(k) };
+  assert.equal(L.EDITOR_TOOLS_KEY, "liqlip.editor.tools", "ARCHITECTURE §18.6");
+  assert.equal(L.resetEditorTools(storage), true);
+  assert.equal(store.has(L.EDITOR_TOOLS_KEY), false);
+  assert.equal(store.get("liqlip.other"), "1");
+  assert.equal(L.resetEditorTools(storage), false, "nothing stored → nothing to reset");
+  assert.equal(L.resetEditorTools(null), false);
+  assert.equal(L.resetEditorTools({ getItem: () => { throw new Error("blocked"); }, removeItem: () => {} }), false);
+});

@@ -52,6 +52,22 @@ test("filter tokens: app, type (aliases, lists), in, is, date", () => {
   assert.equal(p("TYPE:Link").tokens[0].value, "link", "keys and values are case-insensitive");
 });
 
+test("W6-F: type:screenshot and its synonym type:shot (SPEC §3.4)", () => {
+  for (const v of ["screenshot", "screenshots", "shot", "SHOTS", "скриншот", "снимки"]) {
+    assert.deepEqual(p(`type:${v}`).filter, { kinds: ["screenshot"] }, v);
+    assert.equal(p(`type:${v}`).tokens[0].value, "screenshot", "one canonical value for the chip");
+  }
+  assert.deepEqual(p("type:image").filter, { kinds: ["image"] }, "a token filters one kind; the Images pill shows both");
+  assert.deepEqual(p("type:image,shot").filter, { kinds: ["image", "screenshot"] });
+  assert.deepEqual(mergeFilters({ kinds: ["image", "screenshot"] }, p("type:shot").filter), { kinds: ["screenshot"] }, "Images pill + type:shot");
+  assert.equal(mergeFilters({ kinds: ["screenshot"] }, p("type:link").filter), null);
+  assert.deepEqual(suggest("type:sh", ctx).map((s) => s.insert), ["type:screenshot"]);
+  assert.deepEqual(suggest("type:скр", ctx).map((s) => s.value), ["screenshot"]);
+  assert.ok(suggest("type:", ctx).some((s) => s.value === "screenshot"), "listed with the other kinds");
+  assert.equal(completeToken("type:sho", ctx), "type:screenshot");
+  assert.deepEqual(extractChips("type:shot ", ctx).chips, ["type:shot"]);
+});
+
 test("exclusions: -word and -\"phrase\"", () => {
   const q = p('report -draft -"old version" -app:chrome');
   assert.equal(q.text, "report");

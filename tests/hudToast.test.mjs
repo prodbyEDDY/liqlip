@@ -36,6 +36,19 @@ test("a repeated show of the visible toast only extends it", () => {
   assert.equal(hud.isSameToast(null, true, copied), false);
 });
 
+test("W6-F: a countdown is one toast whose large digit ticks (no re-entry each second)", () => {
+  assert.equal(hud.isSameToast({ kind: "countdown", text: "3" }, true, { kind: "countdown", text: "2" }), true);
+  assert.equal(hud.isSameToast({ kind: "countdown", text: "1" }, false, { kind: "countdown", text: "3" }), false, "hidden → plays again");
+  assert.equal(hud.isSameToast({ kind: "countdown", text: "3" }, true, { kind: "shot_failed" }), false);
+  assert.equal(hud.countdownDigit({ kind: "countdown", text: "3" }), "3");
+  assert.equal(hud.countdownDigit({ kind: "countdown", text: " 10 " }), "10");
+  assert.equal(hud.countdownDigit({ kind: "countdown", text: "03" }), "3");
+  assert.equal(hud.countdownDigit({ kind: "countdown" }), null, "no seconds → no digit, never 'Ctrl+V'");
+  assert.equal(hud.countdownDigit({ kind: "countdown", text: "soon" }), null);
+  assert.equal(hud.countdownDigit({ kind: "copied", text: "3" }), null);
+  assert.deepEqual(hud.previewFromQuery("?kind=countdown&text=3"), { toast: { kind: "countdown", text: "3" }, demo: false });
+});
+
 test("browser preview query", () => {
   assert.deepEqual(hud.previewFromQuery("?kind=copied"), { toast: { kind: "copied" }, demo: false });
   assert.deepEqual(hud.previewFromQuery("?kind=elevated&text=Hi"), { toast: { kind: "elevated", text: "Hi" }, demo: false });

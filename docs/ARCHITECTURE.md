@@ -1646,8 +1646,8 @@ no-store`: это содержимое буфера, и превью удалё�
   сливает так же.
 - **Хоткеи** `shot*` хранятся и проверяются, но **не регистрируются** до W6-A (движок знает 4 слота,
   `hotkeys::combo::FIELDS`); тест-хелпер `combo::tests::hk` заполняет их пустыми. Окно настроек
-  показывает по-прежнему 4 глобальных действия (`HOTKEY_ACTIONS`), `HOTKEY_DEFAULTS` /
-  `HOTKEY_SUGGESTIONS` знают все 9 (W6-F добавляет группу «Скриншоты»).
+  показывает 4 глобальных действия (`HOTKEY_ACTIONS`) и группу «Скриншоты» из 5 слотов
+  (`SHOT_HOTKEY_ACTIONS`, W6-F, §18.5 «UI»); дубль проверяется по всем 9.
 - **Аргументы команд (ключи JS):** `shot_capture {mode, delay}` (`delay` можно `null`/не передавать),
   `shot_stage {sessionId, stage}`, `shot_cancel {sessionId}`, `shot_edit/shot_pin/shot_save/
   shot_save_as/shot_reveal {id}`, `shot_editor_switch {accept}`, `shot_pin_resize {scale}`,
@@ -2894,6 +2894,27 @@ synchronous command or event handlers»; у `build` своего раздела 
   `Counts.kinds.screenshot` даёт прежний `GROUP BY kind`; пилюли и токен `type:screenshot|shot`
   разбирает фронт (W6-F) — фильтр `kinds` в Rust уже принимает любой набор видов.
 
+**UI (W6-F, как сделано; подробно — `docs/picker.md` §5.10, `docs/settings.md` §4–5).** Замер: 2026-11-27
+(браузер на моке, обе темы, RU/EN; нативно не запускалось).
+- Шелф: карточка `screenshot` = картинка + камера в мета-строке, бейдж `PNG`; пилюля «Скриншоты» после
+  «Картинок», «Картинки» считают `kinds.image + kinds.screenshot`; токен `type:screenshot` (`shot`,
+  `скриншот`, `снимок`…; `type:image` — только `image`); меню действий картинки и снимка —
+  Редактировать (`Ctrl+E`) · Закрепить (`Ctrl+P`) · Сохранить как… · «Показать в папке» вместо «в
+  Проводнике», когда есть `meta.shot.savedPath`; «Снимок экрана» в конце меню записей и как всё меню
+  без записи (`picker_hide(true)` → `shot_capture('region')`); Quick Look — «Сохранён» / «Аннотации»,
+  `E` и `Ctrl+E` → `shot_edit`, `Ctrl+P` → `shot_pin`. В сетке голая `E` остаётся печатью в поиск.
+  Перед `shot_edit` / `shot_pin` шелф прячет себя после команды, перед `shot_save_as` — до неё (окна и
+  диалог — нашего процесса, `picker::blur_guard` шелф не закрывает, а он поверх всех).
+- Настройки: раздел `screenshot` (после «Сниппетов») по SPEC §9.7; предупреждение про «Ножницы» по
+  `shot_status.snippingKey`, пока какой-то слот — голая `PrtSc`; группа хоткеев «Скриншоты» (ошибки и
+  из `settings_set`, и из `shot_status.hotkeyErrors`); шаг онбординга «Скриншоты» перед «Готово».
+  Папку пока не выбрать и не открыть: нет команд выбора папки и `open_path` для папки снимков —
+  поле только чтения, кнопки выключены (запрос координатору в отчёте W6-F). Предпросмотр имени файла:
+  `{date}` = `yyyy-MM-dd`, `{time}` = `HHmmss` (как «Ножницы» Windows; без `:`) — `files.rs` (W6-A) и
+  мок должны давать то же (мок W5-A пишет `HH.mm.ss`).
+- HUD: `countdown` — секунды крупной цифрой в ink-круге 32 px в конце капсулы (концентрично), тики
+  одного отсчёта не переигрывают вход, только цифру.
+
 ### 18.6. Редактор аннотаций (`src/lib/editor/`, W6-C)
 
 **Модули** (чистые `.ts` тестируются node:test, как остальные): `doc.ts` (типы + (де)сериализация +
@@ -3324,7 +3345,7 @@ RGBA или кроп кадра; запись `screenshot` в мок-ленту 
 `shotEditorCommit(commit, rgba?)` через `frameBody`), подписки — `events.ts` (`onShotSession`,
 `onShotEnd`, `onShotAdded`, `onShotEditor`; `onHudShow` с новыми видами). HUD-окно (`src/windows/hud/`,
 владельца в W6 нет) уже показывает `countdown` / `shot_failed` / `text_copied` / `text_empty`
-(ключи `hud.*`, иконки clock / warning / ocr / info).
+(ключи `hud.*`, иконки clock / warning / ocr / info); W6-F: `countdown` — крупная цифра вместо чипа.
 
 **Где код уточняет §18.10** (подробно — §9.10): `Counts += screenshot` = `Counts.kinds.screenshot`;
 `ShotStatus.hotkeyErrors` — `SettingsError[]`; `shot_capture` и `shots_hud_layout` — именованные

@@ -1,6 +1,6 @@
 // Search string → feed query (SPEC §3.4). The backend receives free text WITHOUT tokens
 // (ARCHITECTURE §9.3): this module parses the filter tokens
-//   app:<app> · type:<kind>[,<kind>] · in:<folder> · is:fav · is:snippet ·
+//   app:<app> · type:<kind>[,<kind>] (`type:shot` = `type:screenshot`) · in:<folder> · is:fav · is:snippet ·
 //   date:today|yesterday|week|month · -word / -"phrase" (exclude) · "quoted phrase"
 // into `FeedQuery.filter` / `exclude`, and powers the chips and the `:` autocomplete of the
 // search field. Unknown keys and unknown values stay plain text (`https://x` is a word, not
@@ -53,6 +53,10 @@ const KIND_ALIASES: Record<string, Kind> = {
   contact: "contact", contacts: "contact", контакт: "contact", контакты: "contact",
   image: "image", images: "image", img: "image", picture: "image", картинка: "image", картинки: "image", изображение: "image",
   file: "file", files: "file", файл: "file", файлы: "file",
+  // SPEC §3.4 / §9.6: `shot` is the short synonym. `type:image` stays copied pictures only —
+  // a token filters one kind; the Images pill is the one that shows both.
+  screenshot: "screenshot", screenshots: "screenshot", shot: "screenshot", shots: "screenshot",
+  скриншот: "screenshot", скриншоты: "screenshot", снимок: "screenshot", снимки: "screenshot",
 };
 
 const IS_ALIASES: Record<string, IsFlag> = {
@@ -68,7 +72,7 @@ const DATE_ALIASES: Record<string, DateRange> = {
 };
 
 /** Canonical values offered by the autocomplete, per key (app/in come from the context). */
-export const KIND_VALUES: readonly Kind[] = ["text", "link", "code", "color", "contact", "image", "file"];
+export const KIND_VALUES: readonly Kind[] = ["text", "link", "code", "color", "contact", "image", "screenshot", "file"];
 export const IS_VALUES: readonly IsFlag[] = ["fav", "snippet"];
 export const DATE_VALUES: readonly DateRange[] = ["today", "yesterday", "week", "month"];
 

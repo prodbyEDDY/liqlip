@@ -3,8 +3,9 @@
   // (Rust shows the window with SWP_NOACTIVATE; it is click-through). Each `hud:show` shows
   // the toast for ~1.4 s, then the exit transition runs and Rust hides the window at 1.66 s.
   // `text` (FIX-07) is the paste chord of the target app for the {keys} chip; without it the
-  // chip says Ctrl+V. Browser preview on the mock: /hud.html?kind=copied (static) ·
-  // &text=Shift%2BInsert · ?demo=1.
+  // chip says Ctrl+V. A `countdown` (W6-F) draws its seconds as a large digit at the capsule's
+  // end instead of the chip; ticks only swap the digit. Browser preview on the mock:
+  // /hud.html?kind=copied (static) · &text=Shift%2BInsert · ?kind=countdown&text=3 · ?demo=1.
   import { onMount } from "svelte";
   import { isBrowserShortcut } from "$lib/browserKeys";
   import Ico from "$lib/components/Ico.svelte";
@@ -12,7 +13,7 @@
   import { t } from "$lib/i18n/index.svelte";
   import { onHudShow } from "$lib/ipc/events";
   import type { HudShow } from "$lib/ipc/types";
-  import { HUD_KINDS, KIND_ICON, KIND_KEY, VISIBLE_MS, isSameToast, keysLabel, previewFromQuery, segments } from "./toast";
+  import { HUD_KINDS, KIND_ICON, KIND_KEY, VISIBLE_MS, countdownDigit, isSameToast, keysLabel, previewFromQuery, segments } from "./toast";
 
   const preview = typeof location !== "undefined" ? previewFromQuery(location.search) : { toast: null, demo: false };
 
@@ -23,10 +24,10 @@
   let hideTimer: ReturnType<typeof setTimeout> | undefined;
 
   function present(next: HudShow, autoHide = true): void {
-    if (!isSameToast(toast, visible, next)) {
-      toast = next;
-      seq += 1;
-    }
+    // The same toast keeps its capsule (no second entry) but takes the new payload — a
+    // countdown's next second.
+    if (!isSameToast(toast, visible, next)) seq += 1;
+    toast = next;
     visible = true;
     clearTimeout(hideTimer);
     if (autoHide) hideTimer = setTimeout(() => (visible = false), VISIBLE_MS);
@@ -37,8 +38,9 @@
     const off = onHudShow((p) => present(p));
     // ?demo=1 — every kind in turn with the real timing (checks the motion in a browser).
     let i = 0;
-    const demo = preview.demo ? setInterval(() => present({ kind: HUD_KINDS[i++ % HUD_KINDS.length] }), 2200) : undefined;
-    if (preview.demo) present({ kind: HUD_KINDS[i++] });
+    const demoToast = (kind: HudShow["kind"]): HudShow => (kind === "countdown" ? { kind, text: "3" } : { kind });
+    const demo = preview.demo ? setInterval(() => present(demoToast(HUD_KINDS[i++ % HUD_KINDS.length])), 2200) : undefined;
+    if (preview.demo) present(demoToast(HUD_KINDS[i++]));
     return () => {
       clearTimeout(hideTimer);
       clearInterval(demo);
@@ -48,6 +50,8 @@
 
   const parts = $derived(toast ? segments(t(KIND_KEY[toast.kind])) : []);
   const keys = $derived(toast ? keysLabel(toast, t("hud.pasteKeys")) : "");
+  const digit = $derived(toast ? countdownDigit(toast) : null);
+  const countdown = $derived(toast?.kind === "countdown");
 
   /** The HUD is never focused; should it ever get a key, no browser feature runs (FIX-15). */
   function onKeydown(e: KeyboardEvent): void {
@@ -60,11 +64,24 @@
 <div class="stage">
   {#if toast}
     {#key seq}
-      <div class="hud" class:out={!visible} class:hud--keys-end={parts.at(-1)?.kind === "keys"} role="status" aria-live="polite">
+      <div
+        class="hud"
+        class:out={!visible}
+        class:hud--keys-end={parts.at(-1)?.kind === "keys" && !countdown}
+        class:hud--digit-end={parts.at(-1)?.kind === "keys" && countdown && digit !== null}
+        role="status"
+        aria-live="polite"
+      >
         <span class="hud__icon"><Ico name={KIND_ICON[toast.kind]} size={16} /></span>
         <span class="msg">
           {#each parts as part, i (i)}
-            {#if part.kind === "keys"}<Kbd>{keys}</Kbd>{:else}<span class="msg__text">{part.text.trim()}</span>{/if}
+            {#if part.kind === "keys"}
+              {#if countdown}
+                {#if digit !== null}
+                  {#key digit}<span class="hud__digit">{digit}</span>{/key}
+                {/if}
+              {:else}<Kbd>{keys}</Kbd>{/if}
+            {:else}<span class="msg__text">{part.text.trim()}</span>{/if}
           {/each}
         </span>
       </div>
@@ -120,6 +137,39 @@
   .hud--keys-end {
     padding-right: 8px;
   }
+  /* Countdown: the seconds in an ink circle as large as the icon's, at the other end and
+     inset the same 4 px (16 + 4 = 20, concentric); each tick pops the new digit in. */
+  .hud--digit-end {
+    padding-right: 4px;
+  }
+  .hud__digit {
+    display: inline-flex;
+    flex: 0 0 auto;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    margin-left: 4px;
+    border-radius: 999px;
+    background: var(--color-ink);
+    color: var(--color-paper);
+    font-family: var(--font-mono);
+    font-size: 18px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    line-height: 1;
+    animation: digit-in 220ms var(--ease-liquid);
+  }
+  @keyframes digit-in {
+    from {
+      opacity: 0;
+      transform: scale(0.6);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
   .hud.out {
     opacity: 0;
     transform: translateY(4px) scale(0.97);
@@ -159,7 +209,8 @@
   /* app.css collapses durations under reduced motion; also drop the movement itself. */
   @media (prefers-reduced-motion: reduce) {
     .hud,
-    .hud.out {
+    .hud.out,
+    .hud__digit {
       transform: none;
     }
   }

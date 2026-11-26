@@ -15,13 +15,19 @@ import {
   clipSetFavorite,
   clipSetFolder,
   clipsDelete,
+  pickerHide,
+  shotCapture,
+  shotEdit,
+  shotPin,
+  shotReveal,
+  shotSaveAs,
   snippetMarkUsed,
   stackAdd,
   textCopy,
   textPaste,
 } from "$lib/ipc/commands";
-import { errorMessage } from "$lib/ipc/errors";
-import type { Clip, Kind, PasteMode, PasteOutcome, Snippet } from "$lib/ipc/types";
+import { errorCode, errorMessage } from "$lib/ipc/errors";
+import { isImageKind, type Clip, type Kind, type PasteMode, type PasteOutcome, type Snippet } from "$lib/ipc/types";
 import { t, type TranslationKey } from "$lib/i18n/index.svelte";
 import { feed } from "./feed.svelte";
 import { selection } from "./selection.svelte";
@@ -30,6 +36,7 @@ import { toasts } from "./toasts.svelte";
 import { folderIdOf } from "./pills";
 import { overlays } from "./overlays.svelte";
 import { separatorPref } from "./overlays/separator.svelte";
+import { savedPathOf } from "./overlays/menuModel";
 import { expandNow, noteWrite, type SnippetExpansion } from "./overlays/snippetText";
 
 export type ActionName =
@@ -49,7 +56,12 @@ export type ActionName =
   | "openWith" // files: "Open with…"
   | "reveal" // show in Explorer
   | "stack" // add to the paste stack
-  | "dragOut"; // native drag out of the shelf
+  | "dragOut" // native drag out of the shelf
+  // Pictures (image + screenshot), SPEC §9.5–9.6 (W6-F). One record; other kinds — nothing.
+  | "shotEdit" // the editor window (the shelf hides)
+  | "shotPin" // pin on the screen (the shelf hides)
+  | "shotSaveAs" // "Save as…" dialog (the shelf hides first: it is always on top)
+  | "shotReveal"; // Explorer with the saved file selected
 
 export interface ActionOptions {
   folderId?: number;
@@ -241,8 +253,35 @@ export async function runAction(action: ActionName, ids: number[], opts: ActionO
       return openLike(ids, OPENABLE, clipOpen);
     case "openWith":
       return openLike(ids, ["file"], clipOpenWith);
-    case "reveal":
+    case "reveal": {
+      // A picture with a saved file shows THAT file (SPEC §9.6 "Show in folder"), not
+      // Liqlip's own copy in the data folder.
+      const c = ids.length === 1 ? feed.clip(ids[0]) : undefined;
+      if (c && savedPathOf(c)) return onPicture(ids, shotReveal);
       return openLike(ids, REVEALABLE, clipReveal);
+    }
+    case "shotEdit":
+      // The editor is a window of this process: it takes the foreground from the shelf, whose
+      // focus-loss exit then stays put (picker::blur_guard) — hide it explicitly.
+      return onPicture(ids, async (id) => {
+        await shotEdit(id);
+        await pickerHide(false);
+      });
+    case "shotPin":
+      return onPicture(ids, async (id) => {
+        await shotPin(id);
+        await pickerHide(true);
+      });
+    case "shotSaveAs":
+      // The dialog is centred and not topmost: the always-on-top shelf would cover it (the
+      // W3-A lesson of "Open with…"), so the shelf goes first, keeping the foreground in
+      // this process for the dialog. Cancel (`null`) says nothing.
+      return onPicture(ids, async (id) => {
+        await pickerHide(false);
+        await shotSaveAs(id);
+      });
+    case "shotReveal":
+      return onPicture(ids, shotReveal);
     case "stack":
       try {
         const s = await stackAdd(ids);
@@ -262,6 +301,39 @@ export async function runAction(action: ActionName, ids: number[], opts: ActionO
         toasts.error(errorMessage(e));
       }
       return;
+  }
+}
+
+/** Run a picture action on the first record; a record that isn't a picture is ignored (a key
+ *  like Ctrl+P on a text card does nothing). Failures end in a toast. */
+async function onPicture(ids: readonly number[], run: (id: number) => Promise<unknown>): Promise<void> {
+  const c = clipsOf(ids)[0];
+  if (!c || !isImageKind(c.kind)) return;
+  try {
+    await run(c.id);
+  } catch (e) {
+    toasts.error(shotErrorText(e));
+  }
+}
+
+/** A screenshot command's failure in words: the saved file is gone (`not_found` from
+ *  `shot_reveal`), screenshots not available yet (`unimplemented`), else the generic text. */
+export function shotErrorText(e: unknown): string {
+  const code = errorCode(e);
+  if (code === "not_found") return t("picker.shot.error.notFound");
+  if (code === "unimplemented") return t("picker.shot.error.unavailable");
+  return errorMessage(e);
+}
+
+/** "Take a screenshot" from the shelf (SPEC §9.1): the shelf hides first, focus going back to
+ *  the window it was opened over (so that window is the shot's source and gets the focus back
+ *  after the overlay), then the region overlay opens. */
+export async function captureScreen(): Promise<void> {
+  try {
+    await pickerHide(true);
+    await shotCapture("region");
+  } catch (e) {
+    toasts.error(shotErrorText(e));
   }
 }
 
