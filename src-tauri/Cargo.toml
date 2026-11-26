@@ -122,6 +122,8 @@ windows = { version = "0.62", features = [
     "Win32_System_Time",
     # W2-B: GetLocalTime (the local date in the default backup file name).
     "Win32_System_SystemInformation",
+    # W8-A: PlaySoundW (winmm) — the shutter click from memory (screenshot/sound.rs).
+    "Win32_Media_Audio",
 ] }
 
 # Release build for the NSIS installer (W2-D, ARCHITECTURE §16). Speed over size:

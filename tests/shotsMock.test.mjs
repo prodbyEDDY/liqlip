@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { importTs } from "./helpers/bundle.mjs";
 
-const { mockInvoke, mockListen, frameBody, fakeDesktop, clampRect, currentSettings, afterCommit } = await importTs(
+const { mockInvoke, mockListen, frameBody, fakeDesktop, clampRect, currentSettings, afterCommit, shotDoc } = await importTs(
   "src/lib/ipc/mock/index.ts",
   "src/lib/ipc/mock/bus.ts",
   "src/lib/ipc/frame.ts",
@@ -119,7 +119,7 @@ test("what follows a commit is Rust's plan (W7-R4): only Done shows the QAO / ed
   for (const setting of ["overlay", "editor", "none"]) {
     for (const a of ["copy", "save", "save_as"]) assert.equal(afterCommit(a, setting, true), "nothing", `${a} / ${setting}`);
     assert.equal(afterCommit("pin", setting, true), "pin");
-    assert.equal(afterCommit("pin", setting, false), "nothing", "no record — nothing to pin");
+    assert.equal(afterCommit("pin", setting, false), "qao", "no record to pin — the QAO card (W7-R1 / W8-A)");
   }
   assert.equal(afterCommit("done", "overlay", true), "qao");
   assert.equal(afterCommit("done", "editor", true), "editor");
@@ -133,6 +133,41 @@ test("what follows a commit is Rust's plan (W7-R4): only Done shows the QAO / ed
   await tick();
   off();
   assert.equal(events.length, 0);
+});
+
+test("every shot record gets a document with the monitor scale as its unit (W8-A, as Rust)", async () => {
+  // the rule (commit.rs::sized_doc + store::shots::empty_doc)
+  assert.deepEqual(shotDoc(null, 30, 20, 1.5, true), { v: 1, w: 30, h: 20, unit: 1.5, crop: null, objects: [] });
+  const sent = { v: 1, w: 31, h: 21, unit: 2, crop: null, objects: [] };
+  assert.deepEqual(shotDoc(sent, 30, 20, 1, true), { ...sent, w: 30, h: 20 }, "the crop's size, the sent unit");
+  assert.deepEqual(shotDoc(sent, 31, 21, 1, false), sent, "flattened pixels: as sent");
+  // end to end: the overlay sends the empty document; the editor opens with its unit
+  const s = await mockInvoke("shot_session", {});
+  const res = await mockInvoke("shot_commit", frameBody({ sessionId: s.id, rect: { x: 10, y: 10, w: 40, h: 30 }, action: "copy", doc: { ...sent, w: 40, h: 30 }, width: 0, height: 0 }));
+  await mockInvoke("shot_edit", { id: res.clipId });
+  const p = await mockInvoke("shot_editor_get", {});
+  assert.equal(p.clipId, res.clipId);
+  assert.deepEqual([p.doc.unit, p.doc.w, p.doc.h, p.doc.objects.length], [2, 40, 30, 0]);
+  // a capture without overlay: the empty document with the monitor's scale (1 in node)
+  await mockInvoke("shot_capture", { mode: "screen", delay: null });
+  const top = (await mockInvoke("clips_list", { q: q({ limit: 1 }) })).items[0];
+  await mockInvoke("shot_edit", { id: top.id });
+  assert.deepEqual((await mockInvoke("shot_editor_get", {})).doc, { v: 1, w: 1920, h: 1080, unit: 1, crop: null, objects: [] });
+});
+
+test("shot_editor_commit: a cancelled Save as… answers null (W8-A)", async () => {
+  const shot = (await mockInvoke("clips_list", { q: q({ filter: { kinds: ["screenshot"] }, limit: 1 }) })).items[0];
+  const doc = { v: 1, w: 1, h: 1, unit: 1, crop: null, objects: [] };
+  const body = () => frameBody({ clipId: shot.id, action: "save_as", doc, width: 0, height: 0 });
+  globalThis.location = { search: "?mock-shot-dialog=cancel" };
+  try {
+    assert.equal(await mockInvoke("shot_editor_commit", body()), null);
+  } finally {
+    delete globalThis.location;
+  }
+  const saved = await mockInvoke("shot_editor_commit", body());
+  assert.equal(saved.id, shot.id);
+  assert.match(saved.meta.shot.savedPath, /\\Documents\\/);
 });
 
 test("shot_capture: screen commits at once; a trigger during a session is ignored; bad modes", async () => {

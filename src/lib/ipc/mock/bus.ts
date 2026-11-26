@@ -19,7 +19,8 @@
 //   ?mock-shot-quick=1   "take the shot on release": the session skips the frame stage
 //   ?mock-scale=1.5      monitor scale of the fake desktop (frame = 1920×1080 × scale, 1–4)
 //   ?mock-snipping=1     Windows gives PrtSc to the Snipping Tool (shot_status; PrtSc "taken")
-//   ?mock-shot-dialog=cancel   shot_save_as is cancelled (null)
+//   ?mock-shot-dialog=cancel   shot_save_as / shot_editor_commit save_as are cancelled (null)
+//   ?mock-shot-fail=commit|hang  shot_commit rejects "failed:" (W7-R4) / never answers (W8-A: the overlay's 15 s timeout)
 
 export type Unlisten = () => void;
 

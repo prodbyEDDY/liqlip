@@ -40,7 +40,6 @@ function harness(over = {}, settings = {}) {
     shotsHudLayout: async (h) => log("layout", h),
     shotsHudHide: async () => log("hide"),
     settingsOpen: async (s) => log("settings", s),
-    shutter: () => log("shutter"),
     now: () => now,
     later: (fn, ms) => {
       const t = { fn, at: now + ms, live: true };
@@ -71,17 +70,14 @@ function harness(over = {}, settings = {}) {
   };
 }
 
-test("a shot adds a card, grows the window at once and clicks the shutter (if on)", () => {
+test("a shot adds a card and grows the window at once (the shutter is Rust's, W8-A)", () => {
   const h = harness();
   h.qao.add(added(1));
   assert.deepEqual(h.keys(), ["clip:1"]);
   assert.deepEqual(h.last("layout"), ["layout", stackHeight(1)]);
-  assert.ok(h.names().includes("shutter"));
-  const quiet = harness({}, { sound: false });
-  quiet.qao.add(added(1));
-  assert.ok(!quiet.names().includes("shutter"));
-  quiet.qao.add(added(0, { clip: null })); // no record and no temp file: nothing to show
-  assert.equal(quiet.state.items.length, 1);
+  assert.deepEqual(h.names(), ["layout"], "nothing else runs — no sound from the page");
+  h.qao.add(added(0, { clip: null })); // no record and no temp file: nothing to show
+  assert.equal(h.state.items.length, 1);
 });
 
 test("an expired card leaves; the window shrinks after the exit animation, hides when empty", () => {
@@ -327,7 +323,7 @@ test("a shot kept out of history (clip: null): Copy and Save as… by its temp f
   assert.equal(h.state.items[0].preview, "http://liq.localhost/temp/shot-1-0.png", "the preview is the temp route");
   for (const cmd of ["edit", "pin", "save", "text", "delete", "reveal"]) await h.qao.act(key, cmd);
   assert.equal(h.qao.press(key, P()), false, "no drag-out");
-  assert.deepEqual(h.names().filter((n) => !["layout", "shutter"].includes(n)), [], "record commands never run");
+  assert.deepEqual(h.names().filter((n) => n !== "layout"), [], "record commands never run");
   await h.qao.act(key, "copy");
   assert.deepEqual(h.last("tempCopy"), ["tempCopy", "shot-1-0.png"]);
   assert.equal(h.state.items[0].toast.key, "shots.toast.copied");

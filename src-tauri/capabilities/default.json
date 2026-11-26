@@ -1,24 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Liqlip windows: the shelf, the HUD, the settings window and the screenshot windows (capture overlay, QAO stack, editor, pinned pictures). Geometry and visibility are driven from Rust; the JS side only gets what the UI may need.",
+  "description": "Liqlip windows: the shelf, the HUD, the settings window and the screenshot windows (capture overlay, QAO stack, editor, pinned pictures). Geometry and visibility are driven from Rust; the pages only invoke the app's own commands and listen to events (core:default — it also covers the shelf's isVisible). No page calls a plugin (autostart, dialog, opener run from Rust). Window calls a page does make are granted to that window only: settings.json, screenshot.json (W8-A).",
   "windows": ["picker", "settings", "hud", "capture", "shots", "editor", "pin-*"],
-  "permissions": [
-    "core:default",
-    "core:window:allow-show",
-    "core:window:allow-hide",
-    "core:window:allow-set-focus",
-    "core:window:allow-set-focusable",
-    "core:window:allow-set-size",
-    "core:window:allow-set-position",
-    "core:window:allow-set-ignore-cursor-events",
-    "core:window:allow-set-always-on-top",
-    "autostart:allow-enable",
-    "autostart:allow-disable",
-    "autostart:allow-is-enabled",
-    "dialog:allow-open",
-    "dialog:allow-save",
-    "dialog:allow-message",
-    "opener:default"
-  ]
+  "permissions": ["core:default"]
 }

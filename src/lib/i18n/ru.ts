@@ -854,6 +854,7 @@ export const ru: Record<TranslationKey, string> = {
   "hud.textCopied": "Текст скопирован — нажмите {keys}",
   "hud.textEmpty": "Текст не найден",
   "hud.textUnavailable": "Для распознавания текста нужен языковой пакет Windows",
+  "hud.saveFailed": "Не удалось сохранить картинку",
   "hud.pasteKeys": "Ctrl+V",
 
   // --- editor.* (W6-C) ---
@@ -992,6 +993,7 @@ export const ru: Record<TranslationKey, string> = {
   "capture.error.commit": "Не удалось сделать снимок.",
   "capture.error.cancel": "Не удалось закрыть захват.",
   "capture.error.frame": "Не удалось загрузить кадр экрана — лупа и рисование недоступны.",
+  "capture.error.timeout": "Снимок не завершился вовремя. Попробуйте ещё раз или нажмите Esc, чтобы закрыть.",
 
   // --- shots.* (W6-E) — the thumbnail stack after a shot (QAO) ---
   "shots.region": "Последние снимки",

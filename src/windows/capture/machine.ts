@@ -4,6 +4,7 @@
 //                            │  └─(text mode / quick)────────────────▶ committing
 //                            └──────────── Esc / shot:end ─────────────────────────────▶ idle
 //   committing ──error──▶ back to the stage it came from (the work is never lost)
+//   committing ──no answer in 15 s──▶ the same (W8-A: Esc / Cancel work again)
 //
 // Plus what the host decides on its own: which `shot:session` payload restarts the overlay, the
 // commit header (§18.4) and the Esc ladder's last step (SPEC §9.2: with objects drawn, close
@@ -71,6 +72,21 @@ export function commitFailed(st: HostState): HostState {
   return { ...st, stage: st.resume ?? "select", resume: null };
 }
 
+/** How long the overlay waits for `shot_commit` to answer (W8-A). */
+export const COMMIT_TIMEOUT_MS = 15_000;
+
+/**
+ * `shot_commit` of session `sessionId` has not answered in {@link COMMIT_TIMEOUT_MS} (a hung
+ * clipboard or disk, a lost answer): back where it started, as after an error — while
+ * committing, the keys (Esc too) and the panel are off, so a commit that never answers would
+ * leave the overlay impossible to close. Esc / Cancel then ask Rust to cancel the session (a
+ * session the late commit already took is gone — the cancel is a no-op and the overlay closes).
+ * Another session's timer, or a commit that has finished, changes nothing.
+ */
+export function commitTimedOut(st: HostState, sessionId: number): HostState {
+  return st.sessionId === sessionId ? commitFailed(st) : st;
+}
+
 /** The session is over (`shot:end`, a finished commit, a cancel). Another session's end is ignored. */
 export function finish(st: HostState, sessionId?: number): HostState {
   if (sessionId !== undefined && st.sessionId !== null && sessionId !== st.sessionId) return st;
@@ -91,9 +107,11 @@ export function reportedStage(st: Pick<HostState, "stage">, selectionStarted: bo
   return st.stage === "select" && !selectionStarted ? "select" : "frame";
 }
 
-/** The JSON header of the `shot_commit` body (§18.4): no pixels → `width/height = 0`, `doc` null. */
+/** The JSON header of the `shot_commit` body (§18.4): no pixels → `width/height = 0`. The document
+ *  goes with every picture action, also without objects (W8-A: its `unit` — the monitor scale —
+ *  is what the editor window draws with later); `text` sends none (no picture is kept). */
 export function commitHeader(sessionId: number, rect: Rect, action: ShotAction, doc: AnnotDoc | null, px: { width: number; height: number } | null): ShotCommit {
-  return { sessionId, rect: { ...rect }, action, doc: px ? doc : null, width: px?.width ?? 0, height: px?.height ?? 0 };
+  return { sessionId, rect: { ...rect }, action, doc: action === "text" ? null : doc, width: px?.width ?? 0, height: px?.height ?? 0 };
 }
 
 /** Second Esc within this window closes without saving (SPEC §9.2). */

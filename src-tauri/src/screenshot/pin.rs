@@ -117,6 +117,9 @@ fn open_now(app: &AppHandle, id: i64) -> Result<(), String> {
         .theme(w::native_theme(app))
         .additional_browser_args(w::BROWSER_ARGS)
         .on_navigation(w::navigation_guard(app))
+        // W8-A: wry's drop target took any file (a QAO card released over the pin closed as
+        // "dropped"); without it the page refuses drops itself (`refuseDrop`, §18.2).
+        .disable_drag_drop_handler()
         .build();
     let win = match built {
         Ok(win) => win,

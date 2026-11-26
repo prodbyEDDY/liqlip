@@ -965,6 +965,9 @@ pub enum HudKind {
     TextEmpty,
     /// INT-5 (additive): "Copy text from screen" without any OCR language pack.
     TextUnavailable,
+    /// W8-A (additive): "Save as…" from the shelf could not write the file (the shelf is hidden
+    /// by then, so the HUD says it).
+    SaveFailed,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1329,6 +1332,7 @@ mod tests {
         round_trip(&HudKind::ShotFailed, json!("shot_failed"));
         round_trip(&HudKind::Countdown, json!("countdown"));
         round_trip(&HudKind::TextUnavailable, json!("text_unavailable"));
+        round_trip(&HudKind::SaveFailed, json!("save_failed"));
         round_trip(&PathKind::Shots, json!("shots"));
         round_trip(&WindowsSettingsPage::Keyboard, json!("keyboard"));
         round_trip(&ShotAfterCapture::None, json!("none"));

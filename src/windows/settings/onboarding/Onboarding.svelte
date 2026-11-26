@@ -91,6 +91,10 @@
 
   let finishing = $state(false);
   async function finish(hide = false) {
+    // Read now (W8-A): `onboardingDone = true` unmounts this component at once (the window
+    // switches to the settings), and a derived of a destroyed component must not be read after
+    // the await — Svelte warns `derived_inert` (stale values).
+    const hotkey = summon;
     finishing = true;
     settings.set("general.onboardingDone", true);
     await settings.idle();
@@ -101,7 +105,7 @@
       failed
         ? { message: failed, icon: "warning" }
         : {
-            message: summon ? t("onboarding.done.toast", { hotkey: comboLabel(summon) }) : t("onboarding.done.toastNoHotkey"),
+            message: hotkey ? t("onboarding.done.toast", { hotkey: comboLabel(hotkey) }) : t("onboarding.done.toastNoHotkey"),
             icon: "check",
           },
     );

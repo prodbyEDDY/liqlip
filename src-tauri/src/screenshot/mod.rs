@@ -5,7 +5,7 @@
 //!
 //! | Module | Owner | What |
 //! |---|---|---|
-//! | `grab` · `targets` · `session` · `frame` · `commit` · `files` | W6-A | freeze, window tree, sessions, frames over `liq`, commit, files |
+//! | `grab` · `targets` · `session` · `frame` · `commit` · `files` · `sound` | W6-A (`sound`: W8-A) | freeze, window tree, sessions, frames over `liq`, commit, files, shutter click |
 //! | `windows` · `qao` · `editor` · `pin` · `status` | W6-B | on-demand windows, QAO, editor and pin windows, PrtSc / hotkey status |
 //! | `body` | hub | raw-body framing of the two commits (§18.4) |
 //!
@@ -22,6 +22,7 @@ mod grab;
 mod pin;
 mod qao;
 mod session;
+mod sound;
 mod status;
 mod targets;
 pub(crate) mod windows;
@@ -137,9 +138,10 @@ pub async fn shot_editor_switch(app: AppHandle, accept: bool) -> Result<(), Stri
     editor::switch(&app, accept)
 }
 
-/// Raw body, same framing as `shot_commit` with a `ShotEditorCommit` header → the record.
+/// Raw body, same framing as `shot_commit` with a `ShotEditorCommit` header → the record
+/// (`null` — "Save as…" was cancelled; W8-A).
 #[tauri::command]
-pub async fn shot_editor_commit(app: AppHandle, request: tauri::ipc::Request<'_>) -> Result<Clip, String> {
+pub async fn shot_editor_commit(app: AppHandle, request: tauri::ipc::Request<'_>) -> Result<Option<Clip>, String> {
     let bytes = body::bytes(request.body())?;
     let (req, rgba) = body::parse::<ShotEditorCommit>(&bytes)?;
     editor::commit(&app, req, rgba).await
@@ -173,10 +175,16 @@ pub async fn shot_save(app: AppHandle, id: i64) -> Result<String, String> {
     files::save(&app, id)
 }
 
-/// "Save as…" dialog → the path, `null` = cancelled.
+/// "Save as…" dialog → the path, `null` = cancelled. Called from the shelf, the shelf has hidden
+/// itself before the dialog, so its own error toast would never be seen: a failure is shown on
+/// the HUD instead (W8-A, `HudKind::SaveFailed`). Other callers (a pin) show their own toast.
 #[tauri::command]
-pub async fn shot_save_as(app: AppHandle, id: i64) -> Result<Option<String>, String> {
-    files::save_as(app, id).await
+pub async fn shot_save_as(app: AppHandle, window: WebviewWindow, id: i64) -> Result<Option<String>, String> {
+    let saved = files::save_as(app.clone(), id).await;
+    if saved.is_err() && window.label() == crate::events::PICKER {
+        crate::picker::hud::show(&app, crate::model::HudKind::SaveFailed, None);
+    }
+    saved
 }
 
 /// Explorer with the saved file selected.

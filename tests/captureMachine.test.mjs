@@ -79,10 +79,33 @@ test("sessionChange: a new id restarts; the same id updates while selecting, is 
   assert.equal(m.sessionChange({ id: 1 }, "idle", { id: 1 }), "new");
 });
 
-test("commit header (§18.4): no pixels → width/height 0 and no doc; pixels → their size and the doc", () => {
+test("commit header (§18.4): no pixels → width/height 0; pixels → their size; the doc goes with every picture action", () => {
   const doc = m.emptyDoc(300, 200, 1.5);
-  assert.deepEqual(m.commitHeader(7, R, "done", doc, null), { sessionId: 7, rect: R, action: "done", doc: null, width: 0, height: 0 });
+  // W8-A: a shot without objects still sends its document — the monitor scale is its `unit`
+  assert.deepEqual(m.commitHeader(7, R, "done", doc, null), { sessionId: 7, rect: R, action: "done", doc, width: 0, height: 0 });
+  assert.equal(m.commitHeader(7, R, "done", doc, null).doc.unit, 1.5);
   assert.deepEqual(m.commitHeader(7, R, "copy", doc, { width: 300, height: 200 }), { sessionId: 7, rect: R, action: "copy", doc, width: 300, height: 200 });
+  assert.equal(m.commitHeader(7, R, "text", doc, null).doc, null, "text keeps no picture: no document");
+  assert.equal(m.commitHeader(7, R, "done", null, null).doc, null);
+});
+
+test("a commit that never answers (W8-A): after 15 s back where it started — Esc and Cancel work again", () => {
+  assert.equal(m.COMMIT_TIMEOUT_MS, 15_000);
+  const framed = m.choose(m.begin(session()), R).state;
+  const busy = m.startCommit(framed, "done");
+  assert.equal(busy.stage, "committing");
+  const back = m.commitTimedOut(busy, 7);
+  assert.equal(back.stage, "frame", "the frame and the drawing are still there");
+  assert.deepEqual(back.frame, R);
+  assert.equal(m.escapeLadder({ hostGesture: false, editorEscaped: false, hasObjects: false, armedAt: null, now: 0 }), "cancel");
+  assert.equal(m.startCommit(back, "done").stage, "committing", "it can be tried again");
+  // From stage 1 (quick / text) it returns to stage 1.
+  const quick = m.startCommit(m.choose(m.begin(session({ quick: true })), R).state, "done");
+  assert.equal(m.commitTimedOut(quick, 7).stage, "select");
+  // A late timer of another session, or of a commit that already finished, changes nothing.
+  assert.equal(m.commitTimedOut(busy, 8), busy);
+  assert.equal(m.commitTimedOut(m.IDLE, 7), m.IDLE);
+  assert.equal(m.commitTimedOut(back, 7), back);
 });
 
 test("Esc ladder: host gesture → editor steps → cancel; with objects: arm, then a second Esc within 3 s", () => {

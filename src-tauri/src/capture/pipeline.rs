@@ -313,6 +313,20 @@ pub fn build_clip(
     }
 }
 
+/// "Copy text from screen" (W8-A, `screenshot/commit.rs`): the recognised text as an ordinary text
+/// record, judged like a copy of that text — the ignore list (by the app that had the focus at
+/// the hotkey, the record's source), the secret patterns, the classification and the type
+/// toggles. The text is our own clipboard write (the listener skips it), so it is stored here.
+pub fn text_record(text: &str, cfg: &CaptureConfig, source: Option<SourceApp>, copied_at: i64) -> Result<NewClip, SkipReason> {
+    if source.as_ref().is_some_and(|s| snapshot::is_ignored(&s.exe, &cfg.ignored_apps)) {
+        return Err(SkipReason::IgnoredApp);
+    }
+    if text.trim().is_empty() {
+        return Err(SkipReason::Empty);
+    }
+    build_text(text.to_string(), false, None, None, None, cfg, source, copied_at)
+}
+
 fn source_meta(meta: &mut ClipMeta, html: &Option<formats::CfHtml>) {
     if meta.url.is_none() {
         if let Some(url) = html.as_ref().and_then(|h| h.source_url.clone()) {
@@ -575,6 +589,25 @@ mod tests {
         let mut raw = raw_text("x");
         raw.markers_checked = false;
         assert_eq!(build(raw, &cfg()).unwrap_err(), SkipReason::PrivacyMarker);
+    }
+
+    /// W8-A: "Copy text from screen" stores the recognised text like a copy of it.
+    #[test]
+    fn text_from_the_screen_is_judged_like_a_copy() {
+        let chat = || Some(SourceApp { exe: "c:\\apps\\chat.exe".into(), name: "Chat".into() });
+        let c = text_record("Invoice 42\nTotal: 10 €", &cfg(), chat(), 5).unwrap();
+        assert_eq!((c.kind, c.text.as_deref(), c.copied_at), (Kind::Text, Some("Invoice 42\nTotal: 10 €"), 5));
+        assert_eq!(c.source, chat());
+        assert_eq!(c.line_count, Some(2));
+        assert_eq!(text_record("https://liqlip.example/a", &cfg(), None, 5).unwrap().kind, Kind::Link, "classified");
+        // Privacy and storage settings, as for a copy.
+        assert_eq!(text_record("4111 1111 1111 1111", &cfg(), chat(), 5).unwrap_err(), SkipReason::Secret);
+        let keepass = Some(SourceApp { exe: "c:\\program files\\keepass\\keepass.exe".into(), name: "KeePass".into() });
+        assert_eq!(text_record("hunter2 is not a pattern", &cfg(), keepass, 5).unwrap_err(), SkipReason::IgnoredApp);
+        let mut no_text = cfg();
+        no_text.types.text = false;
+        assert_eq!(text_record("plain words", &no_text, chat(), 5).unwrap_err(), SkipReason::TypeDisabled);
+        assert_eq!(text_record(" \n ", &cfg(), chat(), 5).unwrap_err(), SkipReason::Empty);
     }
 
     #[test]

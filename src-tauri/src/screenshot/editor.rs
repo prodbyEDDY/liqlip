@@ -23,7 +23,8 @@
 //!   `clips:changed`) + clipboard (if `settings.screenshot.copy`) + rewrite of the saved file,
 //!   then the window closes; `done` WITHOUT pixels = nothing changed: the record is not
 //!   rewritten, its picture goes to the clipboard (if `copy`) and the window closes; `copy` →
-//!   clipboard only; `save_as` → dialog; `pin` with pixels (unsaved changes) → the same as
+//!   clipboard only; `save_as` → dialog, modal to this window (answer `null` = cancelled, W8-A);
+//!   `pin` with pixels (unsaved changes) → the same as
 //!   `done` but the window stays, then the pin; `pin` without pixels → the pin of the record as
 //!   it is. A body without pixels always means "the record's current picture".
 
@@ -42,6 +43,11 @@ pub(crate) const MIN_SIZE: (f64, f64) = (640.0, 420.0);
 /// the fit margin of the canvas (24 on each side, `view.ts::FIT_MARGIN`) across; the two bars on
 /// top (12 + 40 + 8 + 40 + 8) plus that margin down.
 const CHROME: (f64, f64) = (48.0, 156.0);
+/// The same down a window narrower than [`WIDE`]: the bars take three rows there (W7-R3; the
+/// page's `@media (max-width: 819px)`: one more 40 px row and its 8 px gap).
+const CHROME_NARROW_H: f64 = 204.0;
+/// Logical width from which the page lays its bars out in two rows.
+const WIDE: f64 = 820.0;
 /// Share of the work area the window may take by default.
 const FIT: f64 = 0.8;
 /// How long a `shot_edit` waits for the window that "Done" is closing (it usually goes within a
@@ -265,15 +271,16 @@ pub(crate) fn switch(app: &AppHandle, accept: bool) -> Result<(), String> {
 
 /// `shot_editor_commit` — see the module docs. `rgba` = the flattened picture (the page's
 /// export of the current document, `req.width × req.height`); `None` = the record's current
-/// picture (for `done`: nothing changed).
-pub(crate) async fn commit(app: &AppHandle, req: ShotEditorCommit, rgba: Option<&[u8]>) -> Result<Clip, String> {
+/// picture (for `done`: nothing changed). Answers the record — `None` only when "Save as…" was
+/// cancelled (W8-A, additive: the page tells a cancel from a save without comparing paths).
+pub(crate) async fn commit(app: &AppHandle, req: ShotEditorCommit, rgba: Option<&[u8]>) -> Result<Option<Clip>, String> {
     let id = req.clip_id;
     let detail = picture(app, id)?;
     match (req.action, rgba) {
         (ShotEditorAction::Done, Some(px)) => {
             let clip = apply(app, id, px, req.width, req.height, req.doc)?;
             after(app, ShotEditorAction::Done, id);
-            Ok(clip)
+            Ok(Some(clip))
         }
         (ShotEditorAction::Done, None) => {
             if settings::get(app).screenshot.copy {
@@ -282,34 +289,37 @@ pub(crate) async fn commit(app: &AppHandle, req: ShotEditorCommit, rgba: Option<
                 }
             }
             after(app, ShotEditorAction::Done, id);
-            Ok(detail.clip)
+            Ok(Some(detail.clip))
         }
         (ShotEditorAction::Copy, px) => {
             match px {
                 Some(px) => paste::copy_png(super::commit::encode_png(req.width, req.height, px)?, Some((req.width, req.height, px)))?,
                 None => paste::copy_png(record_png(app, id)?, None)?,
             }
-            Ok(detail.clip)
+            Ok(Some(detail.clip))
         }
         (ShotEditorAction::SaveAs, px) => {
             let png = match px {
                 Some(px) => super::commit::encode_png(req.width, req.height, px)?,
                 None => record_png(app, id)?,
             };
-            super::files::save_png_as(app.clone(), id, png).await?;
-            // The record now carries the chosen file as its saved path (`meta.shot.savedPath`).
-            Ok(fresh(app, id).unwrap_or(detail.clip))
+            // Modal to this window (W8-A): the dialog's owner is the editor, which waits for it.
+            match super::files::save_png_as(app.clone(), id, png, Some(events::EDITOR)).await? {
+                None => Ok(None),
+                // The record now carries the chosen file as its saved path (`meta.shot.savedPath`).
+                Some(_) => Ok(Some(fresh(app, id).unwrap_or(detail.clip))),
+            }
         }
         (ShotEditorAction::Pin, Some(px)) => {
             // Unsaved changes: applied to the record first (as Done, the window stays), so the
             // pin shows what the editor shows.
             let clip = apply(app, id, px, req.width, req.height, req.doc)?;
             after(app, ShotEditorAction::Pin, id);
-            Ok(clip)
+            Ok(Some(clip))
         }
         (ShotEditorAction::Pin, None) => {
             after(app, ShotEditorAction::Pin, id);
-            Ok(detail.clip)
+            Ok(Some(detail.clip))
         }
     }
 }
@@ -400,6 +410,9 @@ fn build(app: &AppHandle, detail: &ClipDetail, gen: u64) -> Result<(), String> {
         .theme(w::native_theme(app))
         .additional_browser_args(w::BROWSER_ARGS)
         .on_navigation(w::navigation_guard(app))
+        // W8-A: as every window but the HUD — wry's drop target accepted any file (a QAO card
+        // released here closed as "dropped"); the page refuses drops, pictures come in by Ctrl+V.
+        .disable_drag_drop_handler()
         .build()
         .map_err(|e| format!("failed: {e}"))?;
     let app2 = app.clone();
@@ -453,10 +466,21 @@ fn foreground(win: &tauri::WebviewWindow) {
 /// The window's rect: the picture at 100 % (1 px = 1 physical px) plus the chrome, shrunk to
 /// fit [`FIT`] of the work area, at least [`MIN_SIZE`], centred on the work area. A window larger
 /// than a small work area (the minimum at 150 % on a 1024×600 screen) starts at its top-left
-/// corner: the title bar — the only grip of the window — never lands above the screen.
+/// corner: the title bar — the only grip of the window — never lands above the screen. A window
+/// narrower than [`WIDE`] gets the three-row chrome (fitting again with it only shrinks it, so it
+/// stays narrow).
 fn editor_rect(mon: &Mon, pic_w: i64, pic_h: i64) -> PxRect {
+    let r = fit_rect(mon, pic_w, pic_h, CHROME.1);
+    if f64::from(r.w) / mon.scale < WIDE {
+        fit_rect(mon, pic_w, pic_h, CHROME_NARROW_H)
+    } else {
+        r
+    }
+}
+
+fn fit_rect(mon: &Mon, pic_w: i64, pic_h: i64, chrome_h: f64) -> PxRect {
     let (s, wa) = (mon.scale, mon.work);
-    let (cw, ch) = (w::px(CHROME.0, s), w::px(CHROME.1, s));
+    let (cw, ch) = (w::px(CHROME.0, s), w::px(chrome_h, s));
     let (min_w, min_h) = (w::px(MIN_SIZE.0, s), w::px(MIN_SIZE.1, s));
     let (max_w, max_h) = (((f64::from(wa.w) * FIT) as i32).max(min_w), ((f64::from(wa.h) * FIT) as i32).max(min_h));
     let (pw, ph) = (pic_w.max(1) as f64, pic_h.max(1) as f64);
@@ -672,11 +696,17 @@ mod tests {
         // A medium picture: 1:1 plus the chrome.
         let r = editor_rect(&mon(1920, 1032, 1.0), 1000, 600);
         assert_eq!((r.w, r.h), (1048, 756));
+        // A window under 820 logical px: the bars take three rows (W7-R3) — 48 px more chrome.
+        let r = editor_rect(&mon(1920, 1032, 1.0), 700, 500);
+        assert_eq!((r.w, r.h), (748, 704));
+        let r = editor_rect(&mon(2880, 1560, 1.5), 900, 600);
+        assert_eq!((r.w, r.h), (972, 906), "648 logical px wide at 150 %: 204 × 1.5 of chrome");
         // A full-screen shot is shrunk to 80 % of the work area, aspect kept inside the chrome.
         let r = editor_rect(&mon(1920, 1032, 1.0), 1920, 1080);
         assert!(r.w <= 1536 && r.h <= 825, "{r:?}");
         let (pw, ph) = (f64::from(r.w - 48), f64::from(r.h - 156));
         assert!((pw / ph - 1920.0 / 1080.0).abs() < 0.01, "{r:?}");
+        assert!(r.w >= 820, "wide: the two-row chrome");
         // At 150 % the minimum and the chrome scale with the monitor.
         let r = editor_rect(&mon(2880, 1560, 1.5), 10, 10);
         assert_eq!((r.w, r.h), (960, 630));

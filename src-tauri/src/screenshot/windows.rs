@@ -30,20 +30,22 @@ static MAIN_THREAD: OnceLock<ThreadId> = OnceLock::new();
 /// data directories" — so the string is identical everywhere. Setting it replaces wry's default
 /// (`webview2/mod.rs::create_environment`: `--disable-features=msWebOOUI,msPdfOOUI,
 /// msSmartScreenProtection`, plus `--autoplay-policy=no-user-gesture-required` only when wry's
-/// `autoplay` is on, which Tauri 2.11.2 never sets), so the default is kept verbatim and the
-/// autoplay switch is added: the QAO's shutter sound (Web Audio, `shots/shutter.ts`) plays in a
-/// window that is never activated, so it never gets a user gesture (Chromium autoplay policy).
-/// Switches are space-separated (learn.microsoft.com `ICoreWebView2EnvironmentOptions::
-/// put_AdditionalBrowserArguments`); tauri docs: `WebviewWindowBuilder::additional_browser_args`.
-pub(crate) const BROWSER_ARGS: &str =
-    "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --autoplay-policy=no-user-gesture-required";
+/// `autoplay` is on, which Tauri 2.11.2 never sets), so the default is kept verbatim. W8-A: the
+/// autoplay switch INT-5 added for the QAO's Web Audio shutter is gone with it — the click is
+/// played by Rust now (`sound.rs`) and no page plays audio. Kept as one constant: the shared
+/// environment still needs one string everywhere (learn.microsoft.com
+/// `ICoreWebView2EnvironmentOptions::put_AdditionalBrowserArguments`; tauri docs:
+/// `WebviewWindowBuilder::additional_browser_args`).
+pub(crate) const BROWSER_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection";
 
 /// Navigation guard of EVERY window of the process (`lib.rs` and the three on-demand windows):
 /// `WebviewWindowBuilder::on_navigation` (docs.rs tauri 2.11.2: "Returning `false` cancels the
 /// navigation"). Only the app's own pages may load — `http(s)://tauri.localhost/…` (the bundled
 /// frontend on Windows: tauri 2.11.2 `manager/mod.rs::tauri_protocol_url`) and, in a dev build,
 /// the `devUrl` origin. Why: windows built with `disable_drag_drop_handler()` (shelf, settings,
-/// capture overlay, QAO) leave WebView2's own external drop on (`AllowExternalDrop`, default
+/// capture overlay, QAO, editor, pins — every window but the click-through HUD; W8-A added the
+/// last two, whose wry drop target accepted a QAO card as "dropped") leave WebView2's own
+/// external drop on (`AllowExternalDrop`, default
 /// TRUE — learn.microsoft.com `ICoreWebView2Controller4`; wry turns it off only for its own
 /// handler, `webview2/mod.rs`), and a file or link dropped on a page that does not handle the drop
 /// navigates the webview to it — a QAO card dragged out and released back over the stack would
@@ -351,6 +353,9 @@ mod tests {
     /// Every window of the process shares one WebView2 environment, so every builder must pass
     /// the same browser arguments: a window built without them would ask for an environment with
     /// other options in the same data folder, which WebView2 refuses — only at run time, natively.
+    /// W8-A: and every window but the click-through HUD turns wry's drop handler off — its
+    /// drop target answers `DROPEFFECT_COPY` to any file, so a QAO card released over a pin or the
+    /// editor counted as "dropped" and closed (the page's `refuseDrop` only works without it).
     #[test]
     fn every_window_builder_passes_the_shared_browser_args() {
         fn rust_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
@@ -370,7 +375,9 @@ mod tests {
         let (hub, here) = ([&call[1..], "screenshot::windows::BROWSER_ARGS)"].concat(), [&call[1..], "w::BROWSER_ARGS)"].concat());
         let guard = [".on_navigation(", "screenshot::windows::navigation_guard(app))"].concat();
         let guard_here = [".on_navigation(", "w::navigation_guard(app))"].concat();
-        let mut builders = 0;
+        let no_drop = [".disable_drag_drop", "_handler()"].concat();
+        let hud = ["WebviewWindowBuilder", "::new(app, events::HUD,"].concat();
+        let (mut builders, mut without_drop) = (0, 0);
         for f in files {
             let src = std::fs::read_to_string(&f).unwrap();
             let built = src.matches(builder.as_str()).count();
@@ -378,13 +385,18 @@ mod tests {
             let shared = src.matches(hub.as_str()).count() + src.matches(here.as_str()).count();
             let guarded = src.matches(guard.as_str()).count() + src.matches(guard_here.as_str()).count();
             assert_eq!((args, shared, guarded), (built, built, built), "{}: {built} builders, {args} with browser args, {shared} with BROWSER_ARGS, {guarded} with the navigation guard", f.display());
+            // The HUD ignores the cursor (`set_ignore_cursor_events`): nothing can be dropped on it.
+            let huds = src.matches(hud.as_str()).count();
+            let dropless = src.matches(no_drop.as_str()).count();
+            assert_eq!(dropless, built - huds, "{}: {built} builders ({huds} HUD), {dropless} without wry's drop handler", f.display());
             builders += built;
+            without_drop += dropless;
         }
         // picker, hud, settings, capture (lib.rs) + shots, editor, pin-<n> (on demand).
-        assert_eq!(builders, 7);
-        // wry's default (kept verbatim, it is replaced by any explicit string) + autoplay.
-        assert!(BROWSER_ARGS.starts_with("--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection "));
-        assert!(BROWSER_ARGS.ends_with("--autoplay-policy=no-user-gesture-required"));
+        assert_eq!((builders, without_drop), (7, 6));
+        // wry's default, kept verbatim (it is replaced by any explicit string); no autoplay switch
+        // since the shutter moved to Rust (W8-A).
+        assert_eq!(BROWSER_ARGS, "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection");
     }
 
     #[test]

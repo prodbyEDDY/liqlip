@@ -35,15 +35,14 @@ export interface QaoState {
   capturing: boolean;
   /** the page is hidden (`document.hidden`) — timers wait */
   hidden: boolean;
-  /** `settings.screenshot.timeout` (s, 0 = never), `.sound`, `.corner` */
+  /** `settings.screenshot.timeout` (s, 0 = never), `.corner` (the shutter click is Rust's since W8-A) */
   timeout: number;
-  sound: boolean;
   corner: ShotCorner;
   ocr: OcrGate;
 }
 
 export function initialState(): QaoState {
-  return { items: [], hovered: false, dragging: null, capturing: false, hidden: false, timeout: 10, sound: true, corner: "left", ocr: "ready" };
+  return { items: [], hovered: false, dragging: null, capturing: false, hidden: false, timeout: 10, corner: "left", ocr: "ready" };
 }
 
 /** The commands the QAO uses (§18.10 + existing ones), a clock and a scheduler. */
@@ -64,8 +63,6 @@ export interface QaoApi {
   shotsHudLayout(height: number): Promise<void>;
   shotsHudHide(): Promise<void>;
   settingsOpen(section: string | null): Promise<void>;
-  /** the shutter click (WebAudio, `shutter.ts`) */
-  shutter(): void;
   /** monotonic clock, ms */
   now(): number;
   /** run `fn` after `ms`; returns a cancel */
@@ -162,14 +159,13 @@ export function createQao(state: QaoState, api: QaoApi) {
     relayout(false);
   }
 
-  /** A shot was taken: a card at the bottom, the window grows, the shutter clicks. */
+  /** A shot was taken: a card at the bottom, the window grows (Rust has clicked the shutter, W8-A). */
   function add(p: ShotAdded): void {
     state.capturing = false; // a finished shot ends any capture pause, even without `shot:end`
     const shot = makeShot(p, state.timeout);
     if (!shot) return;
     state.items = addShot(state.items, shot);
     relayout(true);
-    if (state.sound) api.shutter();
     // No thumbnail in the payload (e.g. a store without `thumbUrl` yet): the full picture.
     if (shot.clip && !shot.preview) {
       const id = shot.clip.id;

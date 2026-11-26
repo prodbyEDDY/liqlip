@@ -50,6 +50,8 @@ export { createEditorState, EditorState } from "./state.svelte";
 export { emptyDoc, loadDoc, cropDoc, TOOLS, type ToolId, type EdDoc, type EdObject } from "./doc";
 export { resetDefaults } from "./defaults";
 export type { EditorIntent, EditorMode } from "./interaction";
+// W8-A: the overlay cancels its own drag on a right press during it the same way (chorded press).
+export { secondaryPress } from "./interaction";
 export type { Flattened } from "./export";
 
 import type { AnnotDoc, Rect } from "$lib/ipc/types";

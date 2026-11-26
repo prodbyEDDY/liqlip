@@ -126,8 +126,8 @@
         px = await api.exportRGBA(d.crop ?? { x: 0, y: 0, w: d.w, h: d.h });
       }
       const head = { clipId: payload.clipId, action, doc: api.doc(), width: px?.width ?? 0, height: px?.height ?? 0 };
-      // `null` — "Save as…" was cancelled (W7-R2): no toast (the record may have had a saved
-      // path before, so the path alone doesn't tell a cancel from a save)
+      // `null` — "Save as…" was cancelled (W7-R2; the contract answers it since W8-A): no toast
+      // (the record may have had a saved path before, so the path alone doesn't tell a cancel)
       const clip: Clip | null = await shotEditorCommit(head, px?.data ?? null);
       if (action === "done") {
         api.markSaved();
@@ -138,7 +138,7 @@
         if (!unchanged) api.markSaved(); // the edit went into the record before the pin
         say(t("editor.toast.pinned"), "check");
       }
-      else if (action === "save_as" && clip?.meta.shot?.savedPath) say(t("editor.toast.savedAs"), "download");
+      else if (action === "save_as" && clip) say(t("editor.toast.savedAs"), "download");
       return true;
     } catch (e) {
       console.error(`[editor] shot_editor_commit ${action} failed`, e);

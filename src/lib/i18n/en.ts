@@ -854,6 +854,7 @@ export const en = {
   "hud.textCopied": "Text copied — press {keys}",
   "hud.textEmpty": "No text found",
   "hud.textUnavailable": "Text recognition needs a Windows language pack",
+  "hud.saveFailed": "Couldn't save the picture",
   "hud.pasteKeys": "Ctrl+V",
 
   // --- editor.* (W6-C) ---
@@ -993,6 +994,7 @@ export const en = {
   "capture.error.commit": "Couldn't take the screenshot.",
   "capture.error.cancel": "Couldn't close the capture.",
   "capture.error.frame": "Couldn't load the screen picture — the magnifier and drawing are off.",
+  "capture.error.timeout": "The screenshot is taking too long. Try again, or press Esc to close.",
 
   // --- shots.* (W6-E) — the thumbnail stack after a shot (QAO) ---
   "shots.region": "Latest screenshots",

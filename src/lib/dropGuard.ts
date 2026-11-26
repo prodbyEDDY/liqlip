@@ -23,3 +23,24 @@ export function refuseDrop(e: DropLike): void {
   e.preventDefault();
   if (e.type !== "drop" && e.dataTransfer) e.dataTransfer.dropEffect = "none";
 }
+
+/** A `DragEvent` as {@link refuseFileDrop} reads it. */
+export interface FileDropLike extends DropLike {
+  defaultPrevented: boolean;
+  dataTransfer: { dropEffect: string; types: ArrayLike<string> } | null;
+}
+
+/**
+ * The settings window's guard (W8-A, from reviewer R4): a dragged FILE (from Explorer) is refused
+ * where nothing on the page took the drag, and nothing else is touched. The window has drags of
+ * its own — the folder / snippet reorder accepts its rows' `dragover` itself (`defaultPrevented`,
+ * and it carries `text/plain`, no files) — and text dropped into a field stays the browser's.
+ * MDN, `DataTransfer.types`: "If the drag operation included files, then one of the types will be
+ * the string Files".
+ *
+ *   <svelte:window ondragenter={refuseFileDrop} ondragover={refuseFileDrop} ondrop={refuseFileDrop} />
+ */
+export function refuseFileDrop(e: FileDropLike): void {
+  if (e.defaultPrevented || !e.dataTransfer || !Array.from(e.dataTransfer.types).includes("Files")) return;
+  refuseDrop(e);
+}
