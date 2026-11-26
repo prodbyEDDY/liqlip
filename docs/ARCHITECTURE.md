@@ -1730,6 +1730,17 @@ stroke 1.5, `1em`), реестр `src/lib/icons.ts`, лицензия `public/li
 `tests/fixtures/settings.v1.0.json`), `model::tests::screenshot_wire_shapes`,
 `paste::compose::tests::screenshot_composes_like_an_image`.
 
+**W6-B (окна, статус, импорт снимков LT).** Rust, только чистая логика и временные папки (окна не
+создаются): `screenshot::windows::tests` (выбор монитора, логические → физические px, сторож главного
+потока), `screenshot::qao::tests` (угол рабочей области на 100 % и 150 %, потолок высоты, удаляются только
+файлы прямо в каталоге temp), `screenshot::editor::tests` (имя записи, закрытие после `done`/смены,
+размер окна 80 %, PNG), `screenshot::pin::tests` (размер 1:1 и 80 %, центр у курсора, ресайз вокруг
+курсора, предел 32 767), `screenshot::status::tests` (умолчание «Ножниц» по KB5027303, фильтр `hotkeys.shot*`,
+чтение реестра машины — только чтение), `import::lt::tests` (строка снимка → `screenshot`, BMP → PNG,
+пропуски: нет файла / вне кэша / `..` / относительный / формат / папка; счёт импорта) + 1 `#[ignore]` до
+W6-A (`screenshots_land_as_screenshot_records_once`). `import::tests` — ожидания с учётом строки снимка
+вне кэша в фикстуре (20 записей пробника, `skipped` + 1).
+
 ## 13. Владение файлами и правила для агентов
 
 - **Файлы-узлы координатора:** `src-tauri/src/lib.rs`, `src-tauri/tauri.conf.json`,
@@ -2002,6 +2013,18 @@ pub(crate) mod windows { pub(crate) fn exclude_from_capture(win: &WebviewWindow)
 // model.rs: Kind::is_image(self) -> bool  (image | screenshot)
 ```
 
+**W6-B → W6-A** (оконная сторона, которую зовут сессия и коммит; любой поток, не блокируют; §18.8–18.9):
+
+```rust
+screenshot::qao::show_added(app: &AppHandle, payload: ShotAdded);   // вместо events::shot_added (окно строится при первом)
+screenshot::qao::hide_for_capture(app: &AppHandle);                 // начало любой сессии (и без оверлея)
+screenshot::qao::restore_after_capture(app: &AppHandle);            // конец сессии: коммит или отмена
+screenshot::editor::open(app: &AppHandle, id: i64) -> Result<(), String>;   // afterCapture: editor
+screenshot::pin::open(app: &AppHandle, id: i64) -> Result<(), String>;      // action: pin
+// W6-A → W6-B (швы `editor::seam`, подключаются на INT-5): store::shots::doc, store::shots::apply_edit,
+// paste::copy_png, files: перезапись saved_path, files: «Сохранить как…» для PNG-байт.
+```
+
 **Фронт.** Окна общаются с Rust только через `src/lib/ipc/commands.ts` (`call` → `invoke` или мок) и
 `events.ts` (`on*` → `listen` или мок-шина). Тема/язык окна — `initAppearance()` из `appearance.ts`
 (`settings_get` + `settings:changed`, плюс `theme://changed`). Общая развёртка плейсхолдеров —
@@ -2249,7 +2272,9 @@ CARGO_TARGET_DIR=… pnpm tauri build   # beforeBuildCommand = pnpm build
 > игнорируемых приложений в импорте и `merge`, `meta.dir` у файлов, проверка формы базы копии,
 > ретенция приостановлена на время `replace`, восстановление прерванного `replace` при старте,
 > поколение базы для OCR; `cargo test` 334 в крейте; только временные данные. W4-A (2026-11-26):
-> правило игнор-листа — одна функция захвата, копия в `runner.rs` удалена (FIX-16).
+> правило игнор-листа — одна функция захвата, копия в `runner.rs` удалена (FIX-16). W6-B (2026-11-27):
+> снимки Liquid Tools → `screenshot` (файл только из кэша LT, нет файла — `skipped`); тесты на синтетической
+> базе и поддельном кэше во временной папке; запись в стор ждёт W6-A (`store/bulk.rs`).
 
 Файлы: `import/lt.rs` (чтение Liquid Tools) · `import/backup.rs` (zip: экспорт, проверка, распаковка,
 `replace`, `merge`) · `import/runner.rs` (общий цикл импорта) · `import/tmp.rs` (временные каталоги с
@@ -2289,7 +2314,8 @@ SQLite лежат на смещении 1 ГиБ и чтению не мешаю
 | `kind` text · link · code · contact · color | текстовая запись; вид — заново `capture::classify::classify_text` (все текстовые виды — одно семейство хэша, метка на дедупликацию не влияет; `123456` без `#` больше не «цвет») |
 | `kind` image | `image`: `<dir>\<id>.png` (иначе абсолютный `content_ref`), декод в RGBA8 + нормализация как в захвате (полностью прозрачная → непрозрачная), `content::image_hash` по пикселям; PNG копируется как есть (перекодируется, только если нормализация его изменила); миниатюра ≤ 360 px строится сразу. Нет файла → `errors + 1` |
 | `kind` file | `file`: пути из `content_ref`/`preview` (через `\n`, ≤ 2000), `meta.ext`, `files` (`dropEffect` 1) |
-| `kind` screenshot и любой другой | не переносится и не считается. Диктовки живут в `dictation-history.json`, в этой базе их нет |
+| `kind` screenshot (W6-B, §18.5) | `screenshot` **без документа аннотаций** (в LT они запечены в картинку), `meta.shot = {savedPath: null, edited: false}`. Файл — `content_ref` (иначе `preview`, LT пишет путь и туда): абсолютный путь, после `canonicalize` (`..`, ссылки) — файл **внутри кэша снимков LT** `%LOCALAPPDATA%\com.liquidtools.app\screenshots` (LT: `app_cache_dir()/screenshots`, `app_cache_dir` на Windows = `FOLDERID_LocalAppData` + идентификатор; путь — `SHGetKnownFolderPath`). Формат — по содержимому (`with_guessed_format`: LT сохранял PNG/JPG/WebP/AVIF); PNG копируется как есть, иное декодируемое сборкой — перекодируется в PNG (в истории только PNG); хэш — `content::image_hash` (семейство `image`: тот же снимок, скопированный картинкой, — одна запись), миниатюра ≤ 360 px. Нет файла, путь вне кэша, относительный путь, папка, формат без декодера в сборке (WebP/AVIF; JPG — после фичи `jpeg` W6-A) → `skipped`; битый файл внутри кэша → `errors + 1`. `source_app`, `pinned`, `category` — как у остальных |
+| `kind` любой другой | не переносится и не считается. Диктовки живут в `dictation-history.json`, в этой базе их нет |
 | полный текст | `content_ref` (> 280 символов), иначе `preview` (Liquid Tools хранил текст ≤ 280 символов обрезанным по краям пробелов); усечение до 2 МБ (`meta.truncated`); `content_ref` читается как `substr(…, 1, 2 100 000)` — результат тот же, память страницы ограничена |
 | `html` (сырой CF_HTML с заголовком) | формат `html` без заголовка (`StartHTML..EndHTML`; без контекста — фрагмент в минимальном документе), `SourceURL` → `meta.url/host`, если у записи нет ссылки |
 | `created_at` (мс; < 1e11 — секунды до v3, ×1000, как `migrate_timestamps` Liquid Tools) | `created_at` = `copied_at` |
@@ -2335,6 +2361,17 @@ SQLite лежат на смещении 1 ГиБ и чтению не мешаю
 - `ImportProbe.found = false`, если базы нет **или** переносить нечего (0 записей и 0 папок): шаг
   онбординга не показывается зря. `path` — только при `found`.
 - Логи — только числа и коды ошибок, без содержимого.
+- **Снимки (W6-B).** `KINDS` включает `screenshot`: пробник считает их, папки «только со снимками» —
+  непустые. Строки снимков без пригодного файла не доходят до общего цикла (`runner.rs` не тронут): `lt.rs`
+  считает их сам, добавляет в `skipped` и в конце шлёт `import:progress clips total/total` (полоса
+  заканчивается полной); равенство `imported + skipped + errors = probe.clips` сохраняется (тест).
+  `lt::run` берёт кэш через `FOLDERID_LocalAppData`; `lt::run_in(…, shots: Option<&Path>, …)` — с явным кэшем
+  (тесты: поддельный кэш во временной папке; в тестовой сборке `run` реальный профиль не читает — кэш `None`).
+  **Зависимость от W6-A:** `store/bulk.rs::normalize` ведёт `Kind::Screenshot` веткой текста
+  («`invalid: empty text`») — до правки (`Kind::Image =>` → `k if k.is_image() =>`, проверено локально, в ветку
+  не внесено) снимок считается `errors`; тест `screenshots_land_as_screenshot_records_once` помечен `#[ignore]`
+  до INT-5. Строку `shot_docs` у импортированного снимка (§18.5: «есть у каждого screenshot») создаёт или не
+  создаёт `bulk` W6-A — импорт документ не передаёт.
 
 ### 17.2. Формат `.liqlip`
 
@@ -2494,7 +2531,11 @@ impl Store {
 > Замер: 2026-11-26 (W5-A: фундамент — контракт §18.10 в `model.rs` ≡ `types.ts` и §9.10, настройки,
 > модуль `screenshot/` с командами-делегатами и заглушками, окно `capture` в `setup()`, маршруты `liq`,
 > права, точки входа четырёх окон с заглушками, мок `mock/shots.ts`; гейты зелёные; нативно не
-> запускалось; захвата, окон по требованию, редактора ещё нет — это W6). Продукт — SPEC §9. Источник переноса и разбор его
+> запускалось; захвата, окон по требованию, редактора ещё нет — это W6). W6-B (2026-11-27): окна по требованию
+> `shots` / `editor` / `pin-*` (§18.2, правило окон сверено с docs.rs tauri 2.11.2), нативная сторона QAO,
+> редактора и закрепления (§18.8–18.9), статус `PrtSc`/«Ножниц» (§18.11), импорт снимков LT (§17.1); вызовы
+> стора/буфера/файлов W6-A в редакторе — через швы `editor::seam` до INT-5; `cargo test` 371 + 1 ignored
+> (ждёт W6-A); нативно не запускалось. Продукт — SPEC §9. Источник переноса и разбор его
 > дефектов — `docs/prompts/_RESEARCH-W5-SCREENSHOT-SOURCE.md`; эталоны взаимодействия —
 > `docs/prompts/_RESEARCH-W5-ANNOTATION-UX.md` (локальные файлы координатора, абсолютные пути — в
 > промптах). Studio не переносится; всё, что в LT существует только ради studio (кнопка Mockup,
@@ -2534,6 +2575,33 @@ W6-B присылает свои строки сниппетом в отчёте
 потока, обработчика событий окна, колбэка хоткея или трея. Если сверка не подтвердит — запасной план:
 `shots` и `editor` заранее в `setup()`, `pin` — одно окно (решение фиксируется в отчёте и ROADMAP §11).
 Память в простое: до первого снимка добавляется только `capture`.
+
+**Сверка (W6-B, 2026-11-27).** `Cargo.lock`: `tauri` 2.11.2. docs.rs
+(`https://docs.rs/tauri/2.11.2/tauri/webview/struct.WebviewWindowBuilder.html`, тот же текст — в исходнике
+крейта `webview/webview_window.rs`), `WebviewWindowBuilder::new`, раздел Known issues: «On Windows, this
+function deadlocks when used in a synchronous command and event handlers, see [the Webview2 issue]. You
+should use `async` commands and separate threads when creating windows.» (у `from_config` — то же, «…in a
+synchronous command or event handlers»; у `build` своего раздела нет). Примеры там же: окно в `setup`, в
+`std::thread::spawn`, в `async`-команде. **Решение: окна по требованию**, запасной план не нужен.
+
+**Как сделано (`screenshot/windows.rs`).**
+- `windows::init` (шаг 5 `setup()`, главный поток) запоминает id главного потока; `may_build()` отказывает в
+  построении на нём (`failed: …`) — вместо зависания. `editor::open` / `pin::open`, вызванные с главного
+  потока (трей, обработчик), уходят на короткий поток; QAO строится всегда на своём потоке. Ни один наш замок
+  не держится, пока окно строится (построение ждёт главный поток).
+- Новое окно получает нативную тему из `settings.general.theme` (`.theme(…)`, то же отображение, что
+  `theme::apply`); тема и язык содержимого — как у остальных окон (`initAppearance()` на странице).
+- Геометрия — физ. px, позиция → размер → позиция (`windows::place`); монитор — по имени устройства GDI
+  (`ShotAdded.monitor`), иначе под курсором (в щели — ближайший), иначе первый (`pick_monitor`, тест).
+- `shots` и `pin-*` показываются **без активации** Win32 `SetWindowPos(HWND_TOPMOST, SWP_NOACTIVATE |
+  SWP_SHOWWINDOW)` и прячутся `ShowWindow(SW_HIDE)` (как HUD §7.7: tao `show()` = `SW_SHOW` активирует);
+  `WS_EX_TOOLWINDOW` (вне Alt+Tab) — `apply_toolwindow`, копия паттерна `picker/win.rs` (тот модуль
+  приватный у шелфа). Показ и перестановка идут на главном потоке (`run_on_main_thread`): перемещения tao
+  ставятся в его очередь, и Win32-показ не обгоняет их. Оба окна строятся с `focused(false)` (ни окно, ни
+  WebView2 не берут фокус при создании).
+- `editor` и `pin-*` уничтожаются при закрытии (`destroy()`); `WindowEvent::Destroyed` чистит состояние зоны.
+  `shots` не уничтожается: `CloseRequested` → `prevent_close` + hide; если окно всё же умерло (сбой
+  WebView2) — следующий снимок построит его заново.
 
 `setup()` (§3): шаг 6 добавляет `capture`; шаг 7 применяет 5 новых хоткеев; новых `manage()` —
 `ScreenshotState` (сессия, кадры, последняя область, стопка-счётчик окон) **до** создания окон.
@@ -2752,6 +2820,41 @@ export interface AnnotDoc {
   (`shot_pin_resize({ scale })` — Rust меняет размер вокруг курсора); `Ctrl+колесо` — прозрачность
   (CSS); двойной клик — 100 % ↔ исходный; `Esc`/× → `shot_pin_close()`; ПКМ — меню.
 
+**Нативное (W6-B, `screenshot/qao.rs`, `pin.rs`).**
+- **`shots`**: строится на своём потоке при первом захвате (`qao::hide_for_capture` — к коммиту области
+  страница успевает загрузиться) или при первом `qao::show_added`; затем живёт скрытым. Свойства — §18.2
+  (`focusable(false)` = `WS_EX_NOACTIVATE`, `focused(false)`, `disable_drag_drop_handler`,
+  `WDA_EXCLUDEFROMCAPTURE`, `WS_EX_TOOLWINDOW`). Ширина — константа `QAO_WIDTH` = **296** логических px
+  (карточка 248 + поле под тень; итог — по отчёту W6-E, меняется одна константа), высота — из
+  `shots_hud_layout({height})`, не больше рабочей области минус отступы; угол — `settings.screenshot.corner`
+  у **рабочей области** (`rcWork`, над панелью задач) монитора снимка (`ShotAdded.monitor` — имя устройства
+  GDI; монитор отключён — монитор курсора), отступ `MARGIN` = 16 логических px. Окно показывается только
+  после `shots_hud_layout` с высотой > 0 (размер известен) и без активации; `0` / `shots_hud_hide` — скрыть.
+- **API для W6-A**: `qao::show_added(app, ShotAdded)` (вместо прямого `events::shot_added`: окно может ещё не
+  существовать), `qao::hide_for_capture(app)` (начало любой сессии, в т. ч. без оверлея),
+  `qao::restore_after_capture(app)` (конец сессии — коммит или отмена). Все — с любого потока, не блокируют.
+- **Первое событие.** `shot:added` доходит только до подписавшейся страницы. Пока страница не загружена,
+  payload ждёт в `QaoState.pending`; по `PageLoadEvent::Finished` (колбэк `on_page_load` строителя окна)
+  через 400 мс (`FLUSH_DELAY`; страница подписывается при выполнении модуля, раньше `Finished`) очередь
+  уходит событиями. Перезагрузка страницы (`Started`) снова копит события. Надёжнее — команда-«рукопожатие»
+  `shots_hud_ready() -> ShotAdded[]` (предложение координатору, отчёт W6-B).
+- **Временные файлы** (§18.4, снимок не в истории — `ShotAdded.tempPath` в `%TEMP%\Liqlip\shots\`): удаляются
+  при пустой стопке (кроме выданных < 1,5 с назад), при выдаче пятого и далее (стопка держит 4), на старте —
+  весь каталог (`windows::init` → поток). Удаляются только обычные файлы прямо в этом каталоге после
+  `canonicalize` (тест), путь из payload сам по себе ничего не решает. Схемы для показа `tempPath` в карточке
+  нет (маршрут `liq` — узел/W6-A; предложение — в отчёте W6-B).
+- **`pin-<n>`**: `shot_pin(id)` / `pin::open` (редактор, коммит W6-A) — запись `image`/`screenshot` с размером,
+  иначе `invalid`. Метки — растущий счётчик процесса (`pin-1`, `pin-2`, …, не повторяются); до `MAX_PINS` = 6,
+  седьмое уничтожает самое старое. Окно: прозрачное, без рамки, always-on-top, skip-taskbar, focusable,
+  `focused(false)`, `shadow(false)`, вне Alt+Tab, **не** исключено из захвата; показ без активации (клик
+  активирует — тогда работают `Esc` и меню). Размер: картинка 1:1 (1 px картинки = 1 физ. px монитора — снимок
+  выглядит как на экране), ужатая до 80 % монитора, плюс поле `BLEED` = **12 логических px** с каждой стороны
+  под тень страницы (W6-E рисует внутри; начальный масштаб страница считает по размеру окна минус поле);
+  по центру у курсора, внутри рабочей области. Запись заносится в `PinState` **до** построения — страница
+  спрашивает `shot_pin_get` сразу при загрузке. `shot_pin_get` — по метке вызывающего окна (`imageUrl` —
+  `liq://media/<id>?v=<n>`); `shot_pin_resize({scale})` — `scale` × 100 %, зажим 10–400 %, сторона ≤ 32 767 px,
+  точка картинки под курсором остаётся на месте (тест); `shot_pin_close` — `destroy()` (только для `pin-*`).
+
 ### 18.9. Окно редактора (`src/windows/editor/`, W6-C; нативное — W6-B)
 
 - На старте `shot_editor_get()` → `ShotEditorPayload`; базовая картинка — `baseUrl` (`liq://base/<id>`).
@@ -2761,6 +2864,35 @@ export interface AnnotDoc {
   меняет) · Закрепить · Сохранить как… · Готово (`action:'done'` → `store::shots::apply_edit` + буфер +
   перезапись `saved_path` → окно закрывается). Тело — то же кадрирование §18.4 (`ShotEditorCommit`).
 - Закрытие с изменениями: окно перехватывает `onCloseRequested` → диалог (свой, внутри окна).
+
+**Нативное (W6-B, `screenshot/editor.rs`).**
+- **Окно**: одно, строится по требованию из `shot_edit` (async) — §18.2; обычное окно (системный заголовок,
+  панель задач, Alt+Tab, тема из настроек), мин. 640×420; размер — картинка 1:1 + место под панели (`CHROME`
+  48×136 логических px — раскладка W6-C, меняются две константы), ужатая до 80 % рабочей области монитора
+  курсора, по центру (тест). Перед показом открытый шелф прячется (`picker::hide_now`: always-on-top закрыл бы
+  редактор), затем `show` + `SetForegroundWindow` (право есть после клика в QAO/шелфе или хоткея; отказ —
+  мигает кнопка на панели задач, ничего не форсируем). Заголовок «Имя — Liqlip», следует за языком
+  (`settings::subscribe`). Имя записи: заголовок пользователя → имя сохранённого файла без расширения →
+  «Снимок экрана 1920×1080» / «Картинка 800×600» (строки временно в `editor.rs`, ключи `i18n_native` — сниппет).
+- **Состояние** (`EditorState`): `current` (запись окна), `previous` (до неотвеченной смены), `building`.
+  `shot_editor_get` → `current` (`null` — окна нет); `baseUrl` — `liq://base/<id>?v=<растущий n>`; `width/height`
+  — размер исходника (`doc.w/h`, без документа — записи); `doc` — `store::shots::doc` (шов, до INT-5 `null`);
+  `dirtyGuard` — `false`.
+- **Смена записи**: повторный `shot_edit(id)` при открытом окне — та же запись → окно вперёд; другая →
+  `previous = current`, `current = id`, `shot:editor` с `dirtyGuard: true`, окно вперёд. Страница без изменений
+  просто грузит запись (ответ не обязателен); с изменениями спрашивает и отвечает `shot_editor_switch(accept)`:
+  `true` — смена подтверждена, `false` — `current` снова прежняя. `shot_edit` во время построения окна только
+  меняет `current` (страница спросит `shot_editor_get` после загрузки).
+- **Коммит** — `editor::commit(app, req, rgba)` (async; подключение вместо `commit::editor_commit` — сниппет
+  `screenshot/mod.rs` в отчёте W6-B): картинка — сведённый RGBA тела (PNG), без пикселей — исходник
+  `frame::serve("/base/<id>")`. `done` → `store::shots::apply_edit` → буфер, если `settings.screenshot.copy` →
+  перезапись `saved_path` → окно уничтожается (если смена записи не ждёт ответа — тогда окно остаётся: страница
+  сохраняла перед сменой). `copy` → только буфер. `save_as` → диалог для этих PNG-байт. `pin` →
+  `pin::open(id)` — закрепляется **запись как есть** (несохранённые аннотации не видны — открытый вопрос в
+  отчёте W6-B). Примитивы W6-A — швы `editor::seam` (`doc`, `apply_edit`, `copy_png`, `rewrite_saved`,
+  `save_png_as`) с точными сигнатурами; до INT-5 они отвечают `unimplemented: … (W6-A)`.
+- **`editor::after_commit(app, action)`** (хук узла W5-A после `commit::editor_commit`) — та же оконная часть
+  для показываемой записи: `done` закрывает, `pin` закрепляет.
 
 ### 18.10. Контракт (W5-A вносит в §9 и код; агенты W6 только реализуют)
 
@@ -2916,6 +3048,27 @@ RGBA или кроп кадра; запись `screenshot` в мок-ленту 
 версии Windows: на Windows 11 22H2+ по умолчанию включено — W6-B сверяет по документации Microsoft и
 фиксирует источник в отчёте). Реестр не пишем. Ошибки регистрации хоткеев — в `ShotStatus.hotkeyErrors`
 и в `SettingsResult.errors` как у остальных полей.
+
+**Как сделано (W6-B, `screenshot/status.rs`).**
+- `snippingKey`: значение есть → `≠ 0`. Значения нет (пользователь не трогал переключатель) — умолчание Windows.
+  Источник — Microsoft, KB5027303 (27.06.2023, OS Build 22621.1928, Windows 11 22H2,
+  https://support.microsoft.com/help/5027303), раздел Highlights: «This update changes the default print screen
+  (prt scr) key behavior. Pressing the print screen key opens the Snipping Tool by default. You can turn off this
+  setting from Settings > Accessibility > Keyboard. If you have previously changed this setting, Windows will
+  preserve your preference.» Отсюда: **вкл.** для сборки 22621 с UBR ≥ 1928 и любой более новой (22631 23H2,
+  26100 24H2, …); **выкл.** для Windows 11 21H2 (22000) и Windows 10 (заметки Microsoft о смене умолчания для
+  Windows 10 не нашлось; переключатель там есть, по умолчанию выключен). Сборка и UBR —
+  `HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion` (`CurrentBuildNumber`, `UBR`): API версий зависят от
+  манифеста и UBR не дают. Чистая функция `snipping_default(build, ubr)` + тест; ещё один тест только читает
+  реестр машины. Реестр не пишется.
+- `hotkeyErrors`: отчёт движка для неизменённых настроек — `hotkeys::apply_settings(app, h, h)` (каждое
+  желаемое, но не активное сочетание; при отложенной регистрации — одна повторная попытка), отфильтрованный по
+  `hotkeys.shot*`. Пока W6-A не зарегистрировал 5 слотов, движок знает 4 и ошибок снимков не сообщает. Во время
+  записи сочетания (все хоткеи приостановлены) движок считает все слоты «не активны» — `taken`; окно настроек
+  в это время статус не спрашивает. Чище — отдельный `hotkeys::errors()` (предложение W6-A, отчёт W6-B).
+- `open_windows_settings('keyboard')` → `ms-settings:easeofaccess-keyboard` (learn.microsoft.com «Launch Windows
+  Settings», Ease of access → Keyboard) через Rust API `tauri-plugin-opener` (`open_url` → `ShellExecuteExW`;
+  JS-область разрешений к Rust API не относится).
 
 ### 18.12. Проверка
 

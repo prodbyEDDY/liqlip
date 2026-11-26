@@ -130,8 +130,9 @@ struct LtFixture {
     transparent: Vec<u8>,
 }
 
-/// 22 rows: 19 importable after the 3-month retention filter (2 of them unreadable, 1 a
-/// duplicate), a screenshot, a "dictation", an ancient history row; 5 folders.
+/// 22 rows: 20 counted after the 3-month retention filter (2 of them unreadable, 1 a
+/// duplicate, 1 a screenshot outside Liquid Tools' cache — skipped), a "dictation", an
+/// ancient history row; 5 folders. (Screenshot import itself: `lt::tests`, W6-B.)
 fn lt_fixture() -> LtFixture {
     let dir = TempDir::new("liqlip-lt-fixture-").unwrap();
     let clip_dir = dir.path().join("com.liquidtools.app").join("clipboard");
@@ -211,9 +212,9 @@ fn lt_probe_counts_what_will_be_imported() {
     let p = lt::probe(&fx.db, kit.cutoff()).unwrap();
     assert!(p.found);
     assert_eq!(p.path.as_deref(), Some(fx.db.to_string_lossy().as_ref()));
-    assert_eq!((p.clips, p.favorites, p.folders), (19, 4, 5));
+    assert_eq!((p.clips, p.favorites, p.folders), (20, 4, 5));
     // Retention "forever": the ancient history row counts too.
-    assert_eq!(lt::probe(&fx.db, None).unwrap().clips, 20);
+    assert_eq!(lt::probe(&fx.db, None).unwrap().clips, 21);
     assert_eq!(lt::default_db(Path::new("C:\\R")), Path::new("C:\\R\\com.liquidtools.app\\clipboard\\clipboard.db"));
 }
 
@@ -226,10 +227,10 @@ fn lt_import_maps_everything_and_reimport_adds_nothing() {
     let record = |p: &str, d: i64, t: i64| phases.lock().unwrap().push((p.to_string(), d, t));
     let s = &kit.store;
     let r = lt::run(s, &fx.db, kit.cutoff(), true, &[], &record).unwrap();
-    assert_eq!((r.imported, r.skipped, r.folders, r.errors), (16, 1, 5, 2), "{r:?}");
+    assert_eq!((r.imported, r.skipped, r.folders, r.errors), (16, 2, 5, 2), "{r:?}");
     let phases = phases.into_inner().unwrap();
     assert_eq!(phases.first().map(|p| p.0.as_str()), Some("folders"));
-    assert_eq!(phases.last().cloned(), Some(("clips".to_string(), 19, 19)));
+    assert_eq!(phases.last().cloned(), Some(("clips".to_string(), 20, 20)));
     assert_eq!(s.counts().unwrap().all, 16);
 
     // Duplicate rows of one source → one record: earliest created, latest copied, counted.
@@ -309,14 +310,14 @@ fn lt_import_maps_everything_and_reimport_adds_nothing() {
     // The chrome icon comes from the screenshot row.
     let chrome = s.apps_list().unwrap().into_iter().find(|a| a.exe == "chrome.exe").unwrap();
     assert!(chrome.icon_url.is_some());
-    // No screenshot, no dictation.
+    // Neither the screenshot outside Liquid Tools' cache nor the dictation.
     let foreign: i64 = kit.one("SELECT count(*) FROM clips WHERE text IN ('spoken words', 'C:\\Shots\\1.png')", []);
     assert_eq!(foreign, 0);
 
     // Re-import: nothing new, nothing bumped.
     let copied_before: i64 = kit.one("SELECT sum(copied_at) FROM clips", []);
     let r2 = lt::run(s, &fx.db, kit.cutoff(), true, &[], &quiet()).unwrap();
-    assert_eq!((r2.imported, r2.skipped, r2.folders, r2.errors), (0, 17, 0, 2), "{r2:?}");
+    assert_eq!((r2.imported, r2.skipped, r2.folders, r2.errors), (0, 18, 0, 2), "{r2:?}");
     assert_eq!(kit.one::<i64>("SELECT sum(copied_at) FROM clips", []), copied_before);
     assert_eq!(kit.one::<i64>("SELECT copy_count FROM clips WHERE id = ?1", [hello]), 2);
 
@@ -337,7 +338,7 @@ fn lt_running_with_a_pending_write_is_read_without_touching_it() {
     assert!(fx.db.with_file_name("clipboard.db-journal").exists(), "the writer has a live journal");
     let before = fingerprint(fx.dir.path());
     let p = lt::probe(&fx.db, kit.cutoff()).unwrap();
-    assert_eq!(p.clips, 19, "only committed rows");
+    assert_eq!(p.clips, 20, "only committed rows");
     let r = lt::run(&kit.store, &fx.db, kit.cutoff(), true, &[], &quiet()).unwrap();
     assert_eq!(r.imported, 16);
     assert_eq!(fingerprint(fx.dir.path()), before, "the writer's files are untouched");
