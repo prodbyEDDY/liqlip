@@ -858,8 +858,24 @@ export const ru: Record<TranslationKey, string> = {
   // --- editor.* (W6-C; W5-A stub) ---
   "editor.soon": "Редактор снимков скоро появится.",
 
-  // --- capture.* (W6-D; W5-A stub) ---
-  "capture.soon": "Захват экрана скоро появится.",
+  // --- capture.* (W6-D) ---
+  "capture.label": "Захват экрана",
+  "capture.hint.select": "Щёлкните окно или выделите область",
+  "capture.hint.selectText": "Выделите область с текстом, чтобы скопировать его",
+  "capture.hint.screen": "Весь экран",
+  "capture.hint.last": "Прошлая область",
+  "capture.hint.magnifier": "Лупа",
+  "capture.hint.keyboard": "Область с клавиатуры",
+  "capture.panel": "Инструменты снимка",
+  "capture.frame.move": "Перетащите, чтобы сдвинуть область",
+  "capture.action.text": "Скопировать текст",
+  "capture.action.textOff": "Для распознавания текста нужен языковой пакет Windows",
+  "capture.action.pin": "Закрепить на экране",
+  "capture.action.saveAs": "Сохранить как…",
+  "capture.confirmClose": "Закрыть без сохранения? {keys} — да",
+  "capture.error.commit": "Не удалось сделать снимок.",
+  "capture.error.cancel": "Не удалось закрыть захват.",
+  "capture.error.frame": "Не удалось загрузить кадр экрана — лупа и рисование недоступны.",
 
   // --- shots.* (W6-E) — the thumbnail stack after a shot (QAO) ---
   "shots.region": "Последние снимки",

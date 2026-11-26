@@ -858,8 +858,25 @@ export const en = {
   // --- editor.* (W6-C; W5-A stub) ---
   "editor.soon": "The screenshot editor is coming soon.",
 
-  // --- capture.* (W6-D; W5-A stub) ---
-  "capture.soon": "Screen capture is coming soon.",
+  // --- capture.* (W6-D) ---
+  // {keys} renders as a key chip (Esc).
+  "capture.label": "Screen capture",
+  "capture.hint.select": "Click a window or drag an area",
+  "capture.hint.selectText": "Drag over the text to copy it",
+  "capture.hint.screen": "Whole screen",
+  "capture.hint.last": "Last area",
+  "capture.hint.magnifier": "Magnifier",
+  "capture.hint.keyboard": "Area from the keyboard",
+  "capture.panel": "Screenshot tools",
+  "capture.frame.move": "Drag to move the area",
+  "capture.action.text": "Copy text",
+  "capture.action.textOff": "Text recognition needs a Windows language pack",
+  "capture.action.pin": "Pin to screen",
+  "capture.action.saveAs": "Save as…",
+  "capture.confirmClose": "Close without saving? {keys} — yes",
+  "capture.error.commit": "Couldn't take the screenshot.",
+  "capture.error.cancel": "Couldn't close the capture.",
+  "capture.error.frame": "Couldn't load the screen picture — the magnifier and drawing are off.",
 
   // --- shots.* (W6-E) — the thumbnail stack after a shot (QAO) ---
   "shots.region": "Latest screenshots",
