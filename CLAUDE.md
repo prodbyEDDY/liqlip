@@ -23,7 +23,7 @@ Repo: `github.com/prodbyEDDY/liqlip` (open source, [MIT](LICENSE)), branch `main
 
 **doc-as-code:** when you change code, update the matching section of `ARCHITECTURE.md`
 (or the area doc you were told to keep) in the same change. Status/decisions go to
-`ROADMAP.md` through the coordinator (`/lead`, [`.claude/commands/lead.md`](.claude/commands/lead.md)).
+`ROADMAP.md` through the maintainer's coordinator (`/lead`, a local command kept out of git).
 
 ## Working principles (non-negotiable)
 1. **Code only from verified documentation.** Never assume an API, crate signature, Win32

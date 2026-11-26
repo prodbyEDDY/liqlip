@@ -9,7 +9,8 @@ src-tauri/gen/schemas/
 .vscode/
 .idea/
 
-# Internal coordination notes (agent prompts, wave reports, reviews): kept locally, not published
+# Internal coordination files (coordinator command, agent prompts, wave reports, reviews): kept locally, not published
+.claude/commands/
 docs/prompts/
 docs/progress/
 docs/review/
