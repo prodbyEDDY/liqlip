@@ -140,6 +140,13 @@ pub fn run() {
             if !current.general.onboarding_done {
                 picker::show_settings(&handle, Some("onboarding"));
             }
+
+            // 11. `liqlip --capture [mode]` that STARTED the process (a running instance gets a
+            //     later launch's arguments in the single-instance callback above). The capture
+            //     runs on its own thread; its main-thread calls run once the event loop starts,
+            //     right after `setup()` returns. Any other argument is ignored here, as before.
+            let args: Vec<String> = std::env::args().collect();
+            screenshot::handle_args(&handle, &args);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -265,7 +272,9 @@ const EXIT_SAVE_WAIT: Duration = Duration::from_millis(1000);
 /// `setup()` step 6. Geometry/visibility after this point belongs to `picker` (W1-D);
 /// these are only the creation parameters of ARCHITECTURE §2. Every window of the process —
 /// these and the on-demand screenshot windows — passes the same WebView2 browser arguments
-/// (`screenshot::windows::BROWSER_ARGS`: one shared environment, ARCHITECTURE §18.2).
+/// (`screenshot::windows::BROWSER_ARGS`: one shared environment, ARCHITECTURE §18.2) and the
+/// same navigation guard (`navigation_guard`: only our own pages — a file dropped on a window
+/// must never replace its page).
 fn build_windows(app: &AppHandle, current: &model::Settings) -> tauri::Result<()> {
     // Shelf: transparent, frameless, always-on-top, no taskbar button. Sized for the
     // centre layout + bleed; `picker` re-docks it on every summon.
@@ -281,6 +290,7 @@ fn build_windows(app: &AppHandle, current: &model::Settings) -> tauri::Result<()
         .visible(false)
         .inner_size(760.0 + 2.0 * PICKER_BLEED, 640.0 + 2.0 * PICKER_BLEED)
         .additional_browser_args(screenshot::windows::BROWSER_ARGS)
+        .on_navigation(screenshot::windows::navigation_guard(app))
         // WebView2's own drag-drop handler would swallow the native OLE drag-out of cards
         // (Tauri docs: disabling it is required for HTML5 drag and drop on Windows).
         .disable_drag_drop_handler()
@@ -299,6 +309,7 @@ fn build_windows(app: &AppHandle, current: &model::Settings) -> tauri::Result<()
         .visible(false)
         .inner_size(440.0, 112.0) // = picker::geometry::HUD_SIZE: HUD capsule + shadow bleed
         .additional_browser_args(screenshot::windows::BROWSER_ARGS)
+        .on_navigation(screenshot::windows::navigation_guard(app))
         .build()?;
     hud.set_ignore_cursor_events(true)?;
 
@@ -312,6 +323,7 @@ fn build_windows(app: &AppHandle, current: &model::Settings) -> tauri::Result<()
             .min_inner_size(720.0, 520.0)
             .inner_size(960.0, 680.0)
             .additional_browser_args(screenshot::windows::BROWSER_ARGS)
+            .on_navigation(screenshot::windows::navigation_guard(app))
             .center()
             .visible(false)
             .disable_drag_drop_handler()
@@ -338,6 +350,7 @@ fn build_windows(app: &AppHandle, current: &model::Settings) -> tauri::Result<()
         .visible(false)
         .inner_size(800.0, 600.0)
         .additional_browser_args(screenshot::windows::BROWSER_ARGS)
+        .on_navigation(screenshot::windows::navigation_guard(app))
         .disable_drag_drop_handler()
         .build()
     {

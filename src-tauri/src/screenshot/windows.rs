@@ -20,7 +20,7 @@ use crate::model::ThemePref;
 use crate::settings;
 use std::sync::OnceLock;
 use std::thread::ThreadId;
-use tauri::{AppHandle, PhysicalPosition, PhysicalSize, Theme, WebviewWindow};
+use tauri::{AppHandle, PhysicalPosition, PhysicalSize, Theme, Url, WebviewWindow};
 
 static MAIN_THREAD: OnceLock<ThreadId> = OnceLock::new();
 
@@ -37,6 +37,37 @@ static MAIN_THREAD: OnceLock<ThreadId> = OnceLock::new();
 /// put_AdditionalBrowserArguments`); tauri docs: `WebviewWindowBuilder::additional_browser_args`.
 pub(crate) const BROWSER_ARGS: &str =
     "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --autoplay-policy=no-user-gesture-required";
+
+/// Navigation guard of EVERY window of the process (`lib.rs` and the three on-demand windows):
+/// `WebviewWindowBuilder::on_navigation` (docs.rs tauri 2.11.2: "Returning `false` cancels the
+/// navigation"). Only the app's own pages may load — `http(s)://tauri.localhost/…` (the bundled
+/// frontend on Windows: tauri 2.11.2 `manager/mod.rs::tauri_protocol_url`) and, in a dev build,
+/// the `devUrl` origin. Why: windows built with `disable_drag_drop_handler()` (shelf, settings,
+/// capture overlay, QAO) leave WebView2's own external drop on (`AllowExternalDrop`, default
+/// TRUE — learn.microsoft.com `ICoreWebView2Controller4`; wry turns it off only for its own
+/// handler, `webview2/mod.rs`), and a file or link dropped on a page that does not handle the drop
+/// navigates the webview to it — a QAO card dragged out and released back over the stack would
+/// replace the QAO page with the PNG, and the page would never claim another shot. Our pages never
+/// navigate anywhere else (no links, no `location` changes), so nothing legitimate is refused.
+/// A refusal is logged by scheme only (a dropped path may name user content).
+pub(crate) fn navigation_guard(app: &AppHandle) -> impl Fn(&Url) -> bool + Send + 'static {
+    let dev = app.config().build.dev_url.clone();
+    move |url| {
+        let ok = own_page(url, dev.as_ref());
+        if !ok {
+            crate::logx::warn("windows", &format!("navigation refused (scheme {})", url.scheme()));
+        }
+        ok
+    }
+}
+
+fn own_page(url: &Url, dev: Option<&Url>) -> bool {
+    match url.scheme() {
+        "http" | "https" if url.host_str() == Some("tauri.localhost") => true,
+        "about" => url.path() == "blank",
+        _ => cfg!(dev) && dev.is_some_and(|d| d.origin() == url.origin()),
+    }
+}
 
 /// `setup()` step 5 (via `screenshot::init`, on the main thread): remember the main thread,
 /// clear stale temp shots (`qao.rs`), follow the language in the editor title.
@@ -315,6 +346,71 @@ mod tests {
         assert_eq!(px(16.0, 1.75), 28);
         assert!(PxRect { x: -1920, y: 0, w: 1920, h: 1080 }.contains((-1, 1079)));
         assert!(!PxRect { x: -1920, y: 0, w: 1920, h: 1080 }.contains((0, 0)));
+    }
+
+    /// Every window of the process shares one WebView2 environment, so every builder must pass
+    /// the same browser arguments: a window built without them would ask for an environment with
+    /// other options in the same data folder, which WebView2 refuses — only at run time, natively.
+    #[test]
+    fn every_window_builder_passes_the_shared_browser_args() {
+        fn rust_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            for e in std::fs::read_dir(dir).unwrap().flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    rust_files(&p, out);
+                } else if p.extension().is_some_and(|x| x == "rs") {
+                    out.push(p);
+                }
+            }
+        }
+        let mut files = Vec::new();
+        rust_files(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src"), &mut files);
+        // Needles assembled at run time, so this file's own text never matches them.
+        let (builder, call) = (["WebviewWindowBuilder", "::new("].concat(), [".additional_", "browser_args("].concat());
+        let (hub, here) = ([&call[1..], "screenshot::windows::BROWSER_ARGS)"].concat(), [&call[1..], "w::BROWSER_ARGS)"].concat());
+        let guard = [".on_navigation(", "screenshot::windows::navigation_guard(app))"].concat();
+        let guard_here = [".on_navigation(", "w::navigation_guard(app))"].concat();
+        let mut builders = 0;
+        for f in files {
+            let src = std::fs::read_to_string(&f).unwrap();
+            let built = src.matches(builder.as_str()).count();
+            let args = src.matches(call.as_str()).count();
+            let shared = src.matches(hub.as_str()).count() + src.matches(here.as_str()).count();
+            let guarded = src.matches(guard.as_str()).count() + src.matches(guard_here.as_str()).count();
+            assert_eq!((args, shared, guarded), (built, built, built), "{}: {built} builders, {args} with browser args, {shared} with BROWSER_ARGS, {guarded} with the navigation guard", f.display());
+            builders += built;
+        }
+        // picker, hud, settings, capture (lib.rs) + shots, editor, pin-<n> (on demand).
+        assert_eq!(builders, 7);
+        // wry's default (kept verbatim, it is replaced by any explicit string) + autoplay.
+        assert!(BROWSER_ARGS.starts_with("--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection "));
+        assert!(BROWSER_ARGS.ends_with("--autoplay-policy=no-user-gesture-required"));
+    }
+
+    #[test]
+    fn only_our_own_pages_may_load() {
+        let u = |s: &str| Url::parse(s).unwrap();
+        let dev = u("http://localhost:1430");
+        // The bundled frontend (Windows: http, or https with `useHttpsScheme`) and about:blank.
+        for ok in ["http://tauri.localhost/shots.html", "https://tauri.localhost/editor.html?clip=3", "about:blank"] {
+            assert!(own_page(&u(ok), Some(&dev)), "{ok}");
+            assert!(own_page(&u(ok), None), "{ok}");
+        }
+        // A dropped file or link, another app scheme, a lookalike host, another local port.
+        for bad in [
+            "file:///C:/Users/me/AppData/Roaming/com.liqlip.app/media/12.png",
+            "https://example.com/",
+            "http://liq.localhost/media/12",
+            "http://tauri.localhost.example.com/",
+            "http://localhost:8080/",
+            "about:srcdoc",
+            "data:text/html,hi",
+        ] {
+            assert!(!own_page(&u(bad), Some(&dev)), "{bad}");
+        }
+        // The dev server — only in a dev build (`cfg(dev)`, set by tauri-build).
+        assert_eq!(own_page(&u("http://localhost:1430/capture.html"), Some(&dev)), cfg!(dev));
+        assert!(!own_page(&u("http://localhost:1430/capture.html"), None));
     }
 
     #[test]

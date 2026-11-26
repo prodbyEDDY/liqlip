@@ -10,8 +10,14 @@
 //!   (only the event sets it; `shot_editor_get` always says `false`); the page loads it, or —
 //!   with unsaved changes — asks and answers `shot_editor_switch` (`false` = stay: the previous
 //!   record becomes current again). "Save" in that dialog sends `done` for the PREVIOUS record
-//!   first and then `shot_editor_switch(true)`: while a switch is pending, `done` keeps the
-//!   window open (the next record loads into it).
+//!   first and then `shot_editor_switch(true)`: while a switch is pending, `done` of the record
+//!   the switch leaves keeps the window open (the next record loads into it). `shot_editor_get`
+//!   drops a switch the page never answered (its `shot:editor` was lost while the page loaded:
+//!   the page shows `current` anyway), so a stale switch never keeps "Done" from closing.
+//! - **Closing after "Done"** is asynchronous (`destroy()` reaches the main thread later): the
+//!   state is marked `closing` at once, a `shot_edit` that arrives meanwhile waits for the old
+//!   window to go and builds a fresh one (instead of switching a dying page), and a window's
+//!   `Destroyed` only clears the state of its own generation (never a newer window's).
 //! - **The commit** (`shot_editor_commit`, body already split by `body.rs`) is [`commit`] (INT-5:
 //!   W6-A's steps called directly): `done` with pixels → `commit::apply_edit` (store, thumbnail,
 //!   `clips:changed`) + clipboard (if `settings.screenshot.copy`) + rewrite of the saved file,
@@ -27,6 +33,7 @@ use crate::model::{Clip, ClipDetail, Kind, ShotEditorAction, ShotEditorCommit, S
 use crate::store::Store;
 use crate::{events, logx, paste, picker, settings};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 
 /// Minimum inner size, logical px (SPEC §9.5).
@@ -37,13 +44,17 @@ pub(crate) const MIN_SIZE: (f64, f64) = (640.0, 420.0);
 const CHROME: (f64, f64) = (48.0, 156.0);
 /// Share of the work area the window may take by default.
 const FIT: f64 = 0.8;
+/// How long a `shot_edit` waits for the window that "Done" is closing (it usually goes within a
+/// frame or two); after that it answers `busy`.
+const CLOSE_WAIT: Duration = Duration::from_secs(2);
+const CLOSE_POLL: Duration = Duration::from_millis(20);
 
 /// `?v=` of the base picture URL: every payload asks for a fresh copy (`no-store` keeps the
 /// disk cache out, this keeps the page's memory cache out after an edit).
 static VERSION: AtomicU64 = AtomicU64::new(0);
 
 /// What the editor window side remembers (`ScreenshotState.editor`).
-#[derive(Default)]
+#[derive(Debug, Default, PartialEq, Eq)]
 pub(crate) struct EditorState {
     /// The record the window shows (or is switching to).
     current: Option<i64>,
@@ -51,6 +62,103 @@ pub(crate) struct EditorState {
     previous: Option<i64>,
     /// The window is being built (a second `shot_edit` only moves `current`).
     building: bool,
+    /// "Done" is destroying the window; it is gone once it leaves the window manager.
+    closing: bool,
+    /// Generation of the window this state belongs to (grows with every build, never resets).
+    gen: u64,
+}
+
+/// What `shot_edit` does with the window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Next {
+    /// The window is being built: the page asks `shot_editor_get` once it has loaded.
+    Wait,
+    /// Wait for the window "Done" is closing, then ask again.
+    Closing,
+    /// The window already shows this record: bring it forward.
+    Focus,
+    /// Another record in the open window (`shot:editor`).
+    Switch,
+    /// Build a window of this generation.
+    Build(u64),
+}
+
+impl EditorState {
+    /// `shot_edit(id)`; `window` = an `editor` window is in the window manager.
+    fn open(&mut self, id: i64, window: bool) -> Next {
+        if self.building {
+            self.current = Some(id);
+            return Next::Wait;
+        }
+        if window && self.closing {
+            return Next::Closing;
+        }
+        if window {
+            if self.current == Some(id) && self.previous.is_none() {
+                return Next::Focus;
+            }
+            if self.previous.is_none() {
+                self.previous = self.current;
+            }
+            self.current = Some(id);
+            return Next::Switch;
+        }
+        let gen = self.gen + 1;
+        *self = EditorState { current: Some(id), previous: None, building: true, closing: false, gen };
+        Next::Build(gen)
+    }
+
+    /// The build of generation `gen` finished (`ok`) or failed.
+    fn built(&mut self, gen: u64, ok: bool) {
+        if self.gen == gen {
+            self.building = false;
+            if !ok {
+                (self.current, self.previous) = (None, None);
+            }
+        }
+    }
+
+    /// `shot_editor_get`: the page loads `current`. A switch it has not answered is moot — its
+    /// `shot:editor` was lost while the page loaded (the page shows `current` anyway).
+    fn get(&mut self) -> Option<i64> {
+        self.previous = None;
+        self.current
+    }
+
+    /// `shot_editor_switch(accept)`: `false` makes the previous record current again (returned).
+    fn answer(&mut self, accept: bool) -> Option<i64> {
+        match self.previous.take() {
+            Some(prev) if !accept => {
+                self.current = Some(prev);
+                Some(prev)
+            }
+            _ => None,
+        }
+    }
+
+    /// What follows a successful commit of record `id`: `done` closes the window — unless a
+    /// switch is pending and `id` is the record it leaves (the page saved it before moving on,
+    /// the next record loads into the window); `pin` pins the record as it is in history.
+    fn after(&self, action: ShotEditorAction, id: i64) -> After {
+        match action {
+            ShotEditorAction::Done if self.previous == Some(id) => After::Nothing,
+            ShotEditorAction::Done => After::Close,
+            ShotEditorAction::Pin => After::Pin,
+            _ => After::Nothing,
+        }
+    }
+
+    /// "Done" destroys the window: no record is shown any more.
+    fn close(&mut self) {
+        (self.current, self.previous, self.closing) = (None, None, true);
+    }
+
+    /// `WindowEvent::Destroyed` of the window of generation `gen` (a newer window's state stays).
+    fn destroyed(&mut self, gen: u64) {
+        if self.gen == gen {
+            *self = EditorState { gen, ..EditorState::default() };
+        }
+    }
 }
 
 fn with<T>(app: &AppHandle, f: impl FnOnce(&mut EditorState) -> T) -> Option<T> {
@@ -100,34 +208,22 @@ pub(crate) fn open(app: &AppHandle, id: i64) -> Result<(), String> {
 
 fn open_now(app: &AppHandle, id: i64) -> Result<(), String> {
     let detail = picture(app, id)?;
-    let existing = app.get_webview_window(events::EDITOR);
-    enum Next {
-        Wait,
-        Focus,
-        Switch,
-        Build,
-    }
-    let next = with(app, |st| {
-        if st.building {
-            st.current = Some(id); // the page asks `shot_editor_get` once it has loaded
-            return Next::Wait;
+    let deadline = Instant::now() + CLOSE_WAIT;
+    let (next, existing) = loop {
+        let existing = app.get_webview_window(events::EDITOR);
+        let next = with(app, |st| st.open(id, existing.is_some())).ok_or("failed: screenshot state")?;
+        if next != Next::Closing {
+            break (next, existing);
         }
-        if existing.is_some() {
-            if st.current == Some(id) && st.previous.is_none() {
-                return Next::Focus;
-            }
-            if st.previous.is_none() {
-                st.previous = st.current;
-            }
-            st.current = Some(id);
-            return Next::Switch;
+        // "Done" is destroying the window (off the main thread: this is a command or a spawned
+        // thread). Switching it would talk to a dying page; wait for it to go, then build.
+        if Instant::now() >= deadline {
+            return Err("busy: the editor window is closing".into());
         }
-        *st = EditorState { current: Some(id), previous: None, building: true };
-        Next::Build
-    })
-    .ok_or("failed: screenshot state")?;
+        std::thread::sleep(CLOSE_POLL);
+    };
     match next {
-        Next::Wait => Ok(()),
+        Next::Wait | Next::Closing => Ok(()),
         Next::Focus => {
             focus(app);
             Ok(())
@@ -140,14 +236,9 @@ fn open_now(app: &AppHandle, id: i64) -> Result<(), String> {
             focus(app);
             Ok(())
         }
-        Next::Build => {
-            let built = build(app, &detail);
-            with(app, |st| {
-                st.building = false;
-                if built.is_err() {
-                    *st = EditorState::default();
-                }
-            });
+        Next::Build(gen) => {
+            let built = build(app, &detail, gen);
+            with(app, |st| st.built(gen, built.is_ok()));
             built
         }
     }
@@ -155,7 +246,7 @@ fn open_now(app: &AppHandle, id: i64) -> Result<(), String> {
 
 /// `shot_editor_get` — what the editor window shows, `None` when nothing is open.
 pub(crate) fn payload(app: &AppHandle) -> Result<Option<ShotEditorPayload>, String> {
-    let Some(id) = with(app, |st| st.current).flatten() else { return Ok(None) };
+    let Some(id) = with(app, EditorState::get).flatten() else { return Ok(None) };
     let detail = picture(app, id)?;
     Ok(Some(payload_of(app, &detail, false)))
 }
@@ -163,14 +254,7 @@ pub(crate) fn payload(app: &AppHandle) -> Result<Option<ShotEditorPayload>, Stri
 /// `shot_editor_switch { accept }` — the page's answer to a pending switch (`shot:editor`).
 /// `false` makes the previous record current again. No pending switch → nothing to do.
 pub(crate) fn switch(app: &AppHandle, accept: bool) -> Result<(), String> {
-    let back = with(app, |st| match st.previous.take() {
-        Some(prev) if !accept => {
-            st.current = Some(prev);
-            Some(prev)
-        }
-        _ => None,
-    })
-    .ok_or("failed: screenshot state")?;
+    let back = with(app, |st| st.answer(accept)).ok_or("failed: screenshot state")?;
     if let (Some(id), Some(win)) = (back, app.get_webview_window(events::EDITOR)) {
         if let Ok(d) = picture(app, id) {
             let _ = win.set_title(&title(&name_of(&d, lang(app))));
@@ -266,22 +350,22 @@ enum After {
     Pin,
 }
 
-/// `done` closes the window — unless a switch is pending: then the page saved before moving
-/// on to the next record and the window stays. `pin` pins the record as it is in history.
-fn after_effect(action: ShotEditorAction, switch_pending: bool) -> After {
-    match action {
-        ShotEditorAction::Done if !switch_pending => After::Close,
-        ShotEditorAction::Pin => After::Pin,
-        _ => After::Nothing,
-    }
-}
-
 fn after(app: &AppHandle, action: ShotEditorAction, id: i64) {
-    let pending = with(app, |st| st.previous.is_some()).unwrap_or(false);
-    match after_effect(action, pending) {
+    // Decided and, for "close", marked under one lock: a `shot_edit` right after this waits for
+    // the window to go instead of switching it.
+    let effect = with(app, |st| {
+        let effect = st.after(action, id);
+        if effect == After::Close {
+            st.close();
+        }
+        effect
+    })
+    .unwrap_or(After::Nothing);
+    match effect {
         After::Close => {
             if let Some(win) = app.get_webview_window(events::EDITOR) {
                 if let Err(e) = win.destroy() {
+                    with(app, |st| st.closing = false);
                     logx::warn("screenshot", &format!("editor close: {e}"));
                 }
             }
@@ -295,7 +379,7 @@ fn after(app: &AppHandle, action: ShotEditorAction, id: i64) {
     }
 }
 
-fn build(app: &AppHandle, detail: &ClipDetail) -> Result<(), String> {
+fn build(app: &AppHandle, detail: &ClipDetail, gen: u64) -> Result<(), String> {
     w::may_build()?;
     let mons = w::monitors(app);
     let cursor = w::cursor_pos();
@@ -315,12 +399,13 @@ fn build(app: &AppHandle, detail: &ClipDetail) -> Result<(), String> {
         .visible(false)
         .theme(w::native_theme(app))
         .additional_browser_args(w::BROWSER_ARGS)
+        .on_navigation(w::navigation_guard(app))
         .build()
         .map_err(|e| format!("failed: {e}"))?;
     let app2 = app.clone();
     win.on_window_event(move |ev| {
         if let WindowEvent::Destroyed = ev {
-            with(&app2, |st| *st = EditorState::default());
+            with(&app2, |st| st.destroyed(gen));
         }
     });
     let app3 = app.clone();
@@ -366,7 +451,9 @@ fn foreground(win: &tauri::WebviewWindow) {
 }
 
 /// The window's rect: the picture at 100 % (1 px = 1 physical px) plus the chrome, shrunk to
-/// fit [`FIT`] of the work area, at least [`MIN_SIZE`], centred on the work area.
+/// fit [`FIT`] of the work area, at least [`MIN_SIZE`], centred on the work area. A window larger
+/// than a small work area (the minimum at 150 % on a 1024×600 screen) starts at its top-left
+/// corner: the title bar — the only grip of the window — never lands above the screen.
 fn editor_rect(mon: &Mon, pic_w: i64, pic_h: i64) -> PxRect {
     let (s, wa) = (mon.scale, mon.work);
     let (cw, ch) = (w::px(CHROME.0, s), w::px(CHROME.1, s));
@@ -376,7 +463,7 @@ fn editor_rect(mon: &Mon, pic_w: i64, pic_h: i64) -> PxRect {
     let fit = (f64::from((max_w - cw).max(1)) / pw).min(f64::from((max_h - ch).max(1)) / ph).min(1.0);
     let width = ((pw * fit).round() as i32 + cw).clamp(min_w, max_w.max(min_w));
     let height = ((ph * fit).round() as i32 + ch).clamp(min_h, max_h.max(min_h));
-    PxRect { x: wa.x + (wa.w - width) / 2, y: wa.y + (wa.h - height) / 2, w: width, h: height }
+    PxRect { x: wa.x + ((wa.w - width) / 2).max(0), y: wa.y + ((wa.h - height) / 2).max(0), w: width, h: height }
 }
 
 // ── Record → payload ────────────────────────────────────────────────────────
@@ -500,13 +587,76 @@ mod tests {
         assert_eq!(title("Image 4×4"), "Image 4×4 — Liqlip");
     }
 
+    /// A window showing record 1 (built, page loaded).
+    fn showing(id: i64) -> EditorState {
+        let mut st = EditorState::default();
+        assert_eq!(st.open(id, false), Next::Build(1));
+        st.built(1, true);
+        st
+    }
+
     #[test]
-    fn done_closes_unless_a_switch_waits_and_pin_pins() {
-        assert_eq!(after_effect(ShotEditorAction::Done, false), After::Close);
-        assert_eq!(after_effect(ShotEditorAction::Done, true), After::Nothing);
-        assert_eq!(after_effect(ShotEditorAction::Pin, false), After::Pin);
-        assert_eq!(after_effect(ShotEditorAction::Copy, false), After::Nothing);
-        assert_eq!(after_effect(ShotEditorAction::SaveAs, true), After::Nothing);
+    fn done_closes_unless_it_saves_the_record_a_switch_leaves() {
+        let mut st = showing(1);
+        assert_eq!(st.after(ShotEditorAction::Done, 1), After::Close);
+        assert_eq!(st.after(ShotEditorAction::Pin, 1), After::Pin);
+        assert_eq!(st.after(ShotEditorAction::Copy, 1), After::Nothing);
+        assert_eq!(st.after(ShotEditorAction::SaveAs, 1), After::Nothing);
+        // Another record while 1 has unsaved changes: "Save" in the page's dialog sends `done` of 1
+        // — the window stays for 2; "Done" of 2 itself would close it.
+        assert_eq!(st.open(2, true), Next::Switch);
+        assert_eq!((st.previous, st.current), (Some(1), Some(2)));
+        assert_eq!(st.after(ShotEditorAction::Done, 1), After::Nothing);
+        assert_eq!(st.after(ShotEditorAction::Done, 2), After::Close);
+        // Accepted: nothing pends, "Done" closes again.
+        assert_eq!(st.answer(true), None);
+        assert_eq!(st.after(ShotEditorAction::Done, 2), After::Close);
+    }
+
+    #[test]
+    fn a_switch_the_page_never_answered_does_not_keep_done_from_closing() {
+        // `shot_edit(2)` right after the window was built, before the page subscribed: its
+        // `shot:editor` is lost, the page loads `current` through `shot_editor_get`.
+        let mut st = showing(1);
+        assert_eq!(st.open(2, true), Next::Switch);
+        assert_eq!(st.get(), Some(2));
+        assert_eq!(st.previous, None);
+        assert_eq!(st.after(ShotEditorAction::Done, 2), After::Close);
+        // A later switch remembers the record the page really showed (2), not the stale 1.
+        assert_eq!(st.open(3, true), Next::Switch);
+        assert_eq!((st.previous, st.current), (Some(2), Some(3)));
+        // "Cancel": back to 2.
+        assert_eq!(st.answer(false), Some(2));
+        assert_eq!((st.previous, st.current), (None, Some(2)));
+        // The same record again only brings the window forward.
+        assert_eq!(st.open(2, true), Next::Focus);
+    }
+
+    #[test]
+    fn a_shot_edit_while_done_closes_the_window_builds_a_fresh_one() {
+        let mut st = showing(1);
+        st.close();
+        assert_eq!((st.current, st.closing), (None, true));
+        // The dying window is still in the window manager: wait, never switch it.
+        assert_eq!(st.open(2, true), Next::Closing);
+        assert_eq!(st.current, None);
+        // Gone: a window of the next generation.
+        assert_eq!(st.open(2, false), Next::Build(2));
+        assert_eq!((st.current, st.building, st.closing), (Some(2), true, false));
+        // A third `shot_edit` while it builds only moves `current`.
+        assert_eq!(st.open(3, false), Next::Wait);
+        // The OLD window's late `Destroyed` leaves the new window's state alone…
+        st.destroyed(1);
+        assert_eq!((st.current, st.building, st.gen), (Some(3), true, 2));
+        st.built(2, true);
+        assert!(!st.building);
+        // …its own clears it, and the generation keeps growing.
+        st.destroyed(2);
+        assert_eq!(st, EditorState { gen: 2, ..EditorState::default() });
+        assert_eq!(st.open(4, false), Next::Build(3));
+        // A failed build leaves nothing current.
+        st.built(3, false);
+        assert_eq!((st.current, st.building), (None, false));
     }
 
     fn mon(w: i32, h: i32, scale: f64) -> Mon {
@@ -530,5 +680,10 @@ mod tests {
         // At 150 % the minimum and the chrome scale with the monitor.
         let r = editor_rect(&mon(2880, 1560, 1.5), 10, 10);
         assert_eq!((r.w, r.h), (960, 630));
+        // The minimum outgrows a small work area (1024×600 at 150 %): the title bar stays on screen.
+        let small = Mon { name: None, rect: PxRect { x: 0, y: 0, w: 1024, h: 600 }, work: PxRect { x: 0, y: 0, w: 1024, h: 560 }, scale: 1.5 };
+        let r = editor_rect(&small, 1920, 1080);
+        assert_eq!((r.y, r.h), (0, 630));
+        assert_eq!(r.x, (1024 - 960) / 2);
     }
 }

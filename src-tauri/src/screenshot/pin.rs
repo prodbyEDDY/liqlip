@@ -116,6 +116,7 @@ fn open_now(app: &AppHandle, id: i64) -> Result<(), String> {
         .inner_size(lw, lh)
         .theme(w::native_theme(app))
         .additional_browser_args(w::BROWSER_ARGS)
+        .on_navigation(w::navigation_guard(app))
         .build();
     let win = match built {
         Ok(win) => win,

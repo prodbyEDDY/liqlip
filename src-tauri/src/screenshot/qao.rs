@@ -76,9 +76,11 @@ pub(crate) struct QaoState {
 
 impl QaoState {
     /// A new payload: `true` → emit it now (the page listens); `false` → it waits for
-    /// `shots_pending`.
+    /// `shots_pending`. Only the claim counts: a page that claimed exists and listens (`claimed`
+    /// is cleared when a build starts, a page (re)loads and the window is destroyed), even in the
+    /// instant before its builder thread marks the window built.
     fn offer(&mut self, payload: &ShotAdded) -> bool {
-        if self.phase == Phase::Built && self.claimed {
+        if self.claimed {
             return true;
         }
         self.pending.push(payload.clone());
@@ -211,8 +213,11 @@ fn ensure_built(app: &AppHandle) {
                 std::mem::take(&mut st.pending).len()
             }
         });
-        if let Err(e) = result {
-            logx::warn("screenshot", &format!("shots window: {e} ({} cards dropped)", failed.unwrap_or(0)));
+        match result {
+            // A layout the page reported before the window counted as built was not shown
+            // (`refresh` waits for `Built`: affinity and tool-window style first): apply it now.
+            Ok(()) => refresh(&app2),
+            Err(e) => logx::warn("screenshot", &format!("shots window: {e} ({} cards dropped)", failed.unwrap_or(0))),
         }
     });
     if let Err(e) = spawned {
@@ -241,6 +246,8 @@ fn build(app: &AppHandle) -> Result<(), String> {
         .theme(w::native_theme(app))
         // Same WebView2 environment arguments as every window of the process (§18.2).
         .additional_browser_args(w::BROWSER_ARGS)
+        // Only our own page: a card released back over the stack must not navigate it (§18.2).
+        .on_navigation(w::navigation_guard(app))
         // WebView2's own drop handler would swallow the OLE drag-out of a card (as the shelf).
         .disable_drag_drop_handler()
         .on_page_load(|win, payload| on_page_load(win.app_handle(), payload.event()))
@@ -427,6 +434,12 @@ mod tests {
         st.claimed = false;
         assert!(!st.offer(&added(5)));
         assert_eq!(st.claim().len(), 1);
+        // A page that claims in the instant before its builder thread marks the window built
+        // gets the next shot as an event — it never waits for a claim that already happened.
+        let mut st = QaoState { phase: Phase::Building, ..QaoState::default() };
+        assert!(st.claim().is_empty());
+        assert!(st.offer(&added(6)));
+        assert!(st.pending.is_empty());
     }
 
     #[test]
