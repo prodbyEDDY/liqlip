@@ -2338,3 +2338,384 @@ impl Store {
   настроек.
 - Запись, сделанная в Liquid Tools во время копирования файлов, может не попасть в импорт (повторный
   импорт её добавит).
+
+## 18. Скриншоты (`screenshot/`, `src/lib/editor/`, окна `capture` · `shots` · `editor` · `pin-*`) — W5–W8
+
+> Замер: 2026-11-26 (план W5, кода ещё нет). Продукт — SPEC §9. Источник переноса и разбор его
+> дефектов — `docs/prompts/_RESEARCH-W5-SCREENSHOT-SOURCE.md`; эталоны взаимодействия —
+> `docs/prompts/_RESEARCH-W5-ANNOTATION-UX.md` (локальные файлы координатора, абсолютные пути — в
+> промптах). Studio не переносится; всё, что в LT существует только ради studio (кнопка Mockup,
+> флаг `studio`, заголовки `x-format`/`x-keep-open`, сайдкары `*.scene.json`, `html-to-image`), не
+> переносится тоже (разведка §5.3).
+
+### 18.1. Модули и владельцы (W6)
+
+| Зона | Файлы | Агент W6 |
+|---|---|---|
+| Нативный захват и коммит | `src-tauri/src/screenshot/{grab,targets,session,frame,commit,files}.rs` · `store/shots.rs` + миграция схемы v2 + поддержка `screenshot` в `store/{feed,lifecycle,maint,media,bulk}.rs` · `hotkeys/*` (5 новых слотов) · `tray.rs` · `i18n_native.rs` | **W6-A** |
+| Нативные окна и сервисы | `src-tauri/src/screenshot/{windows,qao,editor,pin,status}.rs` · `import/lt.rs` (снимки LT) | **W6-B** |
+| Редактор аннотаций + окно редактора | `src/lib/editor/**` · `src/windows/editor/**` · `editor.html` · `tests/editor*.test.mjs` | **W6-C** |
+| Оверлей захвата | `src/windows/capture/**` · `capture.html` · `tests/capture*.test.mjs` | **W6-D** |
+| Миниатюры (QAO) и закреплённые окна | `src/windows/shots/**` · `src/windows/pin/**` · `shots.html` · `pin.html` · `tests/shots*.test.mjs` | **W6-E** |
+| Шелф и настройки | карточка/пилюля/действия/токен в `src/windows/picker/**` · раздел `src/windows/settings/sections/Screenshot.svelte` + группа хоткеев + онбординг | **W6-F** |
+| Узлы (W5-A, затем координатор) | `lib.rs` · `tauri.conf.json` · `capabilities/*` · `model.rs` + `src/lib/ipc/types.ts` · `ipc/{commands,events,runtime}.ts` · `src/lib/ipc/mock/**` · `settings.rs` · `screenshot/mod.rs` (команды-делегаты) · `vite.config.ts` · `i18n/{en,ru}.ts` (каждый агент дописывает свой блок-префикс) · `app.css` | **W5-A** |
+
+Префиксы i18n: `editor.*` (C) · `capture.*` (D) · `shots.*`, `pin.*` (E) · `settings.shot.*`,
+`picker.shot.*`, `onboarding.shot.*` (F). Нативные строки (трей, диалоги) — `i18n_native.rs` (A);
+W6-B присылает свои строки сниппетом в отчёте.
+
+### 18.2. Окна
+
+| Окно | Создание | Свойства |
+|---|---|---|
+| `capture` | **заранее в `setup()`**, скрытое (захват должен показываться мгновенно) | прозрачное, без рамки, always-on-top, skip-taskbar, focusable, `shadow(false)`, `disable_drag_drop_handler`; размер/позиция = монитор захвата (физ. px, позиция → размер → позиция, как §7.4); `SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE)`; `CloseRequested` → отмена сессии + hide |
+| `shots` (QAO) | **по требованию** при первом снимке, затем живёт скрытым | прозрачное, без рамки, always-on-top, skip-taskbar, `focusable(false)` (`WS_EX_NOACTIVATE`; клики и drag-out работают без активации), показ через `show_no_activate`, `disable_drag_drop_handler`, `WDA_EXCLUDEFROMCAPTURE`; угол рабочей области монитора снимка; высота от числа карточек (`shots_hud_layout`) |
+| `editor` | **по требованию**, одно; закрытие = уничтожение (память) | обычное окно: системный заголовок, на панели задач, мин. 640×420, по умолчанию вписать картинку в 80 % рабочей области; заголовок из `i18n_native` («Имя — Liqlip») |
+| `pin-<n>` | **по требованию**, до 6; закрытие = уничтожение | прозрачное, без рамки, always-on-top, skip-taskbar, focusable, `shadow(false)`; размер = картинка в логических px (≤ 80 % монитора) |
+
+**Исключение из правила «окна только в `setup()`»** (CLAUDE.md, правило 2). Документация Tauri
+(`WebviewWindowBuilder::new`, раздел Known issues) говорит, что построение окна дедлочит на Windows
+**в синхронной команде или обработчике событий**, и советует строить окна из `async`-команд и
+отдельных потоков. W6-B **сверяет текст на docs.rs для нашей версии `tauri`** и строит
+`shots`/`editor`/`pin-*` только так: из `async`-команды или `std::thread::spawn`, никогда из главного
+потока, обработчика событий окна, колбэка хоткея или трея. Если сверка не подтвердит — запасной план:
+`shots` и `editor` заранее в `setup()`, `pin` — одно окно (решение фиксируется в отчёте и ROADMAP §11).
+Память в простое: до первого снимка добавляется только `capture`.
+
+`setup()` (§3): шаг 6 добавляет `capture`; шаг 7 применяет 5 новых хоткеев; новых `manage()` —
+`ScreenshotState` (сессия, кадры, последняя область, стопка-счётчик окон) **до** создания окон.
+
+### 18.3. Захват (W6-A)
+
+- **Заморозка всех мониторов** при триггере, до показа окон: для каждого монитора
+  `GetDC(None)` + `BitBlt(SRCCOPY | CAPTUREBLT)` своего прямоугольника → `GetDIBits` 32 bpp top-down
+  (перенос `capture.rs` LT, разведка §4). Перед BitBlt: если открыт шелф — `picker` прячется и
+  `DwmFlush()`; QAO прячется (у него ещё и `WDA_EXCLUDEFROMCAPTURE`). Порядок мониторов и геометрия —
+  физические px виртуального экрана (Per-Monitor-V2).
+- **Один буфер на монитор**: BMP целиком (`BITMAPFILEHEADER` + `BITMAPINFOHEADER` с отрицательной
+  высотой + BGRA). Его отдаёт схема, из него же режется кроп для коммита. Никаких параллельных RGBA-копий
+  (дефект П-21 LT).
+- **Дерево окон** (`targets.rs` — перенос `CAP.rs:54-104, 239-354` с лимитами 2048 узлов / 32 уровня /
+  35 мс на окно / 120 мс бюджет детей) для монитора курсора — до показа оверлея; для другого монитора —
+  при переходе на него (событие `shot:session`).
+- **Схема `liq`** (замыкание в `lib.rs` — W5-A вызывает `screenshot::serve_uri(path)` для префиксов
+  `shot/` и `base/`): `/shot/<sessionId>/<monitorIndex>.bmp` → `image/bmp`; `/base/<clipId>?v=<n>` →
+  исходник для редактора (PNG из `media/base/<id>.png`, если есть, иначе `media/<id>.png`). Оба —
+  `Cache-Control: no-store`, ACAO `*` (canvas не должен быть tainted: `<img crossorigin="anonymous">`).
+- **Следование за курсором**: пока сессия в этапе 1 (оверлей сообщает `shot_stage(sessionId, 'select'|'frame')`),
+  поток сессии раз в 50 мс проверяет монитор курсора; сменился — окно переставляется на новый монитор
+  (позиция → размер → позиция), строится дерево окон, `emit_to("capture", "shot:session", …)`.
+- **Фокус**: в момент триггера — `paste::focus::capture_target()`; после закрытия оверлея (готово или
+  отмена) — возврат фокуса этому окну (`bring_to_front`), чтобы `Ctrl+V` сразу вставлял. Захват без
+  оверлея (экран, окно, повтор) фокус не трогает.
+- **Режимы без оверлея**: `screen` — монитор курсора целиком; `window` — `GetForegroundWindow` →
+  DWM-границы → кроп кадра его монитора; `repeat` — `last_region {monitorId, rect}` (только в
+  памяти процесса); всё сразу в коммит.
+- **Задержка** (трей): поток спит по секунде, каждую секунду `hud:show {kind:'countdown', text:'3'}`,
+  затем обычный триггер.
+- Повторный триггер при активной сессии — игнор (лог `debug`).
+
+### 18.4. Коммит (W6-A)
+
+`shot_commit` принимает **сырое тело** (Tauri raw request body, как `screenshot_commit_raw` LT) в
+кадрировании, не зависящем от лимитов заголовков:
+
+```
+[u32 LE: N] [N байт UTF-8 JSON: ShotCommit] [RGBA: width*height*4 байт или 0 байт]
+```
+
+- `rect` — физические px в системе кадра монитора сессии; Rust зажимает в кадр (`clamp_crop` LT + тесты).
+- Нет аннотаций (`doc == null` или `objects` пуст) → RGBA не передаётся, Rust режет кадр сам (быстрый путь).
+- Есть аннотации → webview прислал сведённый RGBA кропа (WYSIWYG — тот же рендер, что на экране);
+  Rust дополнительно режет **исходник** того же `rect` из кадра → `media/base/<id>.png`; документ
+  (координаты относительно кропа) → `shot_docs.doc`.
+- `action`: `done` — действия из `settings.screenshot` (copy/save/history/afterCapture); `copy` —
+  только буфер + история; `save` — папка + история; `save_as` — диалог (папка по умолчанию — настройка)
+  + история; `pin` — история + закрепить; `text` — OCR кропа (`ocr::Engine::recognize_png`), текст в буфер
+  (`paste::copy_text`), HUD `text_copied`/`text_empty`; запись не создаётся.
+- Порядок, оптимизированный под «Ctrl+V сразу»: (1) скрыть оверлей и вернуть фокус; (2) PNG/JPG
+  кодирование на воркере; (3) буфер **первым** (`paste::writer` — PNG + DIB одной транзакцией,
+  подавление собственной записи; нужен `pub(crate)`-хелпер `paste::copy_png(&[u8])`); (4) запись в
+  стор (`store::shots::insert_screenshot`, тип `screenshot`, источник — приложение с фокусом в момент
+  триггера, миниатюра); (5) файл в папку (`files.rs`: шаблон имени, уникализация `(2)`, создание
+  папки); (6) `emit shot:added` → QAO (или открыть редактор / ничего по `afterCapture`); (7) звук
+  играет QAO. Ошибка любого шага после (3) не отменяет предыдущие; ошибка сохранения → `error:
+  'save_failed'` в `shot:added`.
+- Тумблер типа `screenshot` в `storage.types` выключен → шаг (4) пропускается, QAO получает `clip:
+  null` и работает с временным файлом в `%TEMP%\Liqlip\shots\` (удаляется при закрытии карточки и на
+  старте).
+- Лимит 64 Мп (§2.3) — не в историю, но буфер и папка работают.
+- Форматы: PNG (по умолчанию) и JPG (`image` с фичей `jpeg`, качество из настроек); в историю всегда
+  PNG (как все картинки), формат касается файла в папке и буфера не касается (в буфер — PNG + DIB).
+
+### 18.5. Хранение (W6-A)
+
+- `Kind` += `screenshot` (аддитивно: `model.rs` + `types.ts`); все `match`/`switch` по `Kind` — Rust и
+  TS — получают ветку (для вставки, копирования, drag-out, OCR, превью, Quick Look `screenshot` ведёт
+  себя как `image`). `clips.kind` — `TEXT` без CHECK — миграция таблицы не нужна (W6-A сверяет).
+- **Схема v2** (`PRAGMA user_version = 2`, миграция в `store/schema.rs`, идемпотентна, тест):
+  ```sql
+  CREATE TABLE shot_docs (
+    clip_id    INTEGER PRIMARY KEY REFERENCES clips(id) ON DELETE CASCADE,
+    doc        TEXT NOT NULL,       -- AnnotDoc v1 (JSON, §18.6); '{"v":1,…,"objects":[]}' у снимка без аннотаций
+    has_base   INTEGER NOT NULL,    -- 1 = media/base/<id>.png хранит исходник (есть аннотации или было редактирование)
+    saved_path TEXT,                -- последний файл в папке снимков (перезапись при «Готово», «Показать в папке»)
+    updated_at INTEGER NOT NULL
+  );
+  ```
+  Строка есть у каждого `screenshot` и у любой `image`, которую хоть раз редактировали.
+- Файлы: `media/base/<id>.png` (исходник). Удаление записи → удаление файла тем же путём, что
+  `media/<id>.png` (`maint`/`media`), сироты `media/base/*` чистит фоновый поток.
+- `store::shots`: `insert_screenshot(NewShot) -> InsertOutcome`, `doc(id) -> Option<ShotDoc>`,
+  `apply_edit(id, flattened_png, base_png: Option, doc, w, h) -> Clip` (обновляет `media/<id>.png`,
+  миниатюру, `hash`, `width/height`, `size`, `shot_docs`; для `image` при первом редактировании сохраняет
+  исходник; событие `clips:changed {origin:'user', change:'updated'}`), `set_saved_path(id, path)`.
+- Дедуп по хэшу: снимок, совпавший пиксель-в-пиксель с существующей записью, поднимает её наверх (как
+  копирование). Если совпала запись `image` — тип не меняется.
+- Лента и счётчики: фильтр пилюли «Картинки» = `image` + `screenshot`; новая пилюля «Скриншоты» =
+  `screenshot`; `Counts` += `screenshot`; токен `type:screenshot` | `type:shot`. Ретенция/лимиты —
+  как для всех.
+- Резервная копия `.liqlip` (`store/bulk.rs`, §17): таблица `shot_docs` и `media/base/*` входят в
+  экспорт, восстанавливаются в `replace` и `merge` (в `merge` — с новым id записи).
+- Импорт LT (W6-B, `import/lt.rs`): записи LT `kind='screenshot'` (файл по `content_ref` в кэше LT)
+  → `screenshot` без документа аннотаций; отсутствующий файл — `skipped`.
+
+### 18.6. Редактор аннотаций (`src/lib/editor/`, W6-C)
+
+**Модули** (чистые `.ts` тестируются node:test, как остальные): `doc.ts` (типы + (де)сериализация +
+миграции версий) · `geometry.ts` (перенос `annotationGeometry.ts` LT + тесты) · `textLayout.ts`
+(перенос `annotationText.ts` LT + тесты) · `hit.ts` (попадания: контур/площадь, допуски в экранных px)
+· `render.ts` (рисование документа на canvas: базовая картинка, слои §SPEC 9.3-9, выделение/ховер
+отдельным оверлейным canvas) · `effects.ts` (плашка/пиксели/размытие от исходных пикселей) ·
+`history.ts` (стек снимков массива объектов со структурным разделением; склейка серий < 500 мс) ·
+`tools/*.ts` (машина состояний по инструментам) · `interaction.ts` (диспетчер указателя и клавиш по
+правилам §SPEC 9.3) · `export.ts` (сведение в RGBA кропа в пикселях исходника) · `defaults.ts`
+(умолчания инструментов в `localStorage` `liqlip.editor.tools`) · UI: `Editor.svelte` (холст),
+`Toolbar.svelte`, `PropsBar.svelte`, `ColorPopover.svelte`, `TextInput.svelte`, `Cheatsheet.svelte`,
+`glyphs/*` (свои SVG-глифы инструментов в формате `src/lib/heroicons/`: у Heroicons нет прямоугольника,
+эллипса, маркера, стрелки-инструмента — разведка §5.2).
+
+**Документ аннотаций v1** (`AnnotDoc`, хранится в `shot_docs.doc`; координаты — **пиксели исходника**):
+
+```ts
+export type Pt = [number, number];
+export interface Rect { x: number; y: number; w: number; h: number }
+export type Size = 1 | 2 | 3 | 4 | 5;
+interface Obj { id: string; color: string /* #rrggbb */ }
+export type AnnotObject =
+  | Obj & { kind: 'arrow'; a: Pt; b: Pt; bend: number; style: 'straight' | 'curved' | 'double'; size: Size }
+  | Obj & { kind: 'line'; a: Pt; b: Pt; size: Size }
+  | Obj & { kind: 'rect' | 'ellipse'; r: Rect; fill: boolean; size: Size }
+  | Obj & { kind: 'pen' | 'marker'; points: Pt[]; size: Size }
+  | Obj & { kind: 'text'; at: Pt; width: number | null; text: string; fontSize: number; style: 'plain' | 'badge' }
+  | Obj & { kind: 'counter'; at: Pt; n: number | null; size: Size }   // n=null — авто (предыдущий + 1)
+  | Obj & { kind: 'redact'; r: Rect; mode: 'solid' | 'pixelate' | 'blur'; size: Size }
+  | Omit<Obj, 'color'> & { kind: 'spotlight'; r: Rect; shape: 'rect' | 'ellipse' }
+  | Omit<Obj, 'color'> & { kind: 'image'; r: Rect; src: string /* data:image/png;base64,… */ };
+export interface AnnotDoc {
+  v: 1;
+  w: number; h: number;      // размер исходника
+  unit: number;              // px исходника на 1 логический px интерфейса в момент создания (масштаб монитора; 1 — картинка из буфера)
+  crop: Rect | null;         // неразрушающая обрезка (окно редактора)
+  objects: AnnotObject[];    // порядок внутри слоя = z-порядок
+}
+```
+- Толщина/кегль: `px = TABLE[size] * doc.unit` (`TABLE = [2, 3, 5, 8, 12]` для линий; шрифт — `fontSize *
+  unit`) — снимок 4K на 200 % получает визуально те же толщины, что на экране.
+- Неизвестная `v` при загрузке → открыть исходник без объектов + тост; лишние поля игнорируются.
+- **Рендер**: холст хранит исходник один раз (`ImageBitmap`); документ перерисовывается целиком при
+  изменении состояния (не в rAF-цикле); ховер, выделение, ручки, лупа — на отдельном лёгком canvas.
+  Тексты кэшируют раскладку по `(text, width, fontSize)`.
+- **Эффекты**: считаются по пикселям **исходника** в области + поле 2·радиус (края не просвечивают —
+  дефект П-3 LT); плашка — заливка цветом объекта; пиксели — ячейка `max(6, 4 · TABLE[size] · unit)`;
+  размытие — радиус `3 · TABLE[size] · unit`, затем обрезка по прямоугольнику. Кэш по `(r, mode, size)`.
+- **Экспорт** (`exportRGBA(rect)`): canvas размера `rect` в px исходника, `drawImage` исходника, затем
+  тот же `drawDoc` — WYSIWYG по построению; результат `getImageData` → `Uint8Array` для коммита.
+- **Компонент**:
+  ```ts
+  // Editor.svelte
+  props: {
+    base: ImageBitmap;              // декодированный исходник (оверлей — кадр монитора; окно — исходник записи)
+    doc: AnnotDoc;                  // начальный документ (новый снимок — пустой, unit = масштаб монитора)
+    mode: 'overlay' | 'window';     // overlay: 1 px исходника = 1 физ. px, без зума; window: зум/панорама
+    clip?: Rect | null;             // overlay: рамка (рисование и экспорт — внутри; меняется извне при ресайзе рамки)
+    onchange?: (doc: AnnotDoc) => void;   // каждый шаг истории
+    onintent?: (i: 'done' | 'copy' | 'save' | 'save_as' | 'pin' | 'text' | 'close') => void;  // Enter, Ctrl+C/S/P …
+  }
+  // bind:this → api
+  interface EditorApi {
+    handleKey(e: KeyboardEvent): boolean;    // true — событие съедено (хост проверяет первым делом)
+    escape(): boolean;                       // шаг лестницы Esc; false — разматывать нечего (хост решает о закрытии)
+    hasObjects(): boolean; dirty(): boolean;
+    doc(): AnnotDoc;                         // текущий документ (координаты — px исходника)
+    exportRGBA(rect: Rect): Promise<{ width: number; height: number; data: Uint8Array }>;
+    setTool(t: ToolId): void; tool(): ToolId;
+  }
+  ```
+  `Toolbar.svelte` и `PropsBar.svelte` — отдельные компоненты, которые хост размещает сам (оверлей —
+  у рамки; окно — сверху) и связывает с тем же состоянием редактора (общий `$state`-стор
+  `createEditorState()`).
+- **Тесты-правила**: каждое правило SPEC §9.3 (1–12) — тест на чистом диспетчере `interaction.ts`
+  (синтетические pointer/key события → документ/выделение/инструмент), плюс hit-тесты контура,
+  перенумерация счётчиков, склейка истории, сериализация v1, эффект без просвечивания краёв
+  (сравнение пикселей на маленьком холсте через `OffscreenCanvas`-заглушку или чистую функцию над
+  массивом).
+
+### 18.7. Оверлей захвата (`src/windows/capture/`, W6-D)
+
+- Загружается один раз (окно заранее создано), слушает `shot:session`, на старте спрашивает
+  `shot_session()` (оверлей мог открыться раньше подписки). Кадр — `<img crossorigin="anonymous"
+  src=monitor.frameUrl>` → `createImageBitmap` → `Editor` (этап 2) и лупа.
+- **Состояния**: `select` (этап 1: ховер окна, драг области, лупа) → `frame` (этап 2: рамка + `Editor`
+  с `clip = рамка`) → `committing`. Сообщает `shot_stage` (для следования за курсором).
+- Выбор окна — `captureTargets.ts` LT (перенос + тесты) по `session.windows`; координаты указателя
+  переводятся в px кадра через `frame.width / innerWidth` (не через `devicePixelRatio` — разведка §4).
+- **Рамка**: 8 ручек **снаружи** границы (12 px от края), полоса перемещения 10 px снаружи; чип
+  размеров над рамкой (двигает рамку). Ручки/полоса работают при любом инструменте, но **только снаружи**
+  рамки — внутри рамки события получает `Editor`.
+- **Панель**: `Toolbar` + `PropsBar` редактора + действия хоста (Текст, Закрепить, Сохранить как…,
+  Копировать, Отмена, Готово); стыковка снизу снаружи → сверху снаружи → внутри у нижнего края;
+  прижимается к краям монитора; во время жеста под ней — `opacity .25; pointer-events: none`.
+- **Клавиши**: сначала `editor.handleKey(e)`; затем хост: `Enter` → done, `Ctrl+C/S/Shift+S/P`,
+  `F`/`R`/`M` (только `select`), стрелки (этап 1 — курсор; этап 2 при `Ctrl` — рамка), `Esc` → если
+  `editor.escape()` вернул `false`: нет объектов → `shot_cancel`; есть → плашка подтверждения 3 с.
+- **Готово**: `editor.exportRGBA(рамка)` (если есть объекты) → кадрирование тела §18.4 → `shot_commit`;
+  пока ждём — состояние `committing` (кнопки неактивны), окно прячет Rust.
+- Режим `text` (OCR): только этап 1; отпускание области → `shot_commit({action:'text'})`.
+- Настройка «Снимать сразу при отпускании» (`session.settings.quick`): этап 2 пропускается.
+
+### 18.8. QAO и закрепление (`src/windows/shots/`, `src/windows/pin/`, W6-E; нативное — W6-B)
+
+- QAO держит стопку на фронте (`stack.ts` LT как основа: до 4, новая снизу); на каждое `shot:added`
+  — карточка + звук (WebAudio, синтез щелчка ~60 мс, если `settings.screenshot.sound`); высоту окна
+  сообщает `shots_hud_layout({ height })`, пустая стопка → `shots_hud_hide()`. Таймер — по
+  `settings.screenshot.overlayTimeout`, пауза на ховере/драге. Кнопки — §SPEC 9.4 через команды
+  §18.10 и существующие `clip_copy`, `clips_delete`, `clip_ocr` + `text_copy`, `clip_drag_out`.
+- `shot:session` с этапом `select` → QAO прячется (`shots_hud_hide` с сохранением стопки), после
+  коммита/отмены возвращается (Rust показывает окно снова, если стопка не пуста).
+- Окно не активируется: никаких клавиш, фокус-кольцо не нужно; доступность — `aria-label` у кнопок.
+- **Закреплённые окна**: каждое окно `pin-<n>` на старте зовёт `shot_pin_get()` (Rust знает метку окна
+  → запись) и показывает `imageUrl` (`liq://media`). Драг — `startDragging()`; колесо — масштаб окна
+  (`shot_pin_resize({ scale })` — Rust меняет размер вокруг курсора); `Ctrl+колесо` — прозрачность
+  (CSS); двойной клик — 100 % ↔ исходный; `Esc`/× → `shot_pin_close()`; ПКМ — меню.
+
+### 18.9. Окно редактора (`src/windows/editor/`, W6-C; нативное — W6-B)
+
+- На старте `shot_editor_get()` → `ShotEditorPayload`; базовая картинка — `baseUrl` (`liq://base/<id>`).
+  `shot:editor` — смена записи в уже открытом окне (если нет несохранённых изменений; иначе окно само
+  спрашивает и отвечает `shot_editor_switch(accept)`).
+- Действия: Копировать (`shot_editor_commit` с `action:'copy'` — копирует сведённое, запись не
+  меняет) · Закрепить · Сохранить как… · Готово (`action:'done'` → `store::shots::apply_edit` + буфер +
+  перезапись `saved_path` → окно закрывается). Тело — то же кадрирование §18.4 (`ShotEditorCommit`).
+- Закрытие с изменениями: окно перехватывает `onCloseRequested` → диалог (свой, внутри окна).
+
+### 18.10. Контракт (W5-A вносит в §9 и код; агенты W6 только реализуют)
+
+```ts
+export type Kind = 'text' | 'link' | 'code' | 'color' | 'contact' | 'image' | 'file' | 'screenshot';
+export type ShotMode = 'region' | 'screen' | 'window' | 'repeat' | 'text';
+export type ShotAction = 'done' | 'copy' | 'save' | 'save_as' | 'pin' | 'text';
+export interface MonitorFrame { index: number; id: string; x: number; y: number; width: number; height: number;
+  scale: number; frameUrl: string }                          // физ. px виртуального экрана
+export interface WinRect { x: number; y: number; w: number; h: number; children: WinRect[] }  // физ. px кадра монитора
+export interface ShotSession { id: number; mode: 'region' | 'text'; monitor: MonitorFrame; windows: WinRect[];
+  lastRegion: Rect | null; quick: boolean; magnifier: boolean; dimensions: boolean }
+export interface ShotCommit { sessionId: number; rect: Rect; action: ShotAction; doc: AnnotDoc | null;
+  width: number; height: number }                            // width/height RGBA тела (0 — тела нет)
+export interface ShotCommitResult { clipId: number | null; savedPath: string | null; text: string | null }
+export interface ShotEditorPayload { clipId: number; name: string; baseUrl: string; width: number; height: number;
+  doc: AnnotDoc | null; dirtyGuard: boolean }
+export interface ShotEditorCommit { clipId: number; action: 'done' | 'copy' | 'save_as' | 'pin'; doc: AnnotDoc;
+  width: number; height: number }
+export interface PinPayload { clipId: number; imageUrl: string; width: number; height: number }
+export interface ShotStatus { snippingKey: boolean; hotkeyErrors: { field: string; code: 'taken' | 'invalid' }[] }
+// ClipMeta += shot?: { savedPath: string | null; edited: boolean }
+// Counts += screenshot: number
+```
+
+**Настройки** (`Settings`, аддитивно, `serde(default)`; версия остаётся 1):
+```ts
+hotkeys: { …; shotRegion: string; shotScreen: string; shotWindow: string; shotRepeat: string; shotText: string };
+  // по умолчанию "PrtSc", "Ctrl + PrtSc", "", "", ""
+screenshot: {
+  quick: boolean;                 // false — снимать сразу при отпускании
+  magnifier: boolean;             // true
+  dimensions: boolean;            // true
+  sound: boolean;                 // true
+  copy: boolean;                  // true
+  save: boolean;                  // true
+  folder: string;                 // "" = %USERPROFILE%\Pictures\Liqlip (FOLDERID_Pictures)
+  fileName: string;               // "Liqlip {date} {time}"
+  format: 'png' | 'jpg';          // png
+  jpgQuality: number;             // 90 (60–100)
+  afterCapture: 'overlay' | 'editor' | 'none';   // overlay (QAO)
+  corner: 'left' | 'right';       // left
+  timeout: number;                // 10 (с; 0 = не скрывать)
+};
+// storage.types получает ключ screenshot (true) — Record<Kind, boolean>
+```
+
+**Команды** (модуль `screenshot`, кроме отмеченных; все, что касаются записи, принимают **id записи**, не путь):
+
+| Команда | Аргументы → результат |
+|---|---|
+| `shot_capture` | `{ mode: ShotMode; delay?: number }` → `()` |
+| `shot_session` | → `ShotSession \| null` |
+| `shot_stage` | `sessionId, stage: 'select' \| 'frame'` → `()` |
+| `shot_commit` | сырое тело §18.4 → `ShotCommitResult` |
+| `shot_cancel` | `sessionId` → `()` |
+| `shot_edit` | `id` → `()` (открыть окно редактора) |
+| `shot_editor_get` | → `ShotEditorPayload \| null` |
+| `shot_editor_switch` | `accept: boolean` → `()` |
+| `shot_editor_commit` | сырое тело (то же кадрирование, JSON `ShotEditorCommit`) → `Clip` |
+| `shot_pin` | `id` → `()` |
+| `shot_pin_get` | → `PinPayload \| null` (по метке вызывающего окна) |
+| `shot_pin_resize` | `scale: number` → `()` |
+| `shot_pin_close` | → `()` |
+| `shot_save` | `id` → `string` (путь; папка снимков, имя по шаблону) |
+| `shot_save_as` | `id` → `string \| null` (диалог) |
+| `shot_reveal` | `id` → `()` (Проводник с выделением `saved_path`) |
+| `shots_hud_layout` | `{ height: number }` → `()` |
+| `shots_hud_hide` | → `()` |
+| `shot_status` | → `ShotStatus` |
+| `open_windows_settings` | `page: 'keyboard'` → `()` (`ms-settings:easeofaccess-keyboard`) |
+
+**События**:
+
+| Событие | Payload | Кто → кому |
+|---|---|---|
+| `shot:session` | `ShotSession` | screenshot → capture (начало сессии, смена монитора) |
+| `shot:end` | `{ sessionId: number }` | screenshot → capture, shots |
+| `shot:added` | `{ clip: Clip \| null; savedPath: string \| null; tempPath: string \| null; monitor: string; error: 'save_failed' \| null }` | screenshot → shots |
+| `shot:editor` | `ShotEditorPayload` | screenshot → editor |
+| `hud:show` | `kind` += `'countdown' \| 'shot_failed' \| 'text_copied' \| 'text_empty'` | screenshot → hud |
+
+**URI**: `/shot/<sessionId>/<monitorIndex>.bmp` · `/base/<clipId>?v=<n>` (§18.3).
+
+**Мок** (`src/lib/ipc/mock/shots.ts`, W5-A): сессия с кадром — сгенерированная в браузере «фальшивая
+рабочая поверхность» (canvas → blob URL: окна-прямоугольники с заголовками и текстом, 1920×1080, `scale`
+из `?mock-scale=`), 4–6 окон в `windows` (одно с детьми), `shot_commit` добавляет запись `screenshot` в
+мок-ленту и шлёт `shot:added`; `shot_editor_get` отдаёт картинку записи из мока; флаги `?mock-shot=text`
+(режим OCR), `?mock-shot-quick=1`. Хосты окон открываются в браузере: `/capture.html`, `/editor.html?clip=<id>`,
+`/shots.html` (кнопка «добавить снимок» в мок-режиме), `/pin.html?clip=<id>`.
+
+### 18.11. Хоткеи (W6-A)
+
+`HotkeyAction` += `ShotRegion, ShotScreen, ShotWindow, ShotRepeat, ShotText` (слоты = поля `hotkeys.*`
+по порядку; `combo::FIELDS`, `Slots<T> = [T; 9]`, фикстура, `logic.ts` W6-F). Голый `PrtSc` уже
+маршрутизируется в `RegisterHotKey` (`combo.rs:56-61`). Действия → `screenshot::trigger(mode)` на
+коротком потоке.
+
+**`PrtSc` и «Ножницы»**: `status.rs` (W6-B) читает
+`HKCU\Control Panel\Keyboard\PrintScreenKeyForSnippingEnabled` (DWORD; нет значения — считать по
+версии Windows: на Windows 11 22H2+ по умолчанию включено — W6-B сверяет по документации Microsoft и
+фиксирует источник в отчёте). Реестр не пишем. Ошибки регистрации хоткеев — в `ShotStatus.hotkeyErrors`
+и в `SettingsResult.errors` как у остальных полей.
+
+### 18.12. Проверка
+
+Гейты прежние (§12): `pnpm check` 0/0 · `pnpm test` · `pnpm build` · `cargo check` · `cargo test`.
+Агенты W6 нативное приложение не запускают; фронт проверяют в браузере на моке (`pnpm dev`, порт 1430)
+и CDP-скриншотами. Координатор на интеграции запускает `pnpm tauri dev` и проверяет по логам старт,
+регистрацию хоткеев и создание окон; захват, фокус, `PrtSc`, drag-out и DPI проверяет Eddy на
+установленной сборке (чек-лист в отчёте интеграции).

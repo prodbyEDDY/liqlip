@@ -3,8 +3,9 @@
 Windows clipboard manager extracted from Liquid Tools into its own app: keyboard-first shelf
 (`Alt + V`), full-text search with filter tokens, Quick Look, actions menu, multi-select,
 text transforms, folders, favorites, snippets, paste stack, OCR on images, privacy by default.
-**Clipboard only** — no dictation, no screenshots, no studio. Same liquid monochrome look as the
-Liquid Tools shelf.
+Since v1.1 (W5–W8): **screenshots** CleanShot/ShareX-class — `PrtSc` → window or region →
+annotate in place → Enter; shots live in the same feed (SPEC §9, ARCHITECTURE §18). **No dictation,
+no studio/mockups.** Same liquid monochrome look as the Liquid Tools shelf.
 
 Lives in the workspace `C:\Coding\My Projects\LiquidTools\` next to `liquid-tools-app` (the
 source we port from — **read-only for this project**). The workspace root is not a git repo.
@@ -87,9 +88,12 @@ Liquid Tools after the W1 design review) and the audit [`docs/design-audit.md`](
 1. **`CLAUDE.md` and `AGENTS.md` are edited in pairs** — `AGENTS.md` is a byte-for-byte copy
    differing only in the title line. Line endings are **LF** everywhere (`.gitattributes`).
 2. **Windows are pre-created hidden in `setup()`** and only shown/hidden later — never build a
-   webview window lazily from a command or hotkey thread (deadlocks the event loop on Windows).
-   Managed state (`Store`, settings) must exist before the first window is built.
-   `CloseRequested` is intercepted on every window (hide, never destroy).
+   webview window lazily from a sync command, an event handler, the main thread or a hotkey/tray
+   callback (deadlocks the event loop on Windows). Managed state (`Store`, settings) must exist
+   before the first window is built. `CloseRequested` is intercepted on every pre-created window
+   (hide, never destroy). **Only exception** (ARCHITECTURE §18.2): the screenshot windows `shots`,
+   `editor`, `pin-*` are built on demand from an `async` command or a spawned thread (Tauri's
+   documented safe path) and `editor`/`pin-*` are destroyed on close.
 3. **Low-level hook callbacks do no work** — no IPC, no windows, no I/O; update state, decide
    whether to swallow, schedule, return. Windows silently removes a slow hook.
 4. **Clipboard access is short and retried.** One `OpenClipboard` per snapshot/write, closed
@@ -129,5 +133,8 @@ Liquid Tools after the W1 design review) and the audit [`docs/design-audit.md`](
 | Hotkeys | `src-tauri/src/hotkeys/` | ARCHITECTURE §8 |
 | Settings | `src-tauri/src/settings.rs` · `src/windows/settings/` | SPEC §4 |
 | Shelf UI | `src/windows/picker/` | SPEC §3 |
+| Screenshots (native) | `src-tauri/src/screenshot/` · `store/shots.rs` | ARCHITECTURE §18 |
+| Annotation editor | `src/lib/editor/` · `src/windows/editor/` | SPEC §9.3, ARCHITECTURE §18.6 |
+| Capture overlay / QAO / pins | `src/windows/capture/` · `src/windows/shots/` · `src/windows/pin/` | ARCHITECTURE §18.7–18.8 |
 | Design tokens | `src/app.css` | `docs/design-system.md` |
 | Tests | `tests/*.test.mjs` | ARCHITECTURE §12 |

@@ -1,8 +1,8 @@
 # Contributing to Liqlip
 
-Thanks for helping. Liqlip is a **clipboard-only** app for Windows: capturing, finding and pasting
-what you copied. Changes that make that faster, more reliable or more private are welcome.
-Features outside the clipboard (dictation, screenshots, sync, AI) are out of scope.
+Thanks for helping. Liqlip is a clipboard manager and screenshot tool for Windows: capturing,
+annotating, finding and pasting what you copied or captured. Changes that make that faster, more
+reliable or more private are welcome. Dictation, mockup/studio editors, sync and AI are out of scope.
 
 ## Before you start
 
