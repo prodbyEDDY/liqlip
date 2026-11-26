@@ -380,7 +380,14 @@ mod tests {
         let d2 = d.clone();
         let (r2, g2) = (runs.clone(), gate.clone());
         let waiter = std::thread::spawn(move || d2.run(7, Duration::from_secs(5), job(r2, g2)));
-        std::thread::sleep(Duration::from_millis(30));
+        // Open the gate only once the second caller holds the slot (map + job + waiter = 3).
+        // A fixed sleep raced with thread start-up on slow CI machines: the job finished first
+        // and the late caller started a second run.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while d.inflight.lock().get(&7).map_or(0, Arc::strong_count) < 3 {
+            assert!(Instant::now() < deadline, "the second caller never joined the job");
+            std::thread::sleep(Duration::from_millis(2));
+        }
         {
             let (m, cv) = &*gate;
             *m.lock() = true;
