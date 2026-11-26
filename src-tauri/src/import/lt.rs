@@ -10,9 +10,13 @@
 //! could create or write `-shm` in its folder. The copy needs no lock; a write that lands
 //! mid-copy is detected (size / mtime / `-journal` before and after) and the copy retried.
 //!
-//! Mapping: `clipboard_entries` rows of kind text|link|code|contact|color|image|file;
-//! screenshots, dictations (they are not in this database at all) and unknown kinds are
-//! skipped. Text kinds are re-classified with `capture::classify::classify_text` (all text
+//! Mapping: `clipboard_entries` rows of kind text|link|code|contact|color|image|file|screenshot;
+//! dictations (they are not in this database at all) and unknown kinds are skipped. Screenshots
+//! (W6-B, ARCHITECTURE §18.5) → `screenshot` records without an annotation document (Liquid
+//! Tools baked annotations into the picture): the file is `content_ref`, read only when it lies
+//! inside Liquid Tools' screenshot cache (`%LOCALAPPDATA%\com.liquidtools.app\screenshots`); a
+//! missing file, a path elsewhere or a format this build cannot decode counts as `skipped`.
+//! Text kinds are re-classified with `capture::classify::classify_text` (all text
 //! kinds share one hash family, so the label never affects dedup). `pinned` → favorite,
 //! `category` → folder, `created_at` (ms; pre-v3 seconds lifted like Liquid Tools does) →
 //! `created_at` = `copied_at`, `source_app` (an exe file stem) → app `<stem>.exe`, icons from
@@ -25,7 +29,7 @@ use super::runner::{self, Page, Progress, PAGE};
 use super::tmp::TempDir;
 use crate::capture::classify;
 use crate::content::{self, FILES_MAX, IMAGE_MAX_PIXELS};
-use crate::model::{ClipMeta, ImportProbe, ImportReport, Kind};
+use crate::model::{ClipMeta, ImportProbe, ImportReport, Kind, ShotMeta};
 use crate::store::bulk::{folder_name, ImportItem};
 use crate::store::{ClipFiles, NewClip, SourceApp, Store};
 use base64::Engine as _;
@@ -39,8 +43,8 @@ use std::time::{Duration, SystemTime};
 
 /// Liquid Tools' bundle identifier (its data folder under `%APPDATA%`).
 pub(crate) const LT_IDENTIFIER: &str = "com.liquidtools.app";
-/// The kinds that are imported (everything else — `screenshot`, … — is skipped).
-const KINDS: &str = "'text','link','code','contact','color','image','file'";
+/// The kinds that are imported (everything else — dictations, unknown kinds — is skipped).
+const KINDS: &str = "'text','link','code','contact','color','image','file','screenshot'";
 /// `created_at` in ms: rows older than Liquid Tools v3 stored seconds (its own
 /// `migrate_timestamps` threshold: 1e11 separates s from ms for 1973…5138).
 const TS: &str = "(CASE WHEN created_at > 0 AND created_at < 100000000000 THEN created_at * 1000 ELSE created_at END)";
@@ -55,6 +59,35 @@ const CONTENT_REF: &str = "substr(content_ref, 1, 2100000)";
 /// `%APPDATA%\com.liquidtools.app\clipboard\clipboard.db`.
 pub(crate) fn default_db(roaming: &Path) -> PathBuf {
     roaming.join(LT_IDENTIFIER).join("clipboard").join("clipboard.db")
+}
+
+/// Liquid Tools' screenshot cache: Tauri `app_cache_dir()` + `screenshots` (its
+/// `screenshot/mod.rs::cache_dir`); `app_cache_dir` on Windows is `FOLDERID_LocalAppData` +
+/// the identifier. Screenshot rows are read only from inside it.
+pub(crate) fn shots_dir(local_app_data: &Path) -> PathBuf {
+    local_app_data.join(LT_IDENTIFIER).join("screenshots")
+}
+
+/// `FOLDERID_LocalAppData` (what Tauri's `app_cache_dir` resolves on Windows). Tests never read
+/// the real profile: there it is `None` (no screenshot is imported through [`run`]).
+/// https://learn.microsoft.com/windows/win32/api/shlobj_core/nf-shlobj_core-shgetknownfolderpath
+#[cfg(all(windows, not(test)))]
+fn local_app_data() -> Option<PathBuf> {
+    use windows::Win32::System::Com::CoTaskMemFree;
+    use windows::Win32::UI::Shell::{FOLDERID_LocalAppData, SHGetKnownFolderPath, KF_FLAG_DEFAULT};
+    // SAFETY: the returned string belongs to the caller, who frees it with CoTaskMemFree (the
+    // function's docs); it is copied into a PathBuf first and never used after the free.
+    unsafe {
+        let p = SHGetKnownFolderPath(&FOLDERID_LocalAppData, KF_FLAG_DEFAULT, None).ok()?;
+        let path = p.to_string().ok().map(PathBuf::from);
+        CoTaskMemFree(Some(p.0 as *const core::ffi::c_void));
+        path
+    }
+}
+
+#[cfg(any(not(windows), test))]
+fn local_app_data() -> Option<PathBuf> {
+    None
 }
 
 /// Optional columns (added by Liquid Tools' additive migrations over time).
@@ -473,20 +506,31 @@ fn image_clip(r: &LtRow, dir: &Path, source: Option<SourceApp>) -> Result<NewCli
         }
     }
     let path = candidates.into_iter().find(|p| p.is_file()).ok_or("not_found: image file")?;
-    let len = std::fs::metadata(&path).map_err(|e| format!("failed: {e}"))?.len();
+    picture_clip(Kind::Image, read_picture(&path)?, ImageFormat::Png, r.ts, source)
+}
+
+fn read_picture(path: &Path) -> Result<Vec<u8>, String> {
+    let len = std::fs::metadata(path).map_err(|e| format!("failed: {e}"))?.len();
     if len > PNG_MAX_BYTES {
         return Err("invalid: image file too large".into());
     }
-    let bytes = std::fs::read(&path).map_err(|e| format!("failed: read image: {e}"))?;
-    let (w, h) = ImageReader::with_format(Cursor::new(&bytes), ImageFormat::Png)
+    std::fs::read(path).map_err(|e| format!("failed: read image: {e}"))
+}
+
+/// A picture record from a file's bytes in `format`: decoded to RGBA8 and normalised like a
+/// capture; the PNG is the file itself when it is a PNG the normalisation left alone, else a
+/// fresh encode (history keeps PNG only, ARCHITECTURE §18.4).
+fn picture_clip(kind: Kind, bytes: Vec<u8>, format: ImageFormat, ts: i64, source: Option<SourceApp>) -> Result<NewClip, String> {
+    let what = if format == ImageFormat::Png { "png" } else { "picture" };
+    let (w, h) = ImageReader::with_format(Cursor::new(&bytes), format)
         .into_dimensions()
-        .map_err(|e| format!("invalid: png: {e}"))?;
+        .map_err(|e| format!("invalid: {what}: {e}"))?;
     if w == 0 || h == 0 || u64::from(w) * u64::from(h) > IMAGE_MAX_PIXELS {
         return Err("invalid: image size".into());
     }
-    let mut rgba: RgbaImage = ImageReader::with_format(Cursor::new(&bytes), ImageFormat::Png)
+    let mut rgba: RgbaImage = ImageReader::with_format(Cursor::new(&bytes), format)
         .decode()
-        .map_err(|e| format!("invalid: png: {e}"))?
+        .map_err(|e| format!("invalid: {what}: {e}"))?
         .into_rgba8();
     let transparent = rgba.pixels().all(|p| p.0[3] == 0);
     if transparent {
@@ -494,7 +538,7 @@ fn image_clip(r: &LtRow, dir: &Path, source: Option<SourceApp>) -> Result<NewCli
             p.0[3] = 255;
         }
     }
-    let png = if transparent { encode_png(w, h, rgba.as_raw())? } else { bytes };
+    let png = if transparent || format != ImageFormat::Png { encode_png(w, h, rgba.as_raw())? } else { bytes };
     let long = w.max(h);
     let thumb = if long <= THUMB_MAX {
         png.clone()
@@ -505,7 +549,7 @@ fn image_clip(r: &LtRow, dir: &Path, source: Option<SourceApp>) -> Result<NewCli
         let small = image::imageops::thumbnail(&rgba, tw, th);
         encode_png(tw, th, small.as_raw())?
     };
-    let mut c = base_clip(Kind::Image, content::image_hash(w, h, rgba.as_raw()), r.ts, source);
+    let mut c = base_clip(kind, content::image_hash(w, h, rgba.as_raw()), ts, source);
     c.width = Some(i64::from(w));
     c.height = Some(i64::from(h));
     c.png = Some(png);
@@ -513,15 +557,53 @@ fn image_clip(r: &LtRow, dir: &Path, source: Option<SourceApp>) -> Result<NewCli
     Ok(c)
 }
 
-fn to_item(r: &LtRow, dir: &Path, favs: &HashMap<i64, usize>, icons: &HashMap<String, Vec<u8>>) -> Result<ImportItem, String> {
+/// The file of a screenshot row, if it can be imported: `content_ref` (else `preview`, where
+/// Liquid Tools also wrote the path) as an absolute path that — with `..` and links resolved —
+/// is a file inside `shots` (Liquid Tools' screenshot cache), in a format this build decodes.
+/// `None` → the row is skipped (missing file, a path elsewhere, an unsupported format).
+fn shot_source(r: &LtRow, shots: Option<&Path>) -> Option<(PathBuf, ImageFormat)> {
+    let root = shots?.canonicalize().ok()?;
+    let raw = r.content_ref.as_deref().filter(|c| !c.trim().is_empty()).unwrap_or(&r.preview);
+    let path = Path::new(raw.trim());
+    if !path.is_absolute() {
+        return None;
+    }
+    let file = path.canonicalize().ok()?;
+    if !file.starts_with(&root) || !file.is_file() {
+        return None;
+    }
+    // Sniff the content (Liquid Tools saved PNG / JPG / WebP / AVIF by its format setting).
+    let format = ImageReader::open(&file).ok()?.with_guessed_format().ok()?.format()?;
+    format.reading_enabled().then_some((file, format))
+}
+
+fn shot_clip(path: &Path, format: ImageFormat, r: &LtRow, source: Option<SourceApp>) -> Result<NewClip, String> {
+    let mut c = picture_clip(Kind::Screenshot, read_picture(path)?, format, r.ts, source)?;
+    // Never saved to the screenshot folder by Liqlip; annotations, if any, are pixels already.
+    c.meta.shot = Some(ShotMeta { saved_path: None, edited: false });
+    Ok(c)
+}
+
+/// One row → an item; `Ok(None)` = skipped (a screenshot without an importable file).
+fn to_item(
+    r: &LtRow,
+    dir: &Path,
+    shots: Option<&Path>,
+    favs: &HashMap<i64, usize>,
+    icons: &HashMap<String, Vec<u8>>,
+) -> Result<Option<ImportItem>, String> {
     let stem = r.source_app.as_deref().map(str::trim).filter(|s| !s.is_empty());
     let source = stem.map(|s| SourceApp { exe: format!("{}.exe", s.to_lowercase()), name: s.to_string() });
     let clip = match r.kind.as_str() {
         "image" => image_clip(r, dir, source)?,
         "file" => files_clip(r, source)?,
+        "screenshot" => match shot_source(r, shots) {
+            Some((path, format)) => shot_clip(&path, format, r, source)?,
+            None => return Ok(None),
+        },
         _ => text_clip(r, source)?,
     };
-    Ok(ImportItem {
+    Ok(Some(ImportItem {
         clip,
         created_at: r.ts,
         title: None, // Liquid Tools titles are automatic (first line / file name / "image")
@@ -534,7 +616,7 @@ fn to_item(r: &LtRow, dir: &Path, favs: &HashMap<i64, usize>, icons: &HashMap<St
         ocr_text: None,
         ocr_state: 0,
         app_icon: stem.and_then(|s| icons.get(&s.to_lowercase()).cloned()),
-    })
+    }))
 }
 
 /// `import_lt_probe`: what an import would bring (after the retention filter).
@@ -552,10 +634,25 @@ pub(crate) fn probe(db: &Path, cutoff: Option<i64>) -> Result<ImportProbe, Strin
 }
 
 /// `import_lt_run`. `skip_secrets` = `settings.privacy.secretPatterns`, `ignored_apps` =
-/// `settings.privacy.ignoredApps` (see `runner`).
+/// `settings.privacy.ignoredApps` (see `runner`). Screenshots are read from Liquid Tools' cache
+/// under `FOLDERID_LocalAppData` ([`shots_dir`]).
 pub(crate) fn run(
     store: &Store,
     db: &Path,
+    cutoff: Option<i64>,
+    skip_secrets: bool,
+    ignored_apps: &[String],
+    progress: Progress<'_>,
+) -> Result<ImportReport, String> {
+    let shots = local_app_data().map(|d| shots_dir(&d));
+    run_in(store, db, shots.as_deref(), cutoff, skip_secrets, ignored_apps, progress)
+}
+
+/// [`run`] with an explicit screenshot cache (`None`: every screenshot row is skipped).
+pub(crate) fn run_in(
+    store: &Store,
+    db: &Path,
+    shots: Option<&Path>,
     cutoff: Option<i64>,
     skip_secrets: bool,
     ignored_apps: &[String],
@@ -571,10 +668,202 @@ pub(crate) fn run(
     let favs = lt.favorite_ranks(cutoff)?;
     let icons = lt.app_icons();
     let mut after = (i64::MIN, i64::MIN);
-    runner::run(store, &folders, total, skip_secrets, ignored_apps, progress, || -> Result<Option<Page>, String> {
+    // Screenshots without an importable file never reach the runner: counted here.
+    let skipped_shots = std::cell::Cell::new(0i64);
+    let mut report = runner::run(store, &folders, total, skip_secrets, ignored_apps, progress, || -> Result<Option<Page>, String> {
         let rows = lt.page(cutoff, after)?;
         let Some(last) = rows.last() else { return Ok(None) };
         after = (last.ts, last.id);
-        Ok(Some(rows.iter().map(|r| to_item(r, &lt.dir, &favs, &icons)).collect()))
-    })
+        let mut page = Page::with_capacity(rows.len());
+        for r in &rows {
+            match to_item(r, &lt.dir, shots, &favs, &icons) {
+                Ok(Some(item)) => page.push(Ok(item)),
+                Ok(None) => skipped_shots.set(skipped_shots.get() + 1),
+                Err(e) => page.push(Err(e)),
+            }
+        }
+        Ok(Some(page))
+    })?;
+    let skipped = skipped_shots.get();
+    if skipped > 0 {
+        report.skipped += skipped;
+        // The runner counted only the rows it was handed: end the bar full.
+        progress("clips", total, total);
+        crate::logx::warn("import", &format!("{skipped} screenshots skipped (file missing, outside the cache or unsupported)"));
+    }
+    Ok(report)
+}
+
+/// Screenshot rows (W6-B, ARCHITECTURE §17.1 / §18.5) on a synthetic Liquid Tools database and a
+/// fake screenshot cache in a temporary folder — never the real profile.
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use image::{Rgba, RgbaImage};
+    use rusqlite::params;
+
+    const T: i64 = 1_790_000_000_000;
+
+    fn png(w: u32, h: u32) -> Vec<u8> {
+        let img = RgbaImage::from_fn(w, h, |x, y| Rgba([(x * 7 % 256) as u8, (y * 5 % 256) as u8, 90, 255]));
+        let mut out = Vec::new();
+        img.write_to(&mut Cursor::new(&mut out), ImageFormat::Png).unwrap();
+        out
+    }
+
+    fn row(id: i64, kind: &str, content_ref: Option<&Path>) -> LtRow {
+        let path = content_ref.map(|p| p.to_string_lossy().into_owned());
+        LtRow {
+            id,
+            kind: kind.into(),
+            preview: path.clone().unwrap_or_default(),
+            content_ref: path,
+            source_app: Some("chrome".into()),
+            pinned: false,
+            html: None,
+            category: String::new(),
+            ts: T - id,
+        }
+    }
+
+    /// `<tmp>/Local/com.liquidtools.app/screenshots` with `shot.png`, `shot.bmp`, `anim.gif`,
+    /// `broken.png`, and `<tmp>/elsewhere.png` outside the cache.
+    struct Cache {
+        dir: TempDir,
+        shots: PathBuf,
+    }
+
+    fn cache() -> Cache {
+        let dir = TempDir::new("liqlip-lt-shots-").unwrap();
+        let shots = shots_dir(&dir.path().join("Local"));
+        std::fs::create_dir_all(&shots).unwrap();
+        std::fs::write(shots.join("shot.png"), png(64, 40)).unwrap();
+        let bmp = RgbaImage::from_fn(5, 3, |x, y| Rgba([x as u8 * 40, y as u8 * 60, 7, 255]));
+        bmp.save_with_format(shots.join("shot.bmp"), ImageFormat::Bmp).unwrap();
+        std::fs::write(shots.join("anim.gif"), b"GIF89a\x01\x00\x01\x00\x00\x00\x00;").unwrap();
+        std::fs::write(shots.join("broken.png"), b"\x89PNG\r\n\x1a\nnot really").unwrap();
+        std::fs::write(dir.path().join("elsewhere.png"), png(8, 8)).unwrap();
+        Cache { dir, shots }
+    }
+
+    #[test]
+    fn a_screenshot_row_becomes_a_screenshot_record() {
+        let c = cache();
+        let none = HashMap::new();
+        let file = c.shots.join("shot.png");
+        let item = to_item(&row(3, "screenshot", Some(&file)), c.dir.path(), Some(&c.shots), &HashMap::new(), &none)
+            .unwrap()
+            .expect("imported");
+        let clip = &item.clip;
+        assert_eq!(clip.kind, Kind::Screenshot);
+        assert_eq!((clip.width, clip.height), (Some(64), Some(40)));
+        assert_eq!(clip.png.as_deref(), Some(std::fs::read(&file).unwrap().as_slice()), "PNG copied as is");
+        let rgba = ImageReader::open(&file).unwrap().decode().unwrap().into_rgba8();
+        assert_eq!(clip.hash, content::image_hash(64, 40, rgba.as_raw()), "same family as the same picture copied");
+        assert!(clip.thumb_png.is_some());
+        assert_eq!(clip.meta.shot, Some(ShotMeta { saved_path: None, edited: false }), "no annotation document");
+        assert_eq!((item.created_at, clip.copied_at), (T - 3, T - 3));
+        assert_eq!(clip.source.as_ref().map(|s| s.exe.as_str()), Some("chrome.exe"));
+
+        // Another decodable format (BMP here; JPG once `image` has `jpeg`) is stored as PNG.
+        let bmp = c.shots.join("shot.bmp");
+        let item = to_item(&row(4, "screenshot", Some(&bmp)), c.dir.path(), Some(&c.shots), &HashMap::new(), &none)
+            .unwrap()
+            .expect("imported");
+        let stored = item.clip.png.unwrap();
+        assert!(stored.starts_with(b"\x89PNG\r\n\x1a\n"));
+        let want = ImageReader::open(&bmp).unwrap().decode().unwrap().into_rgba8();
+        let got = ImageReader::with_format(Cursor::new(&stored), ImageFormat::Png).decode().unwrap().into_rgba8();
+        assert_eq!(got.as_raw(), want.as_raw());
+    }
+
+    #[test]
+    fn screenshots_without_an_importable_file_are_skipped() {
+        let c = cache();
+        let none = HashMap::new();
+        let item = |r: LtRow, shots: Option<&Path>| to_item(&r, c.dir.path(), shots, &HashMap::new(), &none);
+        let skipped = |r: LtRow| matches!(item(r, Some(&c.shots)), Ok(None));
+        assert!(skipped(row(1, "screenshot", Some(&c.shots.join("gone.png")))), "missing file");
+        assert!(skipped(row(2, "screenshot", Some(&c.dir.path().join("elsewhere.png")))), "outside the cache");
+        let escape = c.shots.join("..").join("..").join("..").join("elsewhere.png");
+        assert!(escape.is_file());
+        assert!(skipped(row(3, "screenshot", Some(&escape))), "`..` out of the cache");
+        assert!(skipped(row(4, "screenshot", Some(Path::new("shot.png")))), "relative path");
+        assert!(skipped(row(5, "screenshot", Some(&c.shots.join("anim.gif")))), "a format this build cannot decode");
+        assert!(skipped(row(6, "screenshot", Some(&c.shots))), "a folder");
+        assert!(skipped(row(7, "screenshot", None)), "no path at all");
+        assert!(matches!(item(row(8, "screenshot", Some(&c.shots.join("shot.png"))), None), Ok(None)), "no cache known");
+        // A damaged file inside the cache is an unreadable record (an error), not a skip.
+        assert!(item(row(9, "screenshot", Some(&c.shots.join("broken.png"))), Some(&c.shots)).is_err());
+    }
+
+    /// A Liquid Tools database: one text, one importable screenshot, two that are skipped.
+    fn lt_db(c: &Cache) -> PathBuf {
+        let clip_dir = c.dir.path().join("Roaming").join(LT_IDENTIFIER).join("clipboard");
+        std::fs::create_dir_all(&clip_dir).unwrap();
+        let db = clip_dir.join("clipboard.db");
+        let conn = Connection::open(&db).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE clipboard_entries (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, title TEXT NOT NULL,
+                preview TEXT NOT NULL, content_ref TEXT, source_app TEXT, created_at INTEGER NOT NULL,
+                pinned INTEGER NOT NULL DEFAULT 0, category TEXT NOT NULL DEFAULT '', app_icon TEXT);",
+        )
+        .unwrap();
+        let ins = |kind: &str, path: &str, at: i64| {
+            conn.execute(
+                "INSERT INTO clipboard_entries (kind, title, preview, content_ref, created_at) VALUES (?1, 'auto', ?2, ?3, ?4)",
+                params![kind, path, (kind == "screenshot").then_some(path), at],
+            )
+            .unwrap();
+        };
+        ins("text", "a note", T - 40);
+        ins("screenshot", &c.shots.join("shot.png").to_string_lossy(), T - 30);
+        ins("screenshot", &c.shots.join("gone.png").to_string_lossy(), T - 20);
+        ins("screenshot", &c.dir.path().join("elsewhere.png").to_string_lossy(), T - 10);
+        db
+    }
+
+    fn store_in(dir: &Path) -> Store {
+        Store::open_with_clock(&dir.join("data"), Box::new(|| T)).unwrap()
+    }
+
+    fn quiet(_: &str, _: i64, _: i64) {}
+
+    #[test]
+    fn the_import_counts_every_screenshot_row() {
+        let c = cache();
+        let db = lt_db(&c);
+        assert_eq!(probe(&db, None).unwrap().clips, 4, "screenshots count in the probe");
+        let s = store_in(c.dir.path());
+        let last = std::sync::Mutex::new((String::new(), 0, 0));
+        let record = |p: &str, d: i64, t: i64| *last.lock().unwrap() = (p.to_string(), d, t);
+        let r = run_in(&s, &db, Some(&c.shots), None, true, &[], &record).unwrap();
+        assert_eq!(r.skipped, 2, "missing file + outside the cache: {r:?}");
+        // The importable screenshot reaches the store (imported with W6-A's `screenshot`
+        // support in store/bulk.rs; until then the store refuses the kind — an error).
+        assert_eq!(r.imported + r.errors, 2, "{r:?}");
+        assert_eq!(r.imported + r.skipped + r.errors, 4, "probe = imported + skipped + errors");
+        assert_eq!(*last.lock().unwrap(), ("clips".to_string(), 4, 4), "the bar ends full");
+        // Without a known cache no screenshot is read at all.
+        let other = TempDir::new("liqlip-lt-nocache-").unwrap();
+        let r = run_in(&store_in(other.path()), &db, None, None, true, &[], &quiet).unwrap();
+        assert_eq!((r.imported, r.skipped, r.errors), (1, 3, 0), "{r:?}");
+    }
+
+    /// Needs W6-A: `store/bulk.rs::normalize` treating `Kind::Screenshot` like `Image`
+    /// (ARCHITECTURE §18.5). Un-ignore at INT-5.
+    #[test]
+    #[ignore = "needs W6-A screenshot support in store/bulk.rs (INT-5)"]
+    fn screenshots_land_as_screenshot_records_once() {
+        let c = cache();
+        let db = lt_db(&c);
+        let s = store_in(c.dir.path());
+        let r = run_in(&s, &db, Some(&c.shots), None, true, &[], &quiet).unwrap();
+        assert_eq!((r.imported, r.skipped, r.errors), (2, 2, 0), "{r:?}");
+        let shots: i64 = s.lock().query_row("SELECT count(*) FROM clips WHERE kind = 'screenshot'", [], |r| r.get(0)).unwrap();
+        assert_eq!(shots, 1);
+        let again = run_in(&s, &db, Some(&c.shots), None, true, &[], &quiet).unwrap();
+        assert_eq!((again.imported, again.skipped, again.errors), (0, 4, 0), "re-import adds nothing: {again:?}");
+    }
 }
