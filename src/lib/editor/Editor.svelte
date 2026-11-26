@@ -399,7 +399,7 @@
     if (e.type !== "keydown") return false;
     // an IME composing owns every key, Esc too (it cancels the composition — the host must not
     // run its Esc ladder); otherwise while typing every key but Esc belongs to the text field
-    if (e.isComposing || e.keyCode === 229) return true;
+    if (e.isComposing || (st.typing && e.keyCode === 229)) return true;
     if (st.typing) return e.code !== "Escape";
     if (isField(e.target)) return false;
     const r = st.dispatch({
