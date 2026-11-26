@@ -1469,7 +1469,7 @@ export interface ImportReport { imported: number; skipped: number; folders: numb
 
 | Событие | Payload | Кто шлёт → кому |
 |---|---|---|
-| `clips:changed` | `{ origin: ChangeOrigin; change: 'added'\|'updated'\|'deleted'\|'reset'; ids?: number[] }` | store/capture → picker, settings |
+| `clips:changed` | `{ origin: ChangeOrigin; change: 'added'\|'updated'\|'deleted'\|'reset'; ids?: number[] }` | store/capture → picker, settings, shots, editor (W5) |
 | `picker:open` | `{ mode: 'summon'\|'hover'; target: TargetInfo \| null; interactive: boolean }` | picker → picker |
 | `picker:close` | `{}` | picker → picker (освободить строки через 260 мс) |
 | `picker:layout` | `{ position; centerRow; width; height; bleed }` | picker → picker |

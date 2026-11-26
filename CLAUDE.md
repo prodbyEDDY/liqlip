@@ -42,7 +42,7 @@ Repo: `github.com/prodbyEDDY/liqlip` (open source, [MIT](LICENSE)), branch `main
 
 ## Stack
 Tauri 2 (Rust) · Svelte 5 (runes) · Vite MPA (one HTML entry per window: `picker`, `settings`,
-`hud`) · Tailwind v4 · TypeScript · Heroicons via local `src/lib/heroicons/` + `<Ico>` · Inter +
+`hud`, `capture`, `shots`, `editor`, `pin`) · Tailwind v4 · TypeScript · Heroicons via local `src/lib/heroicons/` + `<Ico>` · Inter +
 JetBrains Mono (`@fontsource-variable/*`). Rust: `rusqlite` (bundled, FTS5), `windows` 0.62
 (Win32/WinRT), `image` (png), `serde`, `parking_lot`, `base64`, `tokio` (sync). Input is
 `SendInput` directly (no `enigo`). Plugins: `single-instance`, `autostart`, `dialog`, `opener`.

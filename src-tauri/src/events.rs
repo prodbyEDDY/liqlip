@@ -75,9 +75,9 @@ fn all(app: &AppHandle, event: &str, payload: impl Serialize + Clone) {
     log_err(event, app.emit(event, payload));
 }
 
-/// store/capture → picker, settings
+/// store/capture → picker, settings, shots (QAO drops a deleted shot), editor (W5, §18)
 pub fn clips_changed(app: &AppHandle, payload: &ClipsChanged) {
-    to_many(app, &[PICKER, SETTINGS], CLIPS_CHANGED, payload);
+    to_many(app, &[PICKER, SETTINGS, SHOTS, EDITOR], CLIPS_CHANGED, payload);
 }
 
 /// picker → picker
