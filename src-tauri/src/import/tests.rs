@@ -742,6 +742,43 @@ fn invalid_backups_are_refused_clearly() {
     assert_eq!(backup::default_file_name(2026, 9, 1), "Liqlip-2026-09-01.liqlip");
 }
 
+/// W7-R1: a v2 database without `shot_docs` (every feed query reads it) is refused before it can
+/// replace the live one; the live data stays.
+#[test]
+fn a_v2_backup_without_shot_docs_is_refused() {
+    let kit = Kit::new();
+    kit.store.insert_clip(text_clip("keep me", T)).unwrap();
+    let db = kit.dir.path().join("v2-no-docs.db");
+    kit.store.snapshot_to(&db).unwrap();
+    {
+        let c = Connection::open(&db).unwrap();
+        c.execute_batch("DROP TABLE shot_docs;").unwrap();
+        let v: i64 = c.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
+        assert_eq!(v, 2);
+    }
+    let manifest = serde_json::to_vec(&backup::Manifest {
+        format: backup::FORMAT.into(),
+        format_version: 1,
+        app_version: "1.1.0".into(),
+        schema_version: 2,
+        created_at: 0,
+        counts: Default::default(),
+    })
+    .unwrap();
+    let archive = kit.dir.path().join("v2-no-docs.liqlip");
+    {
+        let mut z = zip::ZipWriter::new(std::fs::File::create(&archive).unwrap());
+        for (name, data) in [("manifest.json", manifest), ("clipboard.db", std::fs::read(&db).unwrap())] {
+            z.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
+            std::io::Write::write_all(&mut z, &data).unwrap();
+        }
+        z.finish().unwrap();
+    }
+    assert_eq!(backup::restore_replace(&kit.store, &archive, &quiet()).unwrap_err(), "invalid: the backup database is damaged");
+    assert_eq!(backup::restore_merge(&kit.store, &archive, None, false, &[], &quiet()).unwrap_err(), "invalid: the backup database is damaged");
+    assert_eq!(texts(&kit.store), vec!["keep me".to_string()], "current data untouched");
+}
+
 #[test]
 fn export_failure_leaves_no_partial_file() {
     let kit = Kit::new();

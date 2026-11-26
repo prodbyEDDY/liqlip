@@ -357,10 +357,29 @@ pub(crate) async fn save_png_as(app: AppHandle, id: i64, png: Vec<u8>) -> Result
 pub(crate) fn overwrite_saved(app: &AppHandle, id: i64, png: &[u8]) -> Result<Option<String>, String> {
     let src = app.state::<Store>().shot_source(id)?;
     let Some(path) = src.saved_path.filter(|p| Path::new(p).is_file()) else { return Ok(None) };
+    if !is_picture_file(Path::new(&path)) {
+        crate::logx::warn("screenshot", &format!("clip {id}: the saved file is not a PNG / JPEG any more — not rewritten"));
+        return Ok(None);
+    }
     let quality = settings::get(app).screenshot.jpg_quality;
     let (rgba, w, h) = pixels_for(format_of(Path::new(&path)), png)?;
     rewrite(&path, quality, &rgba, w, h, png)?;
     Ok(Some(path))
+}
+
+/// The file starts like a PNG (signature `89 50 4E 47 0D 0A 1A 0A`) or a JPEG (`FF D8 FF`: SOI
+/// + the next marker) — the only kind of file "Done" rewrites in place (W7-R1). `saved_path`
+/// is data, not a command: a restored `.liqlip` or a hand-edited database can name any path,
+/// and `format_of` would take an unknown extension for PNG — a document there must never be
+/// replaced by a picture.
+pub(crate) fn is_picture_file(path: &Path) -> bool {
+    use std::io::Read;
+    let mut head = Vec::with_capacity(8);
+    let Ok(file) = std::fs::File::open(path) else { return false };
+    if file.take(8).read_to_end(&mut head).is_err() {
+        return false;
+    }
+    head.starts_with(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]) || head.starts_with(&[0xFF, 0xD8, 0xFF])
 }
 
 /// `shot_reveal { id }` — Explorer with the saved file selected (`tauri-plugin-opener`'s
@@ -527,6 +546,27 @@ mod tests {
         assert_eq!(format_of(Path::new("C:/a/b.JPEG")), ShotFormat::Jpg);
         assert_eq!(format_of(Path::new("C:/a/b.png")), ShotFormat::Png);
         assert_eq!(format_of(Path::new("C:/a/b")), ShotFormat::Png);
+    }
+
+    /// W7-R1: "Done" rewrites only a file that still is a picture.
+    #[test]
+    fn only_pictures_are_rewritten_in_place() {
+        let dir = TempDir::new();
+        let png = crate::screenshot::commit::encode_png(2, 1, &[1, 2, 3, 255, 4, 5, 6, 255]).unwrap();
+        let jpg = encode(ShotFormat::Jpg, 90, &[1, 2, 3, 255, 4, 5, 6, 255], 2, 1, &png).unwrap();
+        let put = |name: &str, bytes: &[u8]| {
+            let p = dir.0.join(name);
+            std::fs::write(&p, bytes).unwrap();
+            p
+        };
+        assert!(is_picture_file(&put("a.png", &png)));
+        assert!(is_picture_file(&put("b.jpg", &jpg)));
+        assert!(is_picture_file(&put("odd.shot", &png)), "a picture under any extension");
+        assert!(!is_picture_file(&put("report.docx", b"PK\x03\x04 a document")));
+        assert!(!is_picture_file(&put("fake.png", b"not a png")));
+        assert!(!is_picture_file(&put("empty.png", b"")));
+        assert!(!is_picture_file(&dir.0.join("missing.png")));
+        assert!(!is_picture_file(&dir.0), "a folder");
     }
 
     #[test]

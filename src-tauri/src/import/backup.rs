@@ -307,6 +307,12 @@ fn check_db(db: &Path) -> Result<(i64, i64, i64), String> {
     ] {
         c.prepare(sql).map_err(|_| damaged())?;
     }
+    // Schema v2 (W6-A): the feed reads `shot_docs` in every query (`CLIP_COLS`), and the
+    // migration step that creates it runs only below v2 — a v2 file without it would break
+    // every query after a `replace` (W7-R1).
+    if version >= 2 {
+        c.prepare("SELECT clip_id, doc, has_base, saved_path, updated_at FROM shot_docs LIMIT 0").map_err(|_| damaged())?;
+    }
     let search = count(
         &c,
         "SELECT count(*) FROM sqlite_schema WHERE name IN ('clips_fts', 'snippets_fts', 'clips_fts_ai',
@@ -485,6 +491,7 @@ fn merge_shot_docs(store: &Store, src: &Connection, dir: &Path, cutoff: i64, fil
             .map(|(hash, doc, has_base, saved_path, updated_at, id)| ShotDocImport {
                 hash: hash.clone(),
                 doc: doc.clone(),
+                had_base: *has_base,
                 base_png: has_base.then(|| std::fs::read(dir.join("media").join("base").join(format!("{id}.png"))).ok()).flatten(),
                 saved_path: saved_path.clone(),
                 updated_at: *updated_at,

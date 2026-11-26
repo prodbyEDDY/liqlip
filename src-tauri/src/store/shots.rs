@@ -93,6 +93,9 @@ pub(crate) struct ShotSource {
 pub(crate) struct ShotDocImport {
     pub hash: String,
     pub doc: String,
+    /// The backup's row said it had a base picture (`has_base = 1`).
+    pub had_base: bool,
+    /// That base picture, when the archive holds a valid PNG of it.
     pub base_png: Option<Vec<u8>>,
     pub saved_path: Option<String>,
     pub updated_at: i64,
@@ -109,6 +112,18 @@ pub(crate) fn is_edited(doc: &Value) -> bool {
     let objects = doc.get("objects").and_then(Value::as_array).is_some_and(|a| !a.is_empty());
     let crop = doc.get("crop").is_some_and(|c| !c.is_null());
     objects || crop
+}
+
+/// W7-R1: the document of a record whose base picture is lost (a partial backup, a file removed
+/// by hand) while its picture has the annotations drawn in. Live objects (or a crop) on top of
+/// that picture would show twice in the editor, so they go: an empty document of the picture's
+/// own size (nothing visible is lost — it is all in the pixels). Any other document is kept.
+pub(crate) fn without_lost_base(doc: Value, base_lost: bool, width: Option<i64>, height: Option<i64>) -> Value {
+    if !base_lost || !is_edited(&doc) {
+        return doc;
+    }
+    let unit = doc.get("unit").and_then(Value::as_f64).unwrap_or(1.0);
+    empty_doc(width.unwrap_or(0), height.unwrap_or(0), unit)
 }
 
 fn doc_json(doc: &Value) -> Result<String, String> {
@@ -245,23 +260,29 @@ impl Store {
     }
 
     /// The `shot_docs` row of a live record (`None` — it has none); `not_found` for a missing
-    /// or deleted record. (§18.5 `doc(id)`; the editor payload, W6-B.)
-    #[allow(dead_code)] // W6-B: screenshot/editor.rs (`ShotEditorPayload.doc`)
+    /// or deleted record. (§18.5 `doc(id)`; the editor payload, W6-B.) A row whose base picture
+    /// file is gone reports `has_base: false` and no live objects ([`without_lost_base`]).
     pub(crate) fn shot_doc(&self, id: i64) -> Result<Option<ShotDoc>, String> {
-        let conn = self.lock();
-        let row: Option<(Option<String>, Option<i64>, Option<String>, Option<i64>)> = conn
+        type Row = (Option<String>, Option<i64>, Option<String>, Option<i64>, Option<i64>, Option<i64>);
+        let row: Option<Row> = self
+            .lock()
             .query_row(
-                "SELECT s.doc, s.has_base, s.saved_path, s.updated_at
+                "SELECT s.doc, s.has_base, s.saved_path, s.updated_at, c.width, c.height
                  FROM clips c LEFT JOIN shot_docs s ON s.clip_id = c.id WHERE c.id = ?1 AND c.deleted_at IS NULL",
                 [id],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)),
             )
             .optional()
             .map_err(db_err)?;
-        let (doc, has_base, saved_path, updated_at) = row.ok_or_else(|| format!("not_found: clip {id}"))?;
+        let (doc, has_base, saved_path, updated_at, width, height) = row.ok_or_else(|| format!("not_found: clip {id}"))?;
         let (Some(doc), Some(has_base), Some(updated_at)) = (doc, has_base, updated_at) else { return Ok(None) };
         let doc: Value = serde_json::from_str(&doc).unwrap_or(Value::Null);
-        Ok(Some(ShotDoc { doc, has_base: has_base != 0, saved_path, updated_at }))
+        let base_lost = has_base != 0 && !self.paths().base_png(id).is_file();
+        if base_lost {
+            logx::warn("store", &format!("clip {id}: base picture missing — the document opens without live objects"));
+        }
+        let doc = without_lost_base(doc, base_lost, width, height);
+        Ok(Some(ShotDoc { doc, has_base: has_base != 0 && !base_lost, saved_path, updated_at }))
     }
 
     /// A live record as the feed shows it (`shot:added`, the editor commit's answer).
@@ -461,32 +482,35 @@ impl Store {
 
     /// `.liqlip` merge (§17.5): attach a backup's documents to the records the import created
     /// or found (by hash). A record that already has a row keeps it; a malformed document is
-    /// skipped. Returns how many rows were added.
+    /// skipped; a row whose base picture is missing from the archive loses its live objects
+    /// ([`without_lost_base`]). Returns how many rows were added.
     pub(crate) fn import_shot_docs(&self, rows: Vec<ShotDocImport>) -> Result<i64, String> {
         let now = self.now();
         let mut added = 0;
         for r in rows {
-            let doc = match serde_json::from_str::<Value>(&r.doc).map_err(|e| e.to_string()).and_then(|d| doc_json(&d)) {
-                Ok(d) => d,
-                Err(_) => continue,
-            };
+            let Ok(doc) = serde_json::from_str::<Value>(&r.doc) else { continue };
+            if doc_json(&doc).is_err() {
+                continue;
+            }
             let staged = stage_opt(self, r.base_png.as_deref().filter(|b| media::is_png(b)))?;
             let res = (|| -> Result<bool, String> {
                 let mut conn = self.lock();
                 let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate).map_err(db_err)?;
-                let target: Option<(i64, String, Option<i64>)> = tx
+                type Target = (i64, String, Option<i64>, Option<i64>, Option<i64>);
+                let target: Option<Target> = tx
                     .query_row(
-                        "SELECT c.id, c.kind, s.clip_id FROM clips c LEFT JOIN shot_docs s ON s.clip_id = c.id
+                        "SELECT c.id, c.kind, s.clip_id, c.width, c.height FROM clips c LEFT JOIN shot_docs s ON s.clip_id = c.id
                          WHERE c.hash = ?1 AND c.deleted_at IS NULL",
                         [&r.hash],
-                        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
                     )
                     .optional()
                     .map_err(db_err)?;
-                let Some((id, kind, None)) = target else { return Ok(false) };
+                let Some((id, kind, None, width, height)) = target else { return Ok(false) };
                 if !is_picture(&kind) {
                     return Ok(false);
                 }
+                let doc = doc_json(&without_lost_base(doc.clone(), r.had_base && staged.is_none(), width, height))?;
                 let base_dest = self.paths().base_png(id);
                 let has_base = staged.is_some();
                 tx.execute(
@@ -718,6 +742,7 @@ mod tests {
         let row = |doc: &str| ShotDocImport {
             hash: hash.clone(),
             doc: doc.into(),
+            had_base: true,
             base_png: Some(png_bytes(4, 4)),
             saved_path: Some("E:\\old.png".into()),
             updated_at: 5,
@@ -729,6 +754,39 @@ mod tests {
         assert_eq!(t.import_shot_docs(vec![row("{\"v\":1}")]).unwrap(), 0, "an existing row is kept");
         let unknown = ShotDocImport { hash: "nope".into(), ..row("{}") };
         assert_eq!(t.import_shot_docs(vec![unknown]).unwrap(), 0);
+    }
+
+    /// W7-R1: annotations drawn into the picture are not drawn a second time as live objects when
+    /// the base picture is gone — neither after a partial restore nor after a merge without it.
+    #[test]
+    fn a_lost_base_picture_drops_the_live_objects() {
+        let doc = json!({ "v": 1, "w": 8, "h": 6, "unit": 2, "crop": null, "objects": [{ "id": "a", "kind": "arrow" }] });
+        assert_eq!(without_lost_base(doc.clone(), false, Some(8), Some(6)), doc, "base present → kept");
+        assert_eq!(without_lost_base(empty_doc(8, 6, 2.0), true, Some(8), Some(6)), empty_doc(8, 6, 2.0));
+        assert_eq!(without_lost_base(doc.clone(), true, Some(5), Some(4)), empty_doc(5, 4, 2.0), "the picture's size");
+
+        // The base file of an annotated shot disappears.
+        let t = TestStore::new();
+        let mut s = shot(8, 6, 21, 1_000);
+        s.base_png = Some(encode(8, 6, &rgba(8, 6, 50)));
+        s.doc = Some(doc.clone());
+        let id = t.insert_screenshot(s).unwrap().id;
+        assert_eq!(t.shot_doc(id).unwrap().unwrap().doc, doc);
+        std::fs::remove_file(t.paths().base_png(id)).unwrap();
+        let d = t.shot_doc(id).unwrap().unwrap();
+        assert_eq!((d.doc, d.has_base), (empty_doc(8, 6, 2.0), false));
+
+        // A merged row whose base picture the archive lacks.
+        let t = TestStore::new();
+        let plain = shot(8, 6, 22, 1_000);
+        let hash = plain.hash.clone();
+        let id = t.insert_screenshot(plain).unwrap().id;
+        t.lock().execute("DELETE FROM shot_docs WHERE clip_id = ?1", [id]).unwrap();
+        let row = ShotDocImport { hash, doc: doc.to_string(), had_base: true, base_png: None, saved_path: None, updated_at: 5 };
+        assert_eq!(t.import_shot_docs(vec![row]).unwrap(), 1);
+        let d = t.shot_doc(id).unwrap().unwrap();
+        assert_eq!((d.doc, d.has_base), (empty_doc(8, 6, 2.0), false));
+        assert!(!clip_by_id(&t.lock(), id).unwrap().meta.shot.unwrap().edited);
     }
 
     #[test]

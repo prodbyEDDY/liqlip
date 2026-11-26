@@ -11,9 +11,11 @@
 //! (3) the clipboard FIRST (`paste::copy_png`: PNG + DIB in one transaction, our own write is
 //! not captured again); (4) the store (`insert_screenshot`, kind `screenshot`, source = the app
 //! that had the focus at the trigger, thumbnail, base picture + document when annotated);
-//! (5) the file (`files.rs`); (6) the QAO / editor / pin / nothing (`afterCapture`). A failure
-//! after (3) never undoes the steps before it; a failed save is `error: 'save_failed'` in
-//! `shot:added` (the QAO is then shown even with `afterCapture: none`, so the error is seen).
+//! (5) the file (`files.rs`); (6) the QAO / editor / pin / nothing (`afterCapture`,
+//! [`after_step`]). A failure after (3) never undoes the steps before it; a failed save is
+//! `error: 'save_failed'` in `shot:added` (the QAO is then shown whatever `afterCapture` says,
+//! so the error is seen); the editor or a pin without a record, or a window that would not
+//! open, falls back to the QAO card.
 //! `storage.types.screenshot` off or a picture above 64 MP: no record, the QAO gets a temporary
 //! file (`%TEMP%\Liqlip\shots\`).
 
@@ -231,30 +233,39 @@ fn finish(
         }
     }
     // (6) What follows on screen.
-    let after = if error.is_some() && plan.after == After::Nothing { After::Overlay } else { plan.after };
-    match (after, &clip) {
-        (After::Editor, Some(c)) => {
-            if let Err(e) = super::editor::open(app, c.id) {
-                logx::warn("screenshot", &format!("editor: {e}"));
-            }
-        }
-        (After::Pin, Some(c)) => {
-            if let Err(e) = super::pin::open(app, c.id) {
-                logx::warn("screenshot", &format!("pin: {e}"));
-            }
-        }
-        (After::Nothing, _) | (After::Pin, None) => {}
-        // The QAO — also instead of the editor when there is no record to open.
-        (After::Overlay, _) | (After::Editor, None) => {
-            let temp_path = match &clip {
-                Some(_) => None,
-                None => files::write_temp(&png).map_err(|e| logx::warn("screenshot", &format!("temp file: {e}"))).ok(),
-            };
-            let payload = ShotAdded { clip: clip.clone(), saved_path: saved_path.clone(), temp_path, monitor: monitor.id.clone(), error };
-            qao::show_added(app, payload);
-        }
+    let after = after_step(plan.after, clip.is_some(), error.is_some());
+    let opened = match (after, &clip) {
+        (After::Editor, Some(c)) => super::editor::open(app, c.id).map_err(|e| format!("editor: {e}")),
+        (After::Pin, Some(c)) => super::pin::open(app, c.id).map_err(|e| format!("pin: {e}")),
+        _ => Ok(()),
+    };
+    if let Err(e) = &opened {
+        logx::warn("screenshot", e);
+    }
+    // The QAO — also when the editor / pin window could not be opened: the shot stays in reach.
+    if after == After::Overlay || opened.is_err() {
+        let temp_path = match &clip {
+            Some(_) => None,
+            None => files::write_temp(&png).map_err(|e| logx::warn("screenshot", &format!("temp file: {e}"))).ok(),
+        };
+        let payload = ShotAdded { clip: clip.clone(), saved_path: saved_path.clone(), temp_path, monitor: monitor.id.clone(), error };
+        qao::show_added(app, payload);
     }
     Ok(ShotCommitResult { clip_id: clip.map(|c| c.id), saved_path, text: None })
+}
+
+/// What actually follows a commit on screen (W7-R1). The editor and a pin work on a record —
+/// without one (`storage.types.screenshot` off, a picture above 64 MP) the QAO card shows the
+/// shot instead (copy / save as from its temp file), so "Pin" or "then: editor" never closes
+/// the overlay on nothing (SPEC §9.0.3 "nothing is lost"). A failed save is always shown on
+/// the QAO (SPEC §9.9: the toast "Could not save · Change folder"), also with
+/// `afterCapture: none` / `editor` — the card's own "Edit" opens the editor.
+pub(crate) fn after_step(planned: After, has_record: bool, save_failed: bool) -> After {
+    match planned {
+        _ if save_failed => After::Overlay,
+        After::Editor | After::Pin if !has_record => After::Overlay,
+        other => other,
+    }
 }
 
 /// Step (4): the record, its change event, the source app's icon.
@@ -368,6 +379,20 @@ mod tests {
             assert_eq!(plan(ShotAction::Pin, s), Some(Plan { copy: false, save: Save::No, after: After::Pin }));
             assert_eq!(plan(ShotAction::Text, s), None);
         }
+    }
+
+    /// W7-R1: "Pin" / "then: editor" without a record, or a failed save, end on the QAO card.
+    #[test]
+    fn what_follows_never_drops_the_shot() {
+        for after in [After::Nothing, After::Overlay, After::Editor, After::Pin] {
+            assert_eq!(after_step(after, true, false), after, "with a record the plan stands");
+            assert_eq!(after_step(after, true, true), After::Overlay, "a failed save is shown");
+            assert_eq!(after_step(after, false, true), After::Overlay);
+        }
+        assert_eq!(after_step(After::Pin, false, false), After::Overlay, "nothing to pin → the card");
+        assert_eq!(after_step(After::Editor, false, false), After::Overlay, "nothing to edit → the card");
+        assert_eq!(after_step(After::Nothing, false, false), After::Nothing, "copy / save actions show nothing");
+        assert_eq!(after_step(After::Overlay, false, false), After::Overlay);
     }
 
     #[test]

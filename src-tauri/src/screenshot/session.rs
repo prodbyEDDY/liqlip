@@ -8,9 +8,11 @@
 //! EVERY monitor, read the window tree of the cursor's monitor (`targets.rs`) and open a session:
 //! `shot:session` to the pre-created `capture` window, then it is placed on that monitor
 //! (position → size → position, as §7.4), shown, kept out of Alt+Tab (`WS_EX_TOOLWINDOW`, as the
-//! shelf) and focused. While the overlay is in stage `select` a follow thread (50 ms) moves it to
-//! the monitor under the cursor (new window tree, new `shot:session`; the frames stay those of
-//! the trigger moment). The session ends with the commit (`commit.rs` takes it) or a cancel:
+//! shelf) and focused. While the overlay is in stage `select` and no mouse button is held (a
+//! drag stays on its monitor) a follow thread (50 ms) moves it to the monitor under the cursor
+//! (new window tree, new `shot:session`; the frames stay those of the trigger moment). A
+//! trigger from the tray menu credits and refocuses the window the user was in before the
+//! tray click (`focus_context`), not the menu's hidden owner. The session ends with the commit (`commit.rs` takes it) or a cancel:
 //! the overlay hides, the focus goes back to the remembered window (`bring_to_front`),
 //! `shot:end`, the frames are freed, the QAO comes back.
 //!
@@ -315,13 +317,18 @@ fn trigger(app: &AppHandle, mode: ShotMode, token: u64) -> Result<(), String> {
     let direct = |m: &Monitor, crop: Option<(u32, u32, u32, u32)>| -> Result<(), String> {
         let frame = grab::grab(m)?;
         with_state(app, |s| s.release(token)); // the next trigger may start while this one commits
+        if let Some(h) = refocus_after_direct(hid_shelf, restore) {
+            give_focus(h);
+        }
         let crop = crop.unwrap_or((0, 0, frame.width(), frame.height()));
         commit::direct(app, &ctx, m, &frame, crop).map(|_| ())
     };
     match mode {
         ShotMode::Screen => direct(&monitors[at_cursor], None),
         ShotMode::Window => {
-            let target = restore.and_then(grab::window_bounds);
+            // The desktop window spans the whole virtual screen: it is "no window" (the monitor
+            // under the cursor), not the monitor that holds the virtual screen's centre.
+            let target = restore.filter(|&h| !win::is_desktop_window(h)).and_then(grab::window_bounds);
             match target.and_then(|b| window_crop(&monitors, b)) {
                 Some((i, crop)) => direct(&monitors[i], Some(crop)),
                 // No usable window (the desktop has the focus): the monitor under the cursor.
@@ -344,6 +351,13 @@ fn trigger(app: &AppHandle, mode: ShotMode, token: u64) -> Result<(), String> {
         ShotMode::Region => overlay(app, token, ShotSessionMode::Region, monitors, at_cursor, cursor, ctx),
         ShotMode::Text => overlay(app, token, ShotSessionMode::Text, monitors, at_cursor, cursor, ctx),
     }
+}
+
+/// A capture without overlay leaves the focus alone — unless the trigger hid an open shelf: it
+/// hides at once without handing the focus back (`picker::hide_now`), so the window it was
+/// summoned from gets it back here, as the overlay's close does (W7-R1; Ctrl+V goes there).
+pub(crate) fn refocus_after_direct(hid_shelf: bool, restore: Option<isize>) -> Option<isize> {
+    restore.filter(|_| hid_shelf)
 }
 
 /// The monitor holding a window's centre and the window's bounds as a crop of that monitor's
@@ -388,6 +402,14 @@ fn overlay(
     Ok(())
 }
 
+/// The overlay follows the cursor to another monitor only while it selects and no mouse button
+/// is held: the stage turns `frame` only once a region is chosen, so a held button is a drag in
+/// progress (or a click about to pick a window) — it stays on its monitor (a region across
+/// monitors is out of scope, SPEC §9.10) instead of being reset on the next one.
+pub(crate) fn may_follow(stage: ShotStage, button_down: bool) -> bool {
+    stage == ShotStage::Select && !button_down
+}
+
 /// While the session is open and selecting, move the overlay to the monitor under the cursor.
 fn follow(app: &AppHandle, id: i64) {
     loop {
@@ -400,12 +422,16 @@ fn follow(app: &AppHandle, id: i64) {
             return;
         };
         let (stage, current, monitors) = snapshot;
-        if stage != ShotStage::Select {
+        if !may_follow(stage, win::mouse_button_down()) {
             continue;
         }
         let Some(cursor) = grab::cursor_pos() else { continue };
         let Some(next) = grab::monitor_at(&monitors, cursor).filter(|&i| i != current) else { continue };
         let windows = targets::enumerate(&monitors[next], Some(cursor));
+        // The walk takes a while: a press that began meanwhile keeps the overlay where it is.
+        if win::mouse_button_down() {
+            continue;
+        }
         let payload = with_state(app, |s| {
             let a = s.active.as_mut().filter(|a| a.id == id && a.stage == ShotStage::Select)?;
             a.current = next;
@@ -425,10 +451,12 @@ fn follow(app: &AppHandle, id: i64) {
 /// remembered paste target (the user's context did not change — also when the trigger is the
 /// shelf's own actions menu: the shelf closes right before the command and hands the focus back
 /// asynchronously). No foreground window at all (mid-switch) → wait up to [`FG_SETTLE`] for
-/// one, then fall back to the shelf's target too. Otherwise the foreground window (any: the
-/// desktop, the settings window); the source app only for an application window
-/// (`paste::focus::target_for` — never ours, the desktop or the taskbar). Unlike
-/// `capture_target` this never changes the shelf's paste target.
+/// one, then fall back to the shelf's target too. A tray pick ([`is_tray_click`]: the tray
+/// menu's invisible owner or a taskbar has the foreground) → the window the user was working in
+/// before: the topmost [`is_work_window`] in z-order (else the shelf's target). Otherwise the
+/// foreground window (any: the desktop, the settings window); the source app only for an
+/// application window (`paste::focus::target_for` — never ours, the desktop or the taskbar).
+/// Unlike `capture_target` this never changes the shelf's paste target.
 #[cfg(windows)]
 fn focus_context(app: &AppHandle) -> (Option<isize>, Option<SourceApp>) {
     use crate::paste::focus;
@@ -437,6 +465,9 @@ fn focus_context(app: &AppHandle) -> (Option<isize>, Option<SourceApp>) {
     while fg == 0 && std::time::Instant::now() < settle_until {
         std::thread::sleep(Duration::from_millis(10));
         fg = focus::foreground();
+    }
+    if fg != 0 && focus::picker_hwnd(app) != Some(fg) && win::is_tray_click_window(fg) {
+        fg = win::last_work_window().unwrap_or(0);
     }
     let shelf_target = fg == 0 || focus::picker_hwnd(app) == Some(fg);
     let target = if shelf_target { focus::current() } else { focus::target_for(app, fg) };
@@ -449,6 +480,54 @@ fn focus_context(app: &AppHandle) -> (Option<isize>, Option<SourceApp>) {
 /// flight).
 #[cfg(windows)]
 const FG_SETTLE: Duration = Duration::from_millis(200);
+
+/// Taskbar surfaces (the notification area and its overflow flyouts, Windows 10 and 11). The
+/// desktop (`Progman`, `WorkerW`) is not one: it is a real "where the user was".
+const TASKBAR_CLASSES: [&str; 4] =
+    ["Shell_TrayWnd", "Shell_SecondaryTrayWnd", "NotifyIconOverflowWindow", "TopLevelWindowForOverflowXamlIsland"];
+
+/// The foreground window says "a pick in the notification area", not "the user works here":
+/// an invisible window of ours — the tray menu's owner (tray-icon 0.23.1 `show_tray_menu`
+/// calls `SetForegroundWindow` on its hidden, never shown window before `TrackPopupMenu`, and
+/// it keeps the foreground after the pick) — or a taskbar.
+pub(crate) fn is_tray_click(own_process: bool, visible: bool, class: &str) -> bool {
+    (own_process && !visible) || TASKBAR_CLASSES.contains(&class)
+}
+
+/// The desktop has the focus: there is no active window to capture.
+pub(crate) fn is_desktop(class: &str) -> bool {
+    matches!(class, "Progman" | "WorkerW")
+}
+
+/// What the tray fallback knows about a top-level window.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct WindowFacts {
+    pub own_process: bool,
+    pub visible: bool,
+    pub minimized: bool,
+    pub cloaked: bool,
+    /// `GWL_EXSTYLE`.
+    pub ex_style: u32,
+    pub class: String,
+}
+
+/// `WS_EX_TOOLWINDOW` / `WS_EX_NOACTIVATE` (winuser.h values).
+const EX_TOOLWINDOW: u32 = 0x0000_0080;
+const EX_NOACTIVATE: u32 = 0x0800_0000;
+
+/// A top-level window the user could have been working in: visible, not minimized, not cloaked
+/// (another virtual desktop, a suspended app), not ours, not a shell surface, and one that can
+/// be active — "a top-level window created with [`WS_EX_NOACTIVATE`] does not become the
+/// foreground window when the user clicks it"; a `WS_EX_TOOLWINDOW` is a floating palette or a
+/// tooltip, kept out of the taskbar and Alt+Tab (learn.microsoft.com, Extended Window Styles).
+pub(crate) fn is_work_window(w: &WindowFacts) -> bool {
+    w.visible
+        && !w.minimized
+        && !w.cloaked
+        && !w.own_process
+        && w.ex_style & (EX_TOOLWINDOW | EX_NOACTIVATE) == 0
+        && !crate::paste::focus::is_shell_class(&w.class)
+}
 
 #[cfg(not(windows))]
 fn focus_context(_app: &AppHandle) -> (Option<isize>, Option<SourceApp>) {
@@ -580,14 +659,101 @@ pub(crate) fn handle_args(app: &AppHandle, args: &[String]) -> bool {
 
 #[cfg(windows)]
 mod win {
-    use windows::Win32::Foundation::HWND;
+    use super::WindowFacts;
+    use windows::core::BOOL;
+    use windows::Win32::Foundation::{HWND, LPARAM};
+    use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
+    use windows::Win32::System::Threading::GetCurrentProcessId;
+    use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON, VK_MBUTTON, VK_RBUTTON, VK_XBUTTON1, VK_XBUTTON2};
     use windows::Win32::UI::WindowsAndMessaging::{
-        GetWindowLongPtrW, IsWindowVisible, SetWindowLongPtrW, SetWindowPos, ShowWindow, GWL_EXSTYLE, SWP_FRAMECHANGED,
+        EnumWindows, GetAncestor, GetClassNameW, GetWindowLongPtrW, GetWindowLongW, GetWindowThreadProcessId, IsIconic,
+        IsWindowVisible, SetWindowLongPtrW, SetWindowPos, ShowWindow, GA_ROOTOWNER, GWL_EXSTYLE, SWP_FRAMECHANGED,
         SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW,
     };
 
     fn hwnd(h: isize) -> HWND {
         HWND(h as *mut core::ffi::c_void)
+    }
+
+    fn class_of(h: isize) -> String {
+        let mut buf = [0u16; 256];
+        // SAFETY: the wrapper passes the buffer length.
+        let n = unsafe { GetClassNameW(hwnd(h), &mut buf) };
+        String::from_utf16_lossy(&buf[..n.max(0) as usize])
+    }
+
+    fn pid_of(h: isize) -> u32 {
+        let mut pid = 0u32;
+        // SAFETY: out-pointer to a local; an invalid handle leaves 0.
+        unsafe { GetWindowThreadProcessId(hwnd(h), Some(&mut pid)) };
+        pid
+    }
+
+    /// Facts of a top-level window (plain queries; any handle value is accepted).
+    /// https://learn.microsoft.com/windows/win32/api/dwmapi/ne-dwmapi-dwmwindowattribute (`DWMWA_CLOAKED`)
+    fn facts(h: isize) -> WindowFacts {
+        // SAFETY: no arguments.
+        let me = unsafe { GetCurrentProcessId() };
+        // SAFETY: plain query; NULL for an invalid handle.
+        let root = unsafe { GetAncestor(hwnd(h), GA_ROOTOWNER) }.0 as isize;
+        let mut cloaked = 0u32;
+        // SAFETY: a u32 out-value of the size passed; failure leaves 0 (not cloaked).
+        let _ = unsafe { DwmGetWindowAttribute(hwnd(h), DWMWA_CLOAKED, &mut cloaked as *mut u32 as *mut core::ffi::c_void, 4) };
+        // SAFETY: plain window queries.
+        unsafe {
+            WindowFacts {
+                own_process: pid_of(h) == me || (root != 0 && pid_of(root) == me),
+                visible: IsWindowVisible(hwnd(h)).as_bool(),
+                minimized: IsIconic(hwnd(h)).as_bool(),
+                cloaked: cloaked != 0,
+                ex_style: GetWindowLongW(hwnd(h), GWL_EXSTYLE) as u32,
+                class: class_of(h),
+            }
+        }
+    }
+
+    /// [`super::is_tray_click`] for a real window.
+    pub fn is_tray_click_window(h: isize) -> bool {
+        let f = facts(h);
+        super::is_tray_click(f.own_process, f.visible, &f.class)
+    }
+
+    /// [`super::is_desktop`] for a real window.
+    pub fn is_desktop_window(h: isize) -> bool {
+        super::is_desktop(&class_of(h))
+    }
+
+    unsafe extern "system" fn first_work_window(h: HWND, data: LPARAM) -> BOOL {
+        // SAFETY: `data` is the `&mut isize` passed by `last_work_window`, alive for the
+        // synchronous enumeration.
+        let found = unsafe { &mut *(data.0 as *mut isize) };
+        if super::is_work_window(&facts(h.0 as isize)) {
+            *found = h.0 as isize;
+            return BOOL(0); // stop
+        }
+        BOOL(1)
+    }
+
+    /// The topmost window the user could have been working in. `EnumWindows` hands top-level
+    /// windows over in z-order, topmost first — the same order the overlay's window picking
+    /// (`targets.rs`, the Liquid Tools / ShareX port) relies on.
+    /// https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-enumwindows
+    pub fn last_work_window() -> Option<isize> {
+        let mut found: isize = 0;
+        // SAFETY: callback + pointer to a local that outlives the synchronous enumeration; a
+        // callback that stops the walk makes EnumWindows report an error, which is ignored.
+        let _ = unsafe { EnumWindows(Some(first_work_window), LPARAM(&mut found as *mut isize as isize)) };
+        (found != 0).then_some(found)
+    }
+
+    /// Any mouse button physically down. `GetAsyncKeyState` reads the physical buttons (a
+    /// swapped mouse is covered by asking all of them); 0 on failure reads as "up".
+    /// https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-getasynckeystate
+    pub fn mouse_button_down() -> bool {
+        [VK_LBUTTON, VK_RBUTTON, VK_MBUTTON, VK_XBUTTON1, VK_XBUTTON2]
+            .iter()
+            // SAFETY: plain query.
+            .any(|vk| unsafe { GetAsyncKeyState(i32::from(vk.0)) } < 0)
     }
 
     /// https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-iswindowvisible
@@ -623,6 +789,12 @@ mod win {
 
 #[cfg(not(windows))]
 mod win {
+    pub fn is_desktop_window(_h: isize) -> bool {
+        false
+    }
+    pub fn mouse_button_down() -> bool {
+        false
+    }
     pub fn is_visible(_h: isize) -> bool {
         false
     }
@@ -714,6 +886,59 @@ mod tests {
         assert_eq!(window_crop(&ms, (-600, 0, 100, 300)), Some((0, (400, 0, 600, 300))));
         // Off every monitor's area (nearest monitor, nothing of the window inside it).
         assert_eq!(window_crop(&ms, (5000, 0, 5100, 100)), None);
+    }
+
+    /// W7-R1: `Ctrl + PrtSc` over an open shelf hands the focus back like the overlay does.
+    #[test]
+    fn a_direct_capture_refocuses_only_after_hiding_the_shelf() {
+        assert_eq!(refocus_after_direct(true, Some(42)), Some(42));
+        assert_eq!(refocus_after_direct(false, Some(42)), None, "the focus is not touched");
+        assert_eq!(refocus_after_direct(true, None), None);
+    }
+
+    /// W7-R1: a drag that crosses into another monitor keeps the overlay where it began.
+    #[test]
+    fn the_overlay_follows_only_while_selecting_with_no_button_held() {
+        assert!(may_follow(ShotStage::Select, false));
+        assert!(!may_follow(ShotStage::Select, true), "a drag in progress stays on its monitor");
+        assert!(!may_follow(ShotStage::Frame, false));
+        assert!(!may_follow(ShotStage::Frame, true));
+    }
+
+    /// W7-R1: a tray pick leaves our hidden tray window (or a taskbar) in front — not the window
+    /// to capture or to give the focus back to; the desktop and visible own windows are real.
+    #[test]
+    fn a_tray_pick_is_told_from_a_real_foreground() {
+        assert!(is_tray_click(true, false, "tray_icon_app"), "the tray menu's hidden owner");
+        assert!(is_tray_click(false, true, "Shell_TrayWnd"));
+        assert!(is_tray_click(false, true, "Shell_SecondaryTrayWnd"));
+        assert!(is_tray_click(false, true, "TopLevelWindowForOverflowXamlIsland"));
+        assert!(!is_tray_click(true, true, "Tauri Window"), "our settings / editor window is a real target");
+        assert!(!is_tray_click(false, true, "Progman"), "the desktop is a real place");
+        assert!(!is_tray_click(false, true, "Notepad"));
+        assert!(is_desktop("Progman") && is_desktop("WorkerW") && !is_desktop("Shell_TrayWnd") && !is_desktop("Notepad"));
+    }
+
+    #[test]
+    fn the_tray_fallback_takes_only_windows_one_works_in() {
+        let app = WindowFacts { visible: true, class: "Notepad".into(), ..WindowFacts::default() };
+        assert!(is_work_window(&app));
+        let not = |f: fn(&mut WindowFacts)| {
+            let mut w = app.clone();
+            f(&mut w);
+            assert!(!is_work_window(&w), "{w:?}");
+        };
+        not(|w| w.visible = false);
+        not(|w| w.minimized = true);
+        not(|w| w.cloaked = true);
+        not(|w| w.own_process = true);
+        not(|w| w.ex_style = EX_TOOLWINDOW);
+        not(|w| w.ex_style = EX_NOACTIVATE | 0x8); // a topmost click-through overlay
+        not(|w| w.class = "Shell_TrayWnd".into());
+        not(|w| w.class = "Progman".into());
+        let mut topmost = app.clone();
+        topmost.ex_style = 0x8; // WS_EX_TOPMOST alone: still a window one works in
+        assert!(is_work_window(&topmost));
     }
 
     #[test]
