@@ -1,10 +1,12 @@
 <script lang="ts">
-  // Hotkeys: the four global actions (record / reset / remove, conflicts at the field) and
-  // the read-only reference of shelf keys (SPEC §3.5).
+  // Hotkeys: the four global actions (record / reset / remove, conflicts at the field), the
+  // five screenshot shortcuts (SPEC §9.1, W6-F) and the read-only reference of shelf keys
+  // (SPEC §3.5).
   import Kbd from "$lib/components/Kbd.svelte";
   import { t, type TranslationKey } from "$lib/i18n/index.svelte";
-  import { HOTKEY_ACTIONS } from "../logic";
+  import { HOTKEY_ACTIONS, SHOT_HOTKEY_ACTIONS } from "../logic";
   import { settings } from "../settings.svelte";
+  import { shotStatusStore } from "../shotStatus.svelte";
   import Group from "../ui/Group.svelte";
   import HotkeyRow from "../ui/HotkeyRow.svelte";
 
@@ -25,6 +27,7 @@
     [[["Ctrl", "D"]], "favorite"],
     [[["F2"]], "rename"],
     [[["Ctrl", "E"]], "edit"],
+    [[["Ctrl", "P"]], "pin"],
     [[["Ctrl", "O"]], "open"],
     [[["Ctrl", "Shift", "O"]], "reveal"],
     [[["Delete"]], "delete"],
@@ -39,12 +42,22 @@
 
   // Conflicts that exist since startup show at the field as soon as the section opens.
   $effect(() => settings.watchConflicts());
+  // Screenshot slots: registration errors from `shot_status` too (PrtSc vs the Snipping Tool).
+  $effect(() => shotStatusStore.watch());
 
   const cap = (k: string) => (k.startsWith("@") ? t(`settings.keys.k.${k.slice(1)}` as TranslationKey) : k);
+  // "Pin a picture on screen" (W6-F) lives in the screenshot block of the catalogue.
+  const actionText = (a: string) => t(a === "pin" ? "settings.shot.keys.shelfPin" : (`settings.keys.a.${a}` as TranslationKey));
 </script>
 
 <Group title={t("settings.hotkeys.global")}>
   {#each HOTKEY_ACTIONS as action (action)}
+    <HotkeyRow {action} />
+  {/each}
+</Group>
+
+<Group title={t("settings.shot.hotkeys")} desc={t("settings.shot.hotkeys.desc")}>
+  {#each SHOT_HOTKEY_ACTIONS as action (action)}
     <HotkeyRow {action} />
   {/each}
 </Group>
@@ -72,7 +85,7 @@
                 </span>
               {/each}
             </td>
-            <td class="keys__action">{t(`settings.keys.a.${action}` as TranslationKey)}</td>
+            <td class="keys__action">{actionText(action)}</td>
           </tr>
         {/each}
       </tbody>

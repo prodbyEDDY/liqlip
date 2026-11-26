@@ -80,6 +80,7 @@ import _database from "./heroicons/circle-stack.svelte";
 import _power from "./heroicons/power.svelte";
 import _sliders from "./heroicons/adjustments-horizontal.svelte";
 import _ocr from "./heroicons/document-magnifying-glass.svelte";
+import _camera from "./heroicons/camera.svelte";
 
 export const ICONS = {
   search: _search,
@@ -158,5 +159,6 @@ export const ICONS = {
   power: _power,
   sliders: _sliders,
   ocr: _ocr,
+  camera: _camera,
 } satisfies Record<string, Component>;
 export type IconName = keyof typeof ICONS;

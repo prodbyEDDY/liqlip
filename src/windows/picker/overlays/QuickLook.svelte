@@ -7,7 +7,8 @@
   //          would paste right now.
   //   keys   ←/→ (↑/↓) neighbour — within the selection when opened on several, else the feed
   //          (loading more at its end) · Enter paste (⇧ plain, Ctrl copy, Alt keep open) ·
-  //          Space / Esc close · Ctrl+E edit · Ctrl+I invisibles · +/−/0 zoom · Ctrl+O open ·
+  //          Space / Esc close · Ctrl+E edit (a picture: E / Ctrl+E → the editor window,
+  //          Ctrl+P → pin on screen, W6-F) · Ctrl+I invisibles · +/−/0 zoom · Ctrl+O open ·
   //          Ctrl+D favorite · Delete · Ctrl+K actions · Ctrl+C copies the record when no text
   //          is selected.
   //   edit   textarea, Ctrl+S saves (`clip_update_text`), Esc cancels — with a confirmation
@@ -53,7 +54,7 @@
     contact: "at",
     image: "image",
     file: "file",
-    screenshot: "image", // W5: behaves like an image (W6-F may give it its own glyph)
+    screenshot: "camera",
   };
 
   // ── which record ──
@@ -115,6 +116,11 @@
   const wantsEdit = untrack(() => layer.ctx.edit === true);
 
   const canEdit = $derived(!!detail && TEXT_KINDS.includes(detail.kind));
+  /** A picture (image / screenshot) edits in the editor window, not here (SPEC §9.5). */
+  const picture = $derived(!!detail && isImageKind(detail.kind));
+  function editPicture() {
+    if (id !== null) void runAction("shotEdit", [id]);
+  }
   const dirty = $derived(editing && !!detail && draft !== (detail.text ?? detail.preview));
 
   function startEdit() {
@@ -380,7 +386,12 @@
       if (ctrl && !e.shiftKey) {
         switch (e.code) {
           case "KeyE":
-            startEdit();
+            if (picture) editPicture();
+            else startEdit();
+            return true;
+          case "KeyP":
+            // Ctrl+P is the browser's print otherwise: always taken here.
+            if (picture && id !== null) void runAction("shotPin", [id]);
             return true;
           case "KeyI":
             if (detail && (detail.kind === "text" || detail.kind === "code")) qlPrefs.invisibles = !qlPrefs.invisibles;
@@ -418,6 +429,11 @@
       }
       if (ctrl && e.shiftKey && e.code === "KeyO") {
         if (id !== null && !snippetMode) void runAction("reveal", [id]);
+        return true;
+      }
+      if (plain && !e.shiftKey && picture && e.code === "KeyE") {
+        // No text field in a picture's view: a bare E is free (SPEC §9.5 "E — Edit").
+        editPicture();
         return true;
       }
       if (plain && detail && isImageKind(detail.kind)) {
@@ -487,6 +503,14 @@
     if (isImageKind(d.kind)) {
       const px = d.width && d.height ? t("picker.ql.pixels", { w: d.width, h: d.height }) : null;
       rows.push({ label: t("picker.ql.size"), value: [px, sizeText(d.size)].filter(Boolean).join(" · ") || "—" });
+      // SPEC §9.6: where the shot was saved (the file name; its folder's tail under it, the
+      // full path on hover) and whether it carries editable annotations.
+      const saved = d.meta.shot?.savedPath;
+      if (saved) {
+        const cut = Math.max(saved.lastIndexOf("\\"), saved.lastIndexOf("/"));
+        rows.push({ label: t("picker.shot.ql.saved"), value: baseName(saved), sub: pathTail(cut > 0 ? saved.slice(0, cut) : "") || undefined, title: saved });
+      }
+      if (d.meta.shot?.edited) rows.push({ label: t("picker.shot.ql.annotations"), value: t("picker.shot.ql.annotated") });
     } else if (d.kind === "file") {
       const n = d.files?.length ?? d.fileCount ?? 0;
       const total = (d.files ?? []).reduce((a, f) => a + (f.size ?? 0), 0);
@@ -546,6 +570,7 @@
     if (editing) return [["Ctrl S", t("common.save")], ["Esc", t("common.cancel")]];
     const h: [string, string][] = [["↵", t("picker.preview.paste")], ["← →", t("picker.preview.browse")]];
     if (canEdit || snippet) h.push(["Ctrl E", t("picker.ql.hint.edit")]);
+    else if (picture) h.push(["E", t("picker.shot.ql.hintEdit")]);
     h.push(["Ctrl K", t("picker.ql.hint.actions")]);
     return h;
   });
@@ -571,6 +596,8 @@
         {/if}
         {#if !editing && (canEdit || snippet)}
           <Button variant="ghost" size="sm" icon="edit" title={t("picker.ql.edit")} aria-label={t("picker.ql.edit")} onmousedown={(e: MouseEvent) => e.preventDefault()} onclick={startEdit} />
+        {:else if !editing && picture}
+          <Button variant="ghost" size="sm" icon="edit" title={t("picker.shot.ql.edit")} aria-label={t("picker.shot.ql.edit")} onmousedown={(e: MouseEvent) => e.preventDefault()} onclick={editPicture} />
         {/if}
         {#if !editing && detail && (detail.kind === "link" || detail.kind === "file" || isImageKind(detail.kind))}
           <Button variant="ghost" size="sm" icon="external" title={t("picker.ql.open")} aria-label={t("picker.ql.open")} onmousedown={(e: MouseEvent) => e.preventDefault()} onclick={() => id !== null && void runAction("open", [id])} />

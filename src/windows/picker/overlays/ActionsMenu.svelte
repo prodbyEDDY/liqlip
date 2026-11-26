@@ -21,7 +21,7 @@
   import { feed } from "../feed.svelte";
   import { shelf } from "../shelf.svelte";
   import { toasts } from "../toasts.svelte";
-  import { copySnippet, copyText, pasteSnippet, pasteText, runAction } from "../actions.svelte";
+  import { captureScreen, copySnippet, copyText, pasteSnippet, pasteText, runAction } from "../actions.svelte";
   import { applyTransform, MONO_TRANSFORMS, type TransformId, type TransformResult } from "../transforms";
   import { buildMenu, chordNode, searchMenu, type MenuNode } from "./menuModel";
   import { SEPARATOR_TEXT, separatorPref } from "./separator.svelte";
@@ -60,6 +60,7 @@
       appName: single?.appId != null ? (shelf.apps.get(single.appId)?.name ?? null) : null,
       ocrEnabled: shelf.settings?.ocr.enabled ?? true,
       separator: separatorPref.value,
+      shotHotkey: shelf.settings?.hotkeys.shotRegion ?? "",
     }),
   );
 
@@ -336,6 +337,13 @@
       case "snippetDelete":
         if (s) confirmSnippetDelete(s);
         return;
+      case "shotEdit":
+      case "shotPin":
+      case "shotSaveAs":
+      case "shotReveal":
+        return runAction(n.cmd, one());
+      case "shotCapture":
+        return captureScreen();
     }
   }
 

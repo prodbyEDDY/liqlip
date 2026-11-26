@@ -11,9 +11,11 @@
   import { errorMessage } from "$lib/ipc/errors";
   import { t, type TranslationKey } from "$lib/i18n/index.svelte";
   import type { IconName } from "$lib/icons";
+  import { comboLabel } from "../settings/logic";
   import { feed } from "./feed.svelte";
   import { shelf } from "./shelf.svelte";
   import { folderIdOf } from "./pills";
+  import { captureScreen } from "./actions.svelte";
 
   const PILL_EMPTY: Record<string, { icon: IconName; key: string; around: [IconName, IconName] }> = {
     text: { icon: "text", key: "text", around: ["document", "at"] },
@@ -38,6 +40,8 @@
       : (PILL_EMPTY[shelf.pill] ?? PILL_EMPTY.text),
   );
   const hotkey = $derived(shelf.settings?.hotkeys.summon ?? "Alt + V");
+  /** The region-screenshot chord the Screenshots pill teaches (SPEC §9.6); "" — unset. */
+  const shotHotkey = $derived(comboLabel(shelf.settings?.hotkeys.shotRegion ?? "PrtSc"));
 
   /** Run a button's action, then give the keyboard back to the search field. */
   function andSearch(run: () => void) {
@@ -74,6 +78,20 @@
           <li><Kbd>Aa</Kbd><span>{t("picker.empty.hint.search")}</span></li>
           <li><Kbd>Ctrl D</Kbd><span>{t("picker.empty.hint.favorite")}</span></li>
         </ul>
+      {/if}
+    </EmptyState>
+  {:else if shelf.pill === "screenshot"}
+    <!-- Teaches the real chord from the settings (or how to get one) and offers a shot now. -->
+    <EmptyState
+      icon="camera"
+      companions={["image", "edit"]}
+      title={t("picker.shot.empty.title")}
+      desc={shotHotkey ? t("picker.shot.empty.desc", { hotkey: shotHotkey }) : t("picker.shot.empty.descNoHotkey")}
+      compact={shelf.horizontal}
+    >
+      <Button variant="secondary" size="sm" icon="camera" onclick={() => void captureScreen()}>{t("picker.shot.empty.capture")}</Button>
+      {#if !shotHotkey}
+        <Button variant="ghost" size="sm" icon="keyboard" onclick={() => void settingsOpen("hotkeys").catch(() => {})}>{t("picker.shot.empty.assign")}</Button>
       {/if}
     </EmptyState>
   {:else}

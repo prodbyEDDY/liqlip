@@ -15,8 +15,9 @@
   import Kbd from "$lib/components/Kbd.svelte";
   import { startHotkeyCapture } from "$lib/hotkeyCapture";
   import { t, type TranslationKey } from "$lib/i18n/index.svelte";
-  import { comboKeys, comboLabel, HOTKEY_DEFAULTS, hotkeyIssue, hotkeySuggestions, type HotkeyAction } from "../logic";
+  import { comboKeys, comboLabel, fieldErrorKey, HOTKEY_DEFAULTS, hotkeyDescKey, hotkeyIssue, hotkeyLabelKey, hotkeySuggestions, SHOT_HOTKEY_ACTIONS, type HotkeyAction } from "../logic";
   import { settings } from "../settings.svelte";
+  import { shotStatusStore } from "../shotStatus.svelte";
   import Row from "./Row.svelte";
 
   interface Props {
@@ -37,19 +38,28 @@
   let refused = $state<string[]>([]);
   let button = $state<HTMLButtonElement>();
 
-  const label = $derived(t(`settings.hotkeys.${action}` as TranslationKey));
+  const label = $derived(t(hotkeyLabelKey(action)));
   const value = $derived(settings.value?.hotkeys[action] ?? "");
   const keys = $derived(comboKeys(value).map(display));
   const def = $derived(HOTKEY_DEFAULTS[action]);
-  const taken = $derived(!localError && settings.error(`hotkeys.${action}`)?.code === "taken");
+  // A screenshot slot also hears from `shot_status` (W6-F): PrtSc held by the Snipping Tool is
+  // known there at once, before any settings_set re-check reports it.
+  const shot = $derived((SHOT_HOTKEY_ACTIONS as readonly string[]).includes(action));
+  const settingsCode = $derived(settings.error(`hotkeys.${action}`)?.code);
+  const statusCode = $derived(shot && !settingsCode ? (shotStatusStore.hotkeyErrors.find((e) => e.field === `hotkeys.${action}`)?.code ?? null) : null);
+  const taken = $derived(!localError && (settingsCode ?? statusCode) === "taken");
   // A new chord from this row was refused (the old value stays): name it in the message.
   const rejected = $derived(taken && attempted !== null && attempted !== value ? attempted : null);
   const error = $derived(
-    localError ?? (rejected ? t("settings.hotkey.takenCombo", { combo: comboLabel(rejected) }) : settings.message(`hotkeys.${action}`)),
+    localError ??
+      (rejected
+        ? t("settings.hotkey.takenCombo", { combo: comboLabel(rejected) })
+        : (settings.message(`hotkeys.${action}`) ?? (statusCode ? t(fieldErrorKey(`hotkeys.${action}`, statusCode) as TranslationKey) : null))),
   );
   // The current binding itself is taken (not a rejected new attempt): the engine keeps
   // retrying every 30 s, so say that it will start working on its own.
-  const retrying = $derived(taken && !rejected);
+  // (Not for PrtSc while Windows gives it to the Snipping Tool: only a Windows setting frees it.)
+  const retrying = $derived(taken && !rejected && !(shot && shotStatusStore.snippingKey && value.trim() === "PrtSc"));
   // SPEC §4: a conflict gets a clear error AND a suggestion — free chords, one click each.
   const suggestions = $derived(
     taken && settings.value ? hotkeySuggestions(action, settings.value.hotkeys, rejected ? [...refused, rejected] : refused) : [],
@@ -107,7 +117,7 @@
       settings.clearError(`hotkeys.${action}`);
       localError =
         issue.kind === "duplicate"
-          ? t("settings.hotkey.duplicate", { combo: comboLabel(combo), action: t(`settings.hotkeys.${issue.other}` as TranslationKey) })
+          ? t("settings.hotkey.duplicate", { combo: comboLabel(combo), action: t(hotkeyLabelKey(issue.other)) })
           : issue.kind === "needsKey"
             ? t("settings.hotkey.needsKey")
             : t("settings.hotkey.needsModifier");
@@ -122,18 +132,28 @@
     attempted = combo;
     settings.set(`hotkeys.${action}`, combo);
     onChange?.(combo);
+    // The screenshot status was about the old chord: ask again once the change is saved.
+    if (shot) void settings.idle().then(() => shotStatusStore.refresh());
   }
 
   onDestroy(stop);
+
+  /** Start recording from outside ("Assign another shortcut", W6-F): focus the keys first. */
+  export function record() {
+    button?.scrollIntoView({ block: "center" });
+    button?.focus();
+    if (!recording) start();
+  }
 </script>
 
-<Row {label} desc={compact ? null : t(`settings.hotkeys.${action}.desc` as TranslationKey)} {error} note={retrying ? t("settings.hotkey.retryNote") : null} stack={compact}>
+<Row {label} desc={compact ? null : t(hotkeyDescKey(action))} {error} note={retrying ? t("settings.hotkey.retryNote") : null} stack={compact}>
   {#snippet control()}
     <button
       type="button"
       class="cap"
       class:cap--rec={recording}
       bind:this={button}
+      data-hotkey={action}
       aria-label={t("settings.hotkey.change", { action: label })}
       aria-pressed={recording}
       onclick={() => (recording ? cancel() : start())}

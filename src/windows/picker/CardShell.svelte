@@ -25,6 +25,8 @@
     /** Glyph when there is no app icon (snippets: a document). */
     fallbackIcon?: IconName;
     badge: string;
+    /** A kind mark in the meta row before ♥ (a screenshot's camera, SPEC §9.6), with its name. */
+    mark?: { icon: IconName; label: string } | null;
     favorite?: boolean;
     /** Keyboard cursor (what Enter acts on). */
     current?: boolean;
@@ -54,6 +56,7 @@
     appIcon,
     fallbackIcon = "appWindow",
     badge,
+    mark = null,
     favorite = false,
     current = false,
     checked = false,
@@ -111,6 +114,9 @@
       {/if}
     </span>
     <span class="meta__title" class:meta__title--hidden={renaming}><Hl text={title} {terms} /></span>
+    {#if mark}
+      <span class="meta__mark" title={mark.label}><Ico name={mark.icon} size={12} /></span>
+    {/if}
     {#if favorite}
       <span class="meta__fav" title={t("picker.card.favorite")}><Ico name="heart" size={12} /></span>
     {/if}
@@ -233,6 +239,14 @@
   }
   .meta__title--hidden {
     visibility: hidden;
+  }
+  .meta__mark {
+    display: inline-flex;
+    flex: 0 0 auto;
+    color: var(--color-ink-3);
+  }
+  .is-current .meta__mark {
+    color: var(--color-ink-2);
   }
   .meta__fav {
     display: inline-flex;

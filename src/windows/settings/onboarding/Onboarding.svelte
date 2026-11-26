@@ -2,7 +2,8 @@
   // First-run onboarding (SPEC §4) in the settings window, the step list in place of the
   // sidebar: Welcome → Shortcut (conflict check through settings_set, change by recording,
   // free alternatives) → Privacy (what is never saved + ignored apps) → Import from Liquid
-  // Tools (only when `import_lt_probe.found`) → Ready ("press Alt + V") →
+  // Tools (only when `import_lt_probe.found`) → Screenshots (the PrtSc shortcut, the Snipping
+  // Tool warning when Windows holds PrtSc, "Try it", W6-F) → Ready ("press Alt + V") →
   // `general.onboardingDone = true`. "Skip setup" finishes at once. "Done" also hides the
   // window (W2-E, the one behaviour change of the design wave), so the very next thing the
   // user does is press the shortcut; the next time the window opens it shows the settings.
@@ -11,9 +12,13 @@
   import Kbd from "$lib/components/Kbd.svelte";
   import { getLocale, t, type TranslationKey } from "$lib/i18n/index.svelte";
   import { isTauri } from "$lib/ipc/runtime";
+  import { shotCapture } from "$lib/ipc/commands";
+  import { errorCode, errorMessage } from "$lib/ipc/errors";
   import type { IconName } from "$lib/icons";
   import { importer } from "../importer.svelte";
-  import { comboKeys, comboLabel, formatCount, importErrorKey, sameExe } from "../logic";
+  import { comboKeys, comboLabel, formatCount, importErrorKey, sameExe, snippingConflict } from "../logic";
+  import { shotStatusStore } from "../shotStatus.svelte";
+  import SnippingWarning from "../ui/SnippingWarning.svelte";
   import { settings } from "../settings.svelte";
   import { toasts } from "../ui.svelte";
   import ExeList from "../ui/ExeList.svelte";
@@ -23,15 +28,17 @@
 
   let { onFinish }: { onFinish: () => void } = $props();
 
-  type Step = "welcome" | "hotkey" | "privacy" | "import" | "done";
-  const ICONS: Record<Step, IconName> = { welcome: "sparkles", hotkey: "keyboard", privacy: "shield", import: "download", done: "checkCircle" };
+  type Step = "welcome" | "hotkey" | "privacy" | "import" | "shot" | "done";
+  const ICONS: Record<Step, IconName> = { welcome: "sparkles", hotkey: "keyboard", privacy: "shield", import: "download", shot: "camera", done: "checkCircle" };
+  /** Step names: `onboarding.step.<step>`; the screenshot step's lives in its own block. */
+  const stepLabel = (st: Step) => t(st === "shot" ? "onboarding.shot.step" : (`onboarding.step.${st}` as TranslationKey));
 
   $effect(() => {
     void importer.check();
   });
 
   const steps = $derived<Step[]>(
-    importer.probeState === "found" ? ["welcome", "hotkey", "privacy", "import", "done"] : ["welcome", "hotkey", "privacy", "done"],
+    importer.probeState === "found" ? ["welcome", "hotkey", "privacy", "import", "shot", "done"] : ["welcome", "hotkey", "privacy", "shot", "done"],
   );
   let current = $state<Step>("welcome");
   const index = $derived(Math.max(0, steps.indexOf(current)));
@@ -65,6 +72,22 @@
     return settings.watchConflicts(false);
   });
   const summonError = $derived(settings.error("hotkeys.summon"));
+
+  // ── screenshots step ──
+  let shotRow = $state<ReturnType<typeof HotkeyRow> | null>(null);
+  $effect(() => {
+    if (current !== "shot") return;
+    return shotStatusStore.watch();
+  });
+  const snipping = $derived(snippingConflict(shotStatusStore.snippingKey, s.hotkeys));
+  const shotKeys = $derived(comboKeys(s.hotkeys.shotRegion).map((k) => (k === "Super" ? "Win" : k)));
+  async function tryShot() {
+    try {
+      await shotCapture("region");
+    } catch (e) {
+      toasts.show({ message: errorCode(e) === "unimplemented" ? t("onboarding.shot.unavailable") : errorMessage(e), icon: "warning" });
+    }
+  }
 
   let finishing = $state(false);
   async function finish(hide = false) {
@@ -108,12 +131,12 @@
           class:ob__step--cur={st === current}
           class:ob__step--done={i < index}
           aria-current={st === current ? "step" : undefined}
-          title={t(`onboarding.step.${st}` as TranslationKey)}
+          title={stepLabel(st)}
         >
           <span class="ob__dot">
             {#if i < index}<Ico name="check" size={13} />{:else}{i + 1}{/if}
           </span>
-          <span class="ob__name">{t(`onboarding.step.${st}` as TranslationKey)}</span>
+          <span class="ob__name">{stepLabel(st)}</span>
         </li>
       {/each}
     </ol>
@@ -199,6 +222,26 @@
                 {t("onboarding.import.run")}
               </Button>
             {/if}
+          </div>
+        {:else if current === "shot"}
+          <h1 class="ob__title" id={titleId}>{t("onboarding.shot.title")}</h1>
+          <p class="ob__desc">{t("onboarding.shot.desc")}</p>
+          {#if snipping}
+            <!-- Windows gives PrtSc to the Snipping Tool: say so, and offer both ways out. -->
+            <div class="ob__card squircle"><SnippingWarning onAssign={() => shotRow?.record()} /></div>
+          {/if}
+          <div class="ob__card squircle">
+            <HotkeyRow bind:this={shotRow} action="shotRegion" compact />
+          </div>
+          <ul class="ob__list">
+            <li><Ico name="pointer" size={16} />{t("onboarding.shot.p1")}</li>
+            <li><Ico name="edit" size={16} />{t("onboarding.shot.p2")}</li>
+            <li><Ico name="paste" size={16} />{t("onboarding.shot.p3")}</li>
+          </ul>
+          <div class="ob__try">
+            <Button variant="secondary" icon="camera" onclick={() => void tryShot()}>
+              {shotKeys.length ? t("onboarding.shot.try", { keys: shotKeys.join(" + ") }) : t("onboarding.shot.tryNoKeys")}
+            </Button>
           </div>
         {:else}
           <h1 class="ob__title" id={titleId}>{t("onboarding.done.title")}</h1>
@@ -433,6 +476,13 @@
   }
   .ob__card--pad {
     padding: 16px;
+  }
+  /* Screenshots step: the Snipping Tool warning sits right above the shortcut it concerns. */
+  .ob__card + .ob__card {
+    margin-top: 8px;
+  }
+  .ob__try {
+    margin-top: 20px;
   }
   .ob__status,
   .ob__found,

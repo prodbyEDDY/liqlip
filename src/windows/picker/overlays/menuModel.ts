@@ -45,6 +45,12 @@ export type MenuCmd =
   | "snippetNew"
   | "snippetSettings"
   | "snippetDelete"
+  // Pictures (image + screenshot, SPEC §9.6) and the screen capture (§9.1), W6-F.
+  | "shotEdit"
+  | "shotPin"
+  | "shotSaveAs"
+  | "shotReveal"
+  | "shotCapture"
   | "submenu";
 
 /** A key press that runs an item while the menu is open (physical keys, like the shelf). */
@@ -96,6 +102,9 @@ export interface MenuInput {
   ocrEnabled: boolean;
   /** The remembered separator of "Paste all". */
   separator: MergeSeparator;
+  /** The "region screenshot" hotkey (`hotkeys.shotRegion`), shown next to "Take a screenshot"
+   *  (a global chord: it works anywhere, the menu only names it). */
+  shotHotkey?: string;
 }
 
 /** Kinds whose content is text (transform, edit, save as snippet). */
@@ -142,6 +151,7 @@ const C = {
   stack: { code: ["KeyS"], ctrl: true, shift: true },
   del: { code: ["Delete"] },
   save: { code: ["KeyS"], ctrl: true },
+  pin: { code: ["KeyP"], ctrl: true },
 } satisfies Record<string, Chord>;
 
 /** Group items; `null`/`false` entries are dropped, the first item of every non-first group
@@ -222,6 +232,39 @@ function formatMenu(id: "pasteAs" | "copyAs", formats: readonly Format[]): MenuN
   };
 }
 
+/** The picture's saved file (`ClipMeta.shot.savedPath`), if it was ever written to a folder. */
+export function savedPathOf(c: Pick<MenuClip, "kind" | "meta">): string | null {
+  return isImageKind(c.kind) ? (c.meta.shot?.savedPath ?? null) : null;
+}
+
+/** Edit · Pin on screen · Save as… of a picture (SPEC §9.6). "Show in folder" replaces the
+ *  generic "Show in Explorer" when the picture has a saved file (see `singleMenu`). */
+function pictureItems(): MenuNode[] {
+  return [
+    { id: "shotEdit", cmd: "shotEdit", label: "picker.shot.menu.edit", icon: "edit", keys: "Ctrl E", chord: C.edit },
+    { id: "shotPin", cmd: "shotPin", label: "picker.shot.menu.pin", icon: "layers", keys: "Ctrl P", chord: C.pin },
+    { id: "shotSaveAs", cmd: "shotSaveAs", label: "picker.shot.menu.saveAs", icon: "download" },
+  ];
+}
+
+/** "Take a screenshot" (SPEC §9.1: the shelf hides, the capture overlay opens). Not about a
+ *  record: it ends every record menu and is the whole menu when there is no record. */
+function captureItem(input: MenuInput): MenuNode {
+  const node: MenuNode = { id: "shotCapture", cmd: "shotCapture", label: "picker.shot.menu.capture", icon: "camera" };
+  const keys = menuKeys(input.shotHotkey ?? "");
+  return keys ? { ...node, keys } : node;
+}
+
+/** A settings chord ("Ctrl + Shift + PrtSc") in the menu's key style ("Ctrl ⇧ PrtSc"). */
+export function menuKeys(combo: string): string {
+  return combo
+    .split("+")
+    .map((k) => k.trim())
+    .filter(Boolean)
+    .map((k) => (k === "Shift" ? "⇧" : k === "Super" ? "Win" : k))
+    .join(" ");
+}
+
 function recentMenu(): MenuNode {
   return {
     id: "deleteRecent",
@@ -255,6 +298,8 @@ function singleMenu(c: MenuClip, input: MenuInput): MenuNode[] {
       }))
     : [];
   const ocrOff = !input.ocrEnabled && c.ocr !== "done";
+  const picture = isImageKind(c.kind);
+  const saved = savedPathOf(c);
   return groups(
     [
       { id: "paste", cmd: "paste", label: "picker.menu.paste", icon: "paste", keys: "↵" },
@@ -277,8 +322,11 @@ function singleMenu(c: MenuClip, input: MenuInput): MenuNode[] {
       { id: "preview", cmd: "preview", label: "picker.menu.preview", icon: "eye", keys: "Space", chord: C.preview },
       OPENABLE.includes(c.kind) && { id: "open", cmd: "open", label: "picker.menu.open", icon: "external", keys: "Ctrl O", chord: C.open },
       c.kind === "file" && { id: "openWith", cmd: "openWith", label: "picker.menu.openWith", icon: "appWindow" },
-      REVEALABLE.includes(c.kind) && { id: "reveal", cmd: "reveal", label: "picker.menu.reveal", icon: "folderOpen", keys: "Ctrl ⇧ O", chord: C.reveal },
+      saved
+        ? { id: "shotReveal", cmd: "shotReveal", label: "picker.shot.menu.reveal", icon: "folderOpen", keys: "Ctrl ⇧ O", chord: C.reveal }
+        : REVEALABLE.includes(c.kind) && { id: "reveal", cmd: "reveal", label: "picker.menu.reveal", icon: "folderOpen", keys: "Ctrl ⇧ O", chord: C.reveal },
     ],
+    picture ? pictureItems() : [],
     [
       text && transformMenu(),
       isImageKind(c.kind) && {
@@ -305,7 +353,7 @@ function singleMenu(c: MenuClip, input: MenuInput): MenuNode[] {
       text && { id: "edit", cmd: "edit", label: "picker.menu.edit", icon: "edit", keys: "Ctrl E", chord: C.edit },
     ],
     stackItems(),
-    [!!input.appName && { id: "moreFromApp", cmd: "moreFromApp", label: "picker.menu.moreFromApp", vars: { app: input.appName }, icon: "appWindow" }],
+    [!!input.appName && { id: "moreFromApp", cmd: "moreFromApp", label: "picker.menu.moreFromApp", vars: { app: input.appName }, icon: "appWindow" }, captureItem(input)],
     [{ id: "delete", cmd: "delete", label: "picker.menu.delete", icon: "trash", keys: "Del", chord: C.del, danger: true }, recentMenu()],
   );
 }
@@ -348,6 +396,7 @@ function multiMenu(clips: readonly MenuClip[], input: MenuInput): MenuNode[] {
       folderMenu(clips, input.folders),
     ],
     stackItems(),
+    [captureItem(input)],
     [{ id: "delete", cmd: "delete", label: "picker.menu.deleteMany", vars: { n: clips.length }, icon: "trash", keys: "Del", chord: C.del, danger: true }],
   );
 }
@@ -376,7 +425,8 @@ function snippetMenu(): MenuNode[] {
 /** The root items of the actions menu for its context. */
 export function buildMenu(input: MenuInput): MenuNode[] {
   if (input.snippet) return snippetMenu();
-  if (input.clips.length === 0) return [];
+  // No record (Ctrl+K on an empty feed): the general menu.
+  if (input.clips.length === 0) return [captureItem(input)];
   if (input.clips.length === 1) return singleMenu(input.clips[0], input);
   return multiMenu(input.clips, input);
 }

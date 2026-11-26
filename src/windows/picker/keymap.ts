@@ -26,7 +26,8 @@ export type Command =
   | { type: "escape" } // Esc
   | { type: "preview" } // Space (empty search) / Ctrl+Y   → overlays (W2-C)
   | { type: "actions" } // Ctrl+K                          → overlays (W2-C)
-  | { type: "edit" } // Ctrl+E                            → Quick Look in edit mode (W2-C)
+  | { type: "edit" } // Ctrl+E      → text: Quick Look in edit mode (W2-C); picture: the editor window (W6-F)
+  | { type: "pin" } // Ctrl+P                             → picture: pin on the screen (SPEC §9.5–9.6)
   | { type: "stack" }; // Ctrl+Shift+S                    → paste stack
 
 export interface KeyInput {
@@ -74,6 +75,7 @@ const NO_REPEAT: ReadonlySet<Command["type"]> = new Set<Command["type"]>([
   "preview",
   "actions",
   "edit",
+  "pin",
   "stack",
   "selectAll",
 ]);
@@ -184,6 +186,10 @@ function resolveRaw(e: KeyInput, ctx: KeyContext): Command | null {
         return shift ? null : { type: "actions" };
       case "KeyE":
         return shift ? null : { type: "edit" };
+      // Ctrl+P is also a browser accelerator (print): the shelf takes it for "Pin on screen";
+      // on a record that isn't a picture it does nothing (and still never prints).
+      case "KeyP":
+        return shift ? null : { type: "pin" };
       case "KeyS":
         return shift ? { type: "stack" } : null;
     }

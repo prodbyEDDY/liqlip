@@ -11,7 +11,7 @@
   import { overlays } from "./overlays.svelte";
   import { toasts } from "./toasts.svelte";
   import { drag } from "./drag.svelte";
-  import { folderDropBefore, type Pill } from "./pills";
+  import { folderDropBefore, pillLabelKey, type BuiltinPill, type Pill } from "./pills";
 
   let strip = $state<HTMLDivElement | null>(null);
 
@@ -55,7 +55,7 @@
     requestAnimationFrame(syncFade);
   });
 
-  const label = (p: Pill) => (p.builtin ? t(`picker.pill.${p.id}` as TranslationKey) : p.name);
+  const label = (p: Pill) => (p.builtin ? t(pillLabelKey(p.id as BuiltinPill)) : p.name);
   const errorText = (e: FolderError) => t(`picker.folder.error.${e}` as TranslationKey);
 
   // ── new folder ──

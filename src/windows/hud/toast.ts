@@ -7,7 +7,8 @@ import type { HudKind, HudShow } from "$lib/ipc/types";
 export const VISIBLE_MS = 1400;
 
 /** `countdown` · `shot_failed` · `text_copied` · `text_empty` — W5 (screenshots, ARCHITECTURE §18.10):
- *  the countdown's `text` is the seconds left (shown in the {keys} chip). */
+ *  the countdown's `text` is the seconds left, drawn as a large digit in place of the {keys}
+ *  chip (W6-F, `countdownDigit`). */
 export const HUD_KINDS: readonly HudKind[] = ["copied", "elevated", "stack_empty", "paused", "resumed", "skip_next", "countdown", "shot_failed", "text_copied", "text_empty"];
 
 /** i18n key per kind (`hud.*`). */
@@ -59,9 +60,19 @@ export function keysLabel(toast: HudShow, fallback: string): string {
 }
 
 /** A new `hud:show` while the same toast is still visible only extends it (no second entry
- *  animation — the paste flow and the hotkey path may both report "stack empty"). */
+ *  animation — the paste flow and the hotkey path may both report "stack empty"). A countdown
+ *  ticking 3 → 2 → 1 is one toast too: only its digit changes (W6-F). */
 export function isSameToast(current: HudShow | null, visible: boolean, next: HudShow): boolean {
-  return visible && current !== null && current.kind === next.kind && (current.text ?? null) === (next.text ?? null);
+  if (!visible || current === null || current.kind !== next.kind) return false;
+  return next.kind === "countdown" || (current.text ?? null) === (next.text ?? null);
+}
+
+/** The seconds a `countdown` shows (`text` "3" → "3"); `null` for other kinds or a text that
+ *  is not a small whole number (then the digit is left out rather than showing garbage). */
+export function countdownDigit(toast: HudShow): string | null {
+  if (toast.kind !== "countdown") return null;
+  const v = toast.text?.trim() ?? "";
+  return /^\d{1,2}$/.test(v) ? String(Number(v)) : null;
 }
 
 /** Browser preview: `?kind=copied` (static), `?text=…` (the key chip; `+` is `%2B` in a

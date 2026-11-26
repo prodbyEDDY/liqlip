@@ -42,7 +42,11 @@ export type FieldErrorCode = SettingsError["code"] | "failed";
 /** i18n key of the message shown under a field for a `settings_set` error.
  *  `failed` (the command itself rejected) is rendered from the command error instead. */
 export function fieldErrorKey(field: string, code: SettingsError["code"]): string {
+  // Screenshot chords: "taken" is usually Windows itself (PrtSc → the Snipping Tool, SPEC §9.1).
+  if (field.startsWith("hotkeys.shot")) return code === "taken" ? "settings.shot.error.hotkeyTaken" : "settings.error.hotkeyInvalid";
   if (field.startsWith("hotkeys.")) return code === "taken" ? "settings.error.hotkeyTaken" : "settings.error.hotkeyInvalid";
+  if (field === "screenshot.fileName") return "settings.shot.error.fileName";
+  if (field === "screenshot.folder") return "settings.shot.error.folder";
   // settings.rs: the autostart plugin failed → the previous value stays, `invalid`.
   if (field === "general.autostart") return "settings.error.autostart";
   if (field === "picker.pasteKeys") return "settings.error.pasteKeys";
@@ -160,7 +164,25 @@ export function exeStem(exe: string): string {
 // ── hotkeys ──────────────────────────────────────────────────────────────────
 
 export type HotkeyAction = keyof HotkeySettings;
+/** The global actions group of the Hotkeys section. */
 export const HOTKEY_ACTIONS: readonly HotkeyAction[] = ["summon", "stackNext", "pauseToggle", "ignoreNext"];
+/** The "Screenshots" group (SPEC §9.1, ARCHITECTURE §18.11 slot order). */
+export const SHOT_HOTKEY_ACTIONS: readonly HotkeyAction[] = ["shotRegion", "shotScreen", "shotWindow", "shotRepeat", "shotText"];
+/** Every slot the engine registers — a chord may be used by one of them only. */
+export const ALL_HOTKEY_ACTIONS: readonly HotkeyAction[] = [...HOTKEY_ACTIONS, ...SHOT_HOTKEY_ACTIONS];
+
+const isShotAction = (a: HotkeyAction) => (SHOT_HOTKEY_ACTIONS as readonly string[]).includes(a);
+
+/** i18n key of an action's name (`settings.hotkeys.<action>`; screenshot slots live in the
+ *  screenshot block: `settings.shot.hotkey.<action>`). */
+export function hotkeyLabelKey(action: HotkeyAction): TranslationKey {
+  return (isShotAction(action) ? `settings.shot.hotkey.${action}` : `settings.hotkeys.${action}`) as TranslationKey;
+}
+
+/** i18n key of an action's one-line explanation. */
+export function hotkeyDescKey(action: HotkeyAction): TranslationKey {
+  return `${hotkeyLabelKey(action)}.desc` as TranslationKey;
+}
 
 /** Defaults for "Reset to default". Kept equal to the Rust defaults by
  *  tests/settingsLogic.test.mjs (against tests/fixtures/settings.default.json). */
@@ -189,8 +211,8 @@ export type HotkeyIssue = { kind: "duplicate"; other: HotkeyAction } | { kind: "
 export function hotkeyIssue(combo: string, action: HotkeyAction, current: HotkeySettings): HotkeyIssue | null {
   const c = combo.trim();
   if (!c) return null;
-  for (const other of HOTKEY_ACTIONS) {
-    if (other !== action && current[other].trim() === c) return { kind: "duplicate", other };
+  for (const other of ALL_HOTKEY_ACTIONS) {
+    if (other !== action && (current[other] ?? "").trim() === c) return { kind: "duplicate", other };
   }
   const parts = c.split("+").map((p) => p.trim()).filter(Boolean);
   const key = parts[parts.length - 1] ?? "";
@@ -223,9 +245,11 @@ const HOTKEY_SUGGESTIONS: Readonly<Record<HotkeyAction, readonly string[]>> = {
   stackNext: ["Ctrl + Alt + Shift + V", "Alt + Shift + B", "Ctrl + Alt + B"],
   pauseToggle: [],
   ignoreNext: [],
-  // W5: screenshot slots — suggestions are W6-F's call (e.g. when the Snipping Tool holds PrtSc).
-  shotRegion: [],
-  shotScreen: [],
+  // Screenshot slots (W6-F): PrtSc variants first — a global chord on a letter would take
+  // that key from every app. Free variants exclude chords another Liqlip slot uses, so when
+  // the Snipping Tool holds PrtSc the region slot is offered Shift + PrtSc etc.
+  shotRegion: ["Shift + PrtSc", "Ctrl + Shift + PrtSc", "Alt + Shift + S"],
+  shotScreen: ["Ctrl + Shift + PrtSc", "Shift + PrtSc", "Alt + Shift + F"],
   shotWindow: [],
   shotRepeat: [],
   shotText: [],
@@ -235,6 +259,81 @@ export function hotkeySuggestions(action: HotkeyAction, current: HotkeySettings,
   return HOTKEY_SUGGESTIONS[action]
     .filter((c) => !rejected.includes(c) && hotkeyIssue(c, action, current) === null && current[action] !== c)
     .slice(0, max);
+}
+
+// ── screenshots (SPEC §9.7, ARCHITECTURE §18.10) ─────────────────────────────
+
+/** Mirrors `settings::validate` (Rust ≡ mock): ≤ 120 characters, not empty, none of the
+ *  characters Windows reserves in file names (learn.microsoft.com, "Naming Files, Paths, and
+ *  Namespaces"). */
+export const SHOT_FILE_NAME_MAX = 120;
+const RESERVED_NAME_CHARS = /[<>:"/\\|?*]/;
+export const SHOT_PLACEHOLDERS = ["{date}", "{time}", "{app}", "{n}"] as const;
+
+export type ShotNameIssue = "empty" | "tooLong" | "reserved" | "control";
+
+export function shotNameIssue(template: string): ShotNameIssue | null {
+  // Rust trims first, then checks (`bad_name`: `char::is_control` — C0, DEL and C1).
+  const v = template.trim();
+  if (!v) return "empty";
+  if ([...v].length > SHOT_FILE_NAME_MAX) return "tooLong";
+  if (/[\u0000-\u001f\u007f-\u009f]/.test(v)) return "control";
+  if (RESERVED_NAME_CHARS.test(v)) return "reserved";
+  return null;
+}
+
+const pad2 = (n: number) => String(n).padStart(2, "0");
+
+/**
+ * The file name a template gives (live preview of "File name"; the real one is made by
+ * `screenshot/files.rs` with the same rules): `{date}` → `2026-11-26`, `{time}` → `143005`
+ * (the Windows Snipping Tool's `Screenshot 2026-11-26 143005` style — no `:`, which Windows
+ * forbids in names), `{app}` → the source app, `{n}` → the shot counter. Other text — as typed.
+ */
+export function shotFileName(template: string, at: Date, app: string, n: number): string {
+  const vars: Record<string, string> = {
+    date: `${at.getFullYear()}-${pad2(at.getMonth() + 1)}-${pad2(at.getDate())}`,
+    time: `${pad2(at.getHours())}${pad2(at.getMinutes())}${pad2(at.getSeconds())}`,
+    app,
+    n: String(n),
+  };
+  return template.trim().replace(/\{(date|time|app|n)\}/g, (_, k: string) => vars[k]);
+}
+
+/** JPG quality is a whole number 60–100 (`settings::validate`). */
+export const JPG_QUALITY_MIN = 60;
+export const JPG_QUALITY_MAX = 100;
+export function jpgQualityValid(q: number): boolean {
+  return Number.isInteger(q) && q >= JPG_QUALITY_MIN && q <= JPG_QUALITY_MAX;
+}
+/** Quality presets of the dropdown (a custom valid value stays selectable: `withCurrent`). */
+export const JPG_QUALITY_PRESETS: readonly number[] = [60, 70, 80, 90, 95, 100];
+
+/** "Hide thumbnails after" presets in seconds (0 = never), §9.10: the setting allows 0–3600. */
+export const SHOT_TIMEOUT_PRESETS: readonly number[] = [5, 10, 30, 60, 0];
+export function shotTimeoutValid(s: number): boolean {
+  return Number.isInteger(s) && s >= 0 && s <= 3600;
+}
+
+/** The Snipping Tool warning (SPEC §9.1) matters only while a screenshot slot is bare PrtSc —
+ *  the one key Windows takes; `Ctrl + PrtSc` and others still reach Liqlip. */
+export function snippingConflict(snippingKey: boolean, hotkeys: HotkeySettings | null | undefined): boolean {
+  return snippingKey && !!hotkeys && SHOT_HOTKEY_ACTIONS.some((a) => (hotkeys[a] ?? "").trim() === "PrtSc");
+}
+
+/** `localStorage` key of the editor's per-tool defaults (ARCHITECTURE §18.6, W6-C). */
+export const EDITOR_TOOLS_KEY = "liqlip.editor.tools";
+
+/** "Reset the editor's tool defaults": forget them (the editor falls back to its built-ins).
+ *  `false` — nothing was stored (or storage is unavailable). */
+export function resetEditorTools(storage: Pick<Storage, "getItem" | "removeItem"> | null): boolean {
+  try {
+    if (!storage || storage.getItem(EDITOR_TOOLS_KEY) === null) return false;
+    storage.removeItem(EDITOR_TOOLS_KEY);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 // ── capture pause ────────────────────────────────────────────────────────────

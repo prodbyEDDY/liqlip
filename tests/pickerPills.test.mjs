@@ -4,11 +4,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { importTs } from "./helpers/bundle.mjs";
 
-const { buildPills, cyclePill, folderDropBefore, folderIdOf, pillFilter } = await importTs("src/windows/picker/pills.ts");
+const { buildPills, cyclePill, folderDropBefore, folderIdOf, pillFilter, pillLabelKey } = await importTs("src/windows/picker/pills.ts");
 
 const counts = {
   all: 20,
-  kinds: { text: 5, link: 3, code: 2, color: 1, contact: 2, image: 4, file: 3 },
+  kinds: { text: 5, link: 3, code: 2, color: 1, contact: 2, image: 4, screenshot: 3, file: 3 },
   favorites: 2,
   snippets: 6,
   folders: { 7: 4, 9: 1 },
@@ -22,7 +22,7 @@ test("order: all, types, favorites, snippets, folders by position", () => {
   const pills = buildPills(counts, folders);
   assert.deepEqual(
     pills.map((p) => p.id),
-    ["all", "text", "link", "image", "file", "code", "color", "favorites", "snippets", "folder:7", "folder:9"],
+    ["all", "text", "link", "image", "screenshot", "file", "code", "color", "favorites", "snippets", "folder:7", "folder:9"],
   );
   assert.equal(pills.find((p) => p.id === "folder:7").name, "Работа");
 });
@@ -35,6 +35,18 @@ test("counters: Text = text + contact; folders from counts", () => {
   assert.equal(c("snippets"), 6);
   assert.equal(c("folder:7"), 4);
   assert.equal(buildPills(null, []).every((p) => p.count === 0), true);
+});
+
+test("W6-F: Images count pictures and screenshots; Screenshots its own pill after Images", () => {
+  const pills = buildPills(counts, folders);
+  const c = (id) => pills.find((p) => p.id === id).count;
+  assert.equal(c("image"), 7, "image 4 + screenshot 3 (SPEC §9.6: shots show in Images too)");
+  assert.equal(c("screenshot"), 3);
+  assert.deepEqual(pillFilter("image"), { kinds: ["image", "screenshot"] });
+  assert.deepEqual(pillFilter("screenshot"), { kinds: ["screenshot"] });
+  assert.equal(buildPills({ ...counts, kinds: { ...counts.kinds, screenshot: undefined } }, []).find((p) => p.id === "image").count, 4, "older counts without the key");
+  assert.equal(pillLabelKey("screenshot"), "picker.shot.pill");
+  assert.equal(pillLabelKey("image"), "picker.pill.image");
 });
 
 test("filters and modes", () => {

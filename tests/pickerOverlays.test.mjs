@@ -29,6 +29,7 @@ test("single text record: every SPEC §3.7 group, in order, gaps between groups"
     "stack",
     "showStack",
     "moreFromApp",
+    "shotCapture",
     "delete",
     "deleteRecent",
   ]);
@@ -92,7 +93,7 @@ test("folders submenu: current folder checked, New folder…, Remove from folder
 
 test("selection of several: batch items, remembered separator checked, Delete N", () => {
   const menu = buildMenu({ ...base, separator: "tab", clips: [clip({ id: 1 }), clip({ id: 2, favorite: true }), clip({ id: 3, kind: "image" })] });
-  assert.deepEqual(ids(menu), ["pasteAll", "pasteAllWith", "copyAll", "merge", "favorite", "folder", "stack", "showStack", "delete"]);
+  assert.deepEqual(ids(menu), ["pasteAll", "pasteAllWith", "copyAll", "merge", "favorite", "folder", "stack", "showStack", "shotCapture", "delete"]);
   assert.equal(find(menu, "pasteAll").arg, "tab");
   assert.equal(find(menu, "pasteAll").hint, "picker.menu.sep.tab");
   assert.deepEqual(
@@ -122,7 +123,44 @@ test("snippet menu", () => {
     "snippetSettings",
     "snippetDelete",
   ]);
-  assert.deepEqual(buildMenu({ ...base, clips: [] }), []);
+  assert.equal(ids(buildMenu({ ...base, snippet: true, clips: [] })).includes("shotCapture"), false, "snippets keep their own menu");
+});
+
+// ── W6-F: pictures and the screen capture (SPEC §9.1, §9.6) ─────────────────────
+
+test("no record: the general menu is “Take a screenshot”, naming the region shortcut", () => {
+  assert.deepEqual(buildMenu({ ...base, clips: [] }), [{ id: "shotCapture", cmd: "shotCapture", label: "picker.shot.menu.capture", icon: "camera" }]);
+  assert.equal(buildMenu({ ...base, shotHotkey: "Ctrl + Shift + PrtSc", clips: [] })[0].keys, "Ctrl ⇧ PrtSc");
+  assert.equal(m.menuKeys("Super + Alt + S"), "Win Alt S");
+  assert.equal(m.menuKeys(""), "");
+});
+
+test("image and screenshot: Edit · Pin · Save as…; Show in folder only with a saved file", () => {
+  for (const kind of ["image", "screenshot"]) {
+    const menu = buildMenu({ ...base, clips: [clip({ kind, formats: ["png"] })] });
+    const list = ids(menu);
+    assert.deepEqual(list.slice(list.indexOf("shotEdit"), list.indexOf("shotEdit") + 3), ["shotEdit", "shotPin", "shotSaveAs"], kind);
+    assert.ok(find(menu, "shotEdit").gapBefore, "its own group");
+    assert.equal(find(menu, "shotEdit").keys, "Ctrl E");
+    assert.equal(find(menu, "shotPin").keys, "Ctrl P");
+    assert.ok(list.includes("reveal") && !list.includes("shotReveal"), "never saved → Liqlip's copy in Explorer");
+    assert.ok(!list.includes("edit"), "no text editing for pictures");
+    assert.ok(list.includes("shotCapture"));
+  }
+  const saved = buildMenu({ ...base, clips: [clip({ kind: "screenshot", formats: ["png"], meta: { shot: { savedPath: "C:\Shots\a.png", edited: false } } })] });
+  assert.ok(ids(saved).includes("shotReveal") && !ids(saved).includes("reveal"), "saved → Show in folder replaces Show in Explorer");
+  assert.equal(find(saved, "shotReveal").keys, "Ctrl ⇧ O");
+  const text = ids(buildMenu({ ...base, clips: [clip()] }));
+  assert.ok(!text.some((id) => ["shotEdit", "shotPin", "shotSaveAs", "shotReveal"].includes(id)), "pictures only");
+  assert.equal(m.savedPathOf({ kind: "text", meta: { shot: { savedPath: "x", edited: false } } }), null);
+});
+
+test("picture chords: Ctrl+E edits, Ctrl+P pins while the menu is open (physical keys)", () => {
+  const menu = buildMenu({ ...base, clips: [clip({ kind: "screenshot", formats: ["png"] })] });
+  const key = (code, mods = {}) => ({ code, key: "", ctrlKey: false, shiftKey: false, altKey: false, metaKey: false, ...mods });
+  assert.equal(chordNode(menu, key("KeyE", { ctrlKey: true })).id, "shotEdit");
+  assert.equal(chordNode(menu, key("KeyP", { ctrlKey: true })).id, "shotPin");
+  assert.equal(chordNode(menu, key("KeyE")), null, "a bare E types into the menu's filter");
 });
 
 test("search: across submenus, prefix first, every word required, generic transform rows skipped", () => {

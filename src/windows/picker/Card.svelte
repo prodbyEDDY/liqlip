@@ -40,6 +40,8 @@
   // meta shows the app it was copied from (a user-set title still wins).
   const metaTitle = $derived(clip && clip.kind === "link" && !clip.title ? (app?.name ?? kindLabel) : title);
   const badge = $derived(clip ? entryFormat(clip) : "SNIP");
+  // A screenshot reads like an image with a camera in the meta row (SPEC §9.6).
+  const mark = $derived(clip?.kind === "screenshot" ? { icon: "camera" as const, label: kindLabel } : null);
   const tooltip = $derived.by(() => {
     if (!clip) return snippet!.name;
     const parts = [app?.name ?? kindLabel, relativeTime(clip.copiedAt, Date.now(), getLocale())];
@@ -138,6 +140,7 @@
   appIcon={app?.iconUrl ?? null}
   fallbackIcon={snippet ? "document" : "appWindow"}
   {badge}
+  {mark}
   favorite={clip?.favorite ?? false}
   {current}
   {checked}

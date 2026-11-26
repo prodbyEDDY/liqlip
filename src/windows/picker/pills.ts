@@ -1,10 +1,11 @@
-// Pills of the shelf (SPEC §2.1, §3.9): All · Text (text + contact) · Links · Images · Files ·
-// Code · Colors · Favorites · Snippets, then the user's folders in manual order — each with its
-// counter from `clips_counts`. Only Favorites and folders accept a dropped card. Pure —
-// node-tested (tests/pickerPills).
+// Pills of the shelf (SPEC §2.1, §3.9, §9.6): All · Text (text + contact) · Links · Images
+// (image + screenshot) · Screenshots · Files · Code · Colors · Favorites · Snippets, then the
+// user's folders in manual order — each with its counter from `clips_counts`. Only Favorites
+// and folders accept a dropped card. Pure — node-tested (tests/pickerPills).
 import type { Counts, Filter, Folder, Kind } from "$lib/ipc/types";
+import type { TranslationKey } from "$lib/i18n/en";
 
-export type BuiltinPill = "all" | "text" | "link" | "image" | "file" | "code" | "color" | "favorites" | "snippets";
+export type BuiltinPill = "all" | "text" | "link" | "image" | "screenshot" | "file" | "code" | "color" | "favorites" | "snippets";
 /** `folder:<id>` for user folders. */
 export type PillId = BuiltinPill | `folder:${number}`;
 
@@ -21,18 +22,25 @@ export interface Pill {
   folderId: number | null;
 }
 
-export const BUILTIN_PILLS: readonly BuiltinPill[] = ["all", "text", "link", "image", "file", "code", "color", "favorites", "snippets"];
+export const BUILTIN_PILLS: readonly BuiltinPill[] = ["all", "text", "link", "image", "screenshot", "file", "code", "color", "favorites", "snippets"];
 
 const KIND_PILLS: Partial<Record<BuiltinPill, Kind[]>> = {
   text: ["text", "contact"],
   link: ["link"],
-  image: ["image", "screenshot"], // §18.5: screenshots are pictures too (W6-F adds their own pill)
+  image: ["image", "screenshot"], // §18.5: screenshots are pictures too…
+  screenshot: ["screenshot"], // …and have their own pill (SPEC §9.6)
   file: ["file"],
   code: ["code"],
   color: ["color"],
 };
 
 export const folderPillId = (id: number): PillId => `folder:${id}`;
+
+/** i18n key of a built-in pill's name (`picker.pill.<id>`; the Screenshots pill lives in the
+ *  screenshot block, `picker.shot.pill`). */
+export function pillLabelKey(id: BuiltinPill): TranslationKey {
+  return id === "screenshot" ? "picker.shot.pill" : (`picker.pill.${id}` as TranslationKey);
+}
 
 export function folderIdOf(id: PillId): number | null {
   const m = /^folder:(\d+)$/.exec(id);
@@ -54,7 +62,8 @@ export function buildPills(counts: Counts | null, folders: readonly Folder[]): P
     all: counts?.all ?? 0,
     text: kind("text") + kind("contact"),
     link: kind("link"),
-    image: kind("image"),
+    image: kind("image") + kind("screenshot"),
+    screenshot: kind("screenshot"),
     file: kind("file"),
     code: kind("code"),
     color: kind("color"),

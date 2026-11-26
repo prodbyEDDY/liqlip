@@ -90,6 +90,16 @@ test("auto-repeat never pastes twice; navigation keeps repeating", () => {
   assert.equal(isSwallowedRepeat(key("ArrowDown", { repeat: true }), empty), false);
 });
 
+test("W6-F: Ctrl+P pins a picture; Ctrl+E is Edit for every kind; a bare E still types", () => {
+  assert.deepEqual(r("KeyP", { ctrlKey: true }, empty, "з"), { type: "pin" }, "Russian layout");
+  assert.deepEqual(r("KeyP", { ctrlKey: true }, typed), { type: "pin" }, "the search has no use for Ctrl+P (print otherwise)");
+  assert.equal(r("KeyP", { ctrlKey: true, shiftKey: true }), null);
+  assert.equal(resolveKey(key("KeyP", { ctrlKey: true, repeat: true }), empty), null, "a held Ctrl+P pins once");
+  assert.equal(r("KeyE", {}, empty, "e"), null, "E goes to the search");
+  assert.equal(isTypingKey(key("KeyE", {}, "у")), true);
+  assert.deepEqual(r("KeyE", { ctrlKey: true }), { type: "edit" });
+});
+
 test("typing keys go to the search", () => {
   assert.equal(isTypingKey(key("KeyA", {}, "a")), true);
   assert.equal(isTypingKey(key("KeyF", {}, "а")), true);

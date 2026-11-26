@@ -15,6 +15,7 @@ import { drag } from "./drag.svelte";
 import { copySnippet, pasteSnippet, runAction } from "./actions.svelte";
 import { confirmSnippetDelete } from "./overlays/layerActions";
 import { isSwallowedRepeat, isTypingKey, resolveKey, type Command } from "./keymap";
+import { isImageKind } from "$lib/ipc/types";
 
 /** Ctrl must be held this long before the digits appear (quick chords don't flash them). */
 const CTRL_HINT_DELAY_MS = 120;
@@ -145,12 +146,21 @@ class Keyboard {
         if (ids.length) overlays.open("preview", { ids });
         return;
       case "actions":
+        // No record (an empty feed): the general menu — "Take a screenshot" (SPEC §9.1).
         if (ids.length) overlays.open("actions", { ids, anchor: cardAnchor(selection.current), snippet: snippet ?? null });
+        else if (feed.mode === "clips") overlays.open("actions", { ids: [] });
         return;
-      case "edit":
-        // Text records open Quick Look in edit mode; a snippet opens its editor sheet.
+      case "edit": {
+        // Text records open Quick Look in edit mode; a snippet opens its editor sheet; a
+        // picture opens the editor window (SPEC §9.5 — plain `E` belongs to the search here).
+        const c = selection.current !== null ? feed.clip(selection.current) : undefined;
         if (snippet) overlays.open("snippet", { mode: "edit", snippet });
-        else if (selection.current !== null && feed.clip(selection.current)) overlays.open("preview", { ids: [selection.current], edit: true });
+        else if (c && isImageKind(c.kind)) return runAction("shotEdit", [c.id]);
+        else if (c) overlays.open("preview", { ids: [c.id], edit: true });
+        return;
+      }
+      case "pin":
+        if (feed.mode === "clips" && selection.current !== null) return runAction("shotPin", [selection.current]);
         return;
       case "stack":
         if (feed.mode === "clips") return runAction("stack", ids);
